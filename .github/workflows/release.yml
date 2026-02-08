@@ -31,14 +31,15 @@ jobs:
       - name: Build release binary
         run: cargo build --release -p mo2gui
 
-      - name: Package artifact
+      - name: Package artifact directory
         run: |
           mkdir -p dist
+          mkdir -p dist/bin
           cp target/release/mo2gui dist/
-          tar -C dist -czf mo2gui-linux-x86_64.tar.gz mo2gui
+          cp target/release/bin/7zz dist/bin/7zz
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: mo2gui-linux-x86_64
-          path: mo2gui-linux-x86_64.tar.gz
+          path: dist/
