@@ -1,0 +1,19 @@
+[package]
+name = "mo2gui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mo2core = { path = "../mo2core" }
+mo2fuse = { path = "../mo2fuse" }
+slint.workspace = true
+rfd = "0.17"
+nak_rust = { git = "https://github.com/SulfurNitride/NaK", default-features = false, features = ["core", "installer"] }
+chrono.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+walkdir.workspace = true
+tempfile.workspace = true
+
+[build-dependencies]
+slint-build.workspace = true

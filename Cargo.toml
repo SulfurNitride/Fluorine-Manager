@@ -1,0 +1,62 @@
+[workspace]
+members = [
+    "crates/mo2core",
+    "crates/mo2fuse",
+    "crates/mo2gui",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0"
+authors = ["MO2Linux Contributors"]
+
+[workspace.dependencies]
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# File system
+walkdir = "2"
+tempfile = "3"
+
+# FUSE
+fuser = { version = "0.16", features = ["abi-7-23"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Path handling
+unicode-normalization = "0.1"
+
+# Hashing
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
+md-5 = "0.10"
+
+# Networking
+reqwest = { version = "0.12", features = ["stream", "json"] }
+
+# GUI
+slint = { version = "~1.15", features = ["unstable-winit-030"] }
+slint-build = "1.15"
+
+# XML
+quick-xml = "0.39"
+
+# Parallelism
+rayon = "1"
+
+# Misc
+libc = "0.2"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6"
+regex = "1"
