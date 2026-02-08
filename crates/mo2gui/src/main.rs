@@ -491,6 +491,63 @@ fn main() {
         });
     }
 
+    // --- Select Mod ---
+    {
+        let ui_handle = ui.as_weak();
+        ui.on_select_mod(move |mod_name| {
+            let ui = ui_handle.unwrap();
+            ui.set_selected_mod_name(mod_name.clone());
+
+            let model = ui.get_mod_list();
+            let selected = mod_name.to_string();
+            let mut win_keys = String::new();
+            let mut lose_keys = String::new();
+            let mut win_text = SharedString::default();
+            let mut lose_text = SharedString::default();
+
+            for i in 0..model.row_count() {
+                if let Some(row) = model.row_data(i) {
+                    if row.name.as_str() == selected.as_str() {
+                        win_keys = row.winning_opponent_keys.to_string();
+                        lose_keys = row.losing_opponent_keys.to_string();
+                        win_text = row.winning_opponents;
+                        lose_text = row.losing_opponents;
+                        break;
+                    }
+                }
+            }
+
+            if win_keys.is_empty() && lose_keys.is_empty() {
+                ui.set_selected_mod_winning(SharedString::default());
+                ui.set_selected_mod_losing(SharedString::default());
+            } else {
+                ui.set_selected_mod_winning(win_text);
+                ui.set_selected_mod_losing(lose_text);
+            }
+
+            for i in 0..model.row_count() {
+                let Some(mut row) = model.row_data(i) else {
+                    continue;
+                };
+                if selected.is_empty()
+                    || row.name.as_str() == selected.as_str()
+                    || row.is_separator
+                    || row.is_overwrite
+                {
+                    row.highlight_winning = false;
+                    row.highlight_losing = false;
+                } else {
+                    let token = format!("|{}|", row.name);
+                    let is_losing_peer = lose_keys.contains(&token);
+                    let is_winning_peer = win_keys.contains(&token);
+                    row.highlight_losing = is_losing_peer;
+                    row.highlight_winning = !is_losing_peer && is_winning_peer;
+                }
+                model.set_row_data(i, row);
+            }
+        });
+    }
+
     // --- Toggle Separator Collapse ---
     {
         let ui_handle = ui.as_weak();
@@ -517,6 +574,7 @@ fn main() {
                     .map(|e| e.separator_has_children)
                     .unwrap_or(false);
                 if !can {
+                    apply_selection_state_to_mod_entries(&ui, &mut entries);
                     ui.set_mod_list(ModelRc::new(VecModel::from(entries)));
                 }
                 can
@@ -538,6 +596,7 @@ fn main() {
             entries.retain(|e| !e.is_overwrite);
             sort_mod_entries(&mut entries, column, ascending);
             apply_collapse_state(&mut entries, &st.collapsed_separators);
+            apply_selection_state_to_mod_entries(&ui, &mut entries);
             ui.set_mod_list(ModelRc::new(VecModel::from(entries)));
         });
     }
@@ -631,6 +690,7 @@ fn main() {
             entries.retain(|e| !e.is_overwrite);
             sort_mod_entries(&mut entries, column, ascending);
             apply_collapse_state(&mut entries, &st.collapsed_separators);
+            apply_selection_state_to_mod_entries(&ui, &mut entries);
             ui.set_mod_list(ModelRc::new(VecModel::from(entries)));
         });
     }
@@ -743,6 +803,7 @@ fn main() {
             }
 
             apply_collapse_state(&mut entries, &st.collapsed_separators);
+            apply_selection_state_to_mod_entries(&ui, &mut entries);
             ui.set_mod_list(ModelRc::new(VecModel::from(entries)));
         });
     }
@@ -890,6 +951,7 @@ fn main() {
             let ascending = ui.get_sort_ascending();
             sort_mod_entries(&mut entries, column, ascending);
             apply_collapse_state(&mut entries, &st.collapsed_separators);
+            apply_selection_state_to_mod_entries(&ui, &mut entries);
             ui.set_mod_list(ModelRc::new(VecModel::from(entries)));
         });
     }
@@ -936,6 +998,7 @@ fn main() {
             let ascending = ui.get_sort_ascending();
             sort_mod_entries(&mut entries, column, ascending);
             apply_collapse_state(&mut entries, &st.collapsed_separators);
+            apply_selection_state_to_mod_entries(&ui, &mut entries);
             ui.set_mod_list(ModelRc::new(VecModel::from(entries)));
         });
     }
@@ -3087,6 +3150,9 @@ fn refresh_ui(ui: &MainWindow, state: &AppState) {
         ui.set_enabled_plugin_count(0);
         ui.set_profile_list(ModelRc::default());
         ui.set_mod_list(ModelRc::default());
+        ui.set_selected_mod_name(SharedString::default());
+        ui.set_selected_mod_winning(SharedString::default());
+        ui.set_selected_mod_losing(SharedString::default());
         ui.set_plugin_list(ModelRc::default());
         return;
     };
@@ -3133,6 +3199,7 @@ fn refresh_ui(ui: &MainWindow, state: &AppState) {
     let ascending = ui.get_sort_ascending();
     sort_mod_entries(&mut mod_entries, column, ascending);
     apply_collapse_state(&mut mod_entries, &state.collapsed_separators);
+    apply_selection_state_to_mod_entries(ui, &mut mod_entries);
     tracing::info!("Mod list: {} entries in model", mod_entries.len(),);
     for entry in &mod_entries {
         tracing::info!(
@@ -3659,8 +3726,71 @@ fn sort_plugin_entries(entries: &mut [PluginEntry], column: i32, ascending: bool
     }
 }
 
+/// Update per-row conflict highlight flags based on the currently selected mod.
+/// Returns the selected mod's conflict summary strings if the selected mod is in the list.
+fn apply_selected_conflict_highlight(
+    entries: &mut [ModEntry],
+    selected_name: &str,
+) -> Option<(SharedString, SharedString)> {
+    for e in entries.iter_mut() {
+        e.highlight_winning = false;
+        e.highlight_losing = false;
+    }
+
+    if selected_name.is_empty() {
+        return None;
+    }
+
+    let selected = entries.iter().find(|e| e.name.as_str() == selected_name)?;
+    let win_keys = selected.winning_opponent_keys.to_string();
+    let lose_keys = selected.losing_opponent_keys.to_string();
+    let win_text = selected.winning_opponents.clone();
+    let lose_text = selected.losing_opponents.clone();
+
+    for e in entries.iter_mut() {
+        if e.name.as_str() == selected_name || e.is_separator || e.is_overwrite {
+            continue;
+        }
+        let token = format!("|{}|", e.name);
+        let is_losing_peer = lose_keys.contains(&token);
+        let is_winning_peer = win_keys.contains(&token);
+        e.highlight_losing = is_losing_peer;
+        e.highlight_winning = !is_losing_peer && is_winning_peer;
+    }
+
+    Some((win_text, lose_text))
+}
+
+fn apply_selection_state_to_mod_entries(ui: &MainWindow, entries: &mut [ModEntry]) {
+    let selected_name = ui.get_selected_mod_name().to_string();
+    if let Some((winning, losing)) = apply_selected_conflict_highlight(entries, &selected_name) {
+        ui.set_selected_mod_winning(winning);
+        ui.set_selected_mod_losing(losing);
+    } else {
+        if !selected_name.is_empty() {
+            ui.set_selected_mod_name(SharedString::default());
+        }
+        ui.set_selected_mod_winning(SharedString::default());
+        ui.set_selected_mod_losing(SharedString::default());
+    }
+}
+
 /// Convert Instance mods to Slint ModEntry structs.
 fn build_mod_list(instance: &Instance, conflicts: &HashMap<String, ModConflicts>) -> Vec<ModEntry> {
+    fn build_opponent_keys(names: &[&str]) -> String {
+        if names.is_empty() {
+            String::new()
+        } else {
+            let mut out = String::new();
+            for name in names {
+                out.push('|');
+                out.push_str(name);
+            }
+            out.push('|');
+            out
+        }
+    }
+
     instance
         .mods
         .iter()
@@ -3720,12 +3850,30 @@ fn build_mod_list(instance: &Instance, conflicts: &HashMap<String, ModConflicts>
                 }
                 _ => String::new(),
             };
+            let winning_opponent_keys = match mod_conflicts {
+                Some(c) if !c.winning.is_empty() => {
+                    let mut names: Vec<&str> = c.winning.iter().map(|f| f.loser.as_str()).collect();
+                    names.sort_unstable();
+                    names.dedup();
+                    build_opponent_keys(&names)
+                }
+                _ => String::new(),
+            };
             let losing_opponents = match mod_conflicts {
                 Some(c) if !c.losing.is_empty() => {
                     let mut names: Vec<&str> = c.losing.iter().map(|f| f.winner.as_str()).collect();
                     names.sort_unstable();
                     names.dedup();
                     names.join(", ")
+                }
+                _ => String::new(),
+            };
+            let losing_opponent_keys = match mod_conflicts {
+                Some(c) if !c.losing.is_empty() => {
+                    let mut names: Vec<&str> = c.losing.iter().map(|f| f.winner.as_str()).collect();
+                    names.sort_unstable();
+                    names.dedup();
+                    build_opponent_keys(&names)
                 }
                 _ => String::new(),
             };
@@ -3790,7 +3938,11 @@ fn build_mod_list(instance: &Instance, conflicts: &HashMap<String, ModConflicts>
                 has_winning,
                 has_losing,
                 winning_opponents: SharedString::from(winning_opponents.as_str()),
+                winning_opponent_keys: SharedString::from(winning_opponent_keys.as_str()),
                 losing_opponents: SharedString::from(losing_opponents.as_str()),
+                losing_opponent_keys: SharedString::from(losing_opponent_keys.as_str()),
+                highlight_winning: false,
+                highlight_losing: false,
                 nexus_id,
                 notes: SharedString::from(notes),
             }

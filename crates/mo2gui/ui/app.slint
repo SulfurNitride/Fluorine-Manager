@@ -23,7 +23,11 @@ export struct ModEntry {
     has-winning: bool,
     has-losing: bool,
     winning-opponents: string,
+    winning-opponent-keys: string,
     losing-opponents: string,
+    losing-opponent-keys: string,
+    highlight-winning: bool,
+    highlight-losing: bool,
     nexus-id: int,
     notes: string,
 }
@@ -283,6 +287,7 @@ export component MainWindow inherits Window {
 
     // --- Main App callbacks ---
     callback set-profile(/* name */ string);
+    callback select-mod(/* mod name */ string);
     callback toggle-mod(/* mod name */ string);
     callback toggle-separator-collapse(/* separator name */ string);
     callback force-unlock();
@@ -1597,8 +1602,10 @@ export component MainWindow inherits Window {
                                     : root.selected-mod-name == entry.name
                                         ? Palette.accent-background.transparentize(70%)
                                     : entry.is-separator ? #1a6e6e
-                                    : entry.has-losing ? #f44336.transparentize(90%)
-                                    : entry.has-winning ? #4caf50.transparentize(90%)
+                                    : entry.highlight-losing
+                                        ? #f44336.transparentize(90%)
+                                    : entry.highlight-winning
+                                        ? #4caf50.transparentize(90%)
                                     : mod(index, 2) == 0 ? Palette.alternate-background
                                     : Palette.background;
 
@@ -1608,10 +1615,8 @@ export component MainWindow inherits Window {
                                         if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
                                             root.drag-from-index = index;
                                             root.drag-start-y = self.mouse-y;
-                                            root.selected-mod-name = entry.name;
                                             root.selected-mod-index = index;
-                                            root.selected-mod-winning = entry.winning-opponents;
-                                            root.selected-mod-losing = entry.losing-opponents;
+                                            root.select-mod(entry.name);
                                         }
                                         if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
                                             if (root.drag-active && root.drag-from-index >= 0
@@ -1626,7 +1631,7 @@ export component MainWindow inherits Window {
                                             root.drag-to-index = -1;
                                         }
                                         if (event.kind == PointerEventKind.up && event.button == PointerEventButton.right) {
-                                            root.selected-mod-name = entry.name;
+                                            root.select-mod(entry.name);
                                             root.selected-mod-index = index;
                                             root.context-mod-is-separator = entry.is-separator;
                                             root.context-mod-enabled = entry.enabled;
