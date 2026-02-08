@@ -439,17 +439,24 @@ fn main() {
         let state = state.clone();
         ui.on_set_profile(move |name| {
             let mut st = state.borrow_mut();
+            let mut switched = false;
             if let Some(ref mut instance) = st.instance {
                 if let Err(e) = instance.set_active_profile(&name) {
                     tracing::error!("Failed to set profile: {e}");
                     return;
                 }
+                switched = true;
                 // Refresh conflict cache for new profile
                 refresh_conflict_cache(&mut st);
                 let ui = ui_handle.unwrap();
                 refresh_ui(&ui, &st);
                 // Rebuild VFS if mounted
                 rebuild_vfs_if_mounted(&mut st);
+            }
+
+            if switched {
+                // Immediately retarget profile-local INIs/saves in the active prefix.
+                deploy_plugins_to_prefix(&st);
             }
         });
     }
@@ -1841,6 +1848,7 @@ fn main() {
             deploy_plugins_to_prefix(&st);
 
             let ini_sync = build_ini_sync_info(&st);
+            let save_sync = build_save_sync_info(&st);
             let config = build_launch_config_vfs(exe, &st);
             match mo2core::launcher::process::launch(&config) {
                 Ok(child) => {
@@ -1849,7 +1857,7 @@ fn main() {
                     st.locked_pid = Some(pid);
                     ui.set_locked(true);
                     ui.set_locked_tool_name(SharedString::from(tool_name.as_str()));
-                    start_process_monitor(&timer, &ui_handle, &state, pid, ini_sync);
+                    start_process_monitor(&timer, &ui_handle, &state, pid, ini_sync, save_sync);
                 }
                 Err(e) => {
                     tracing::error!("Failed to launch '{}': {e}", tool_name);
@@ -1891,6 +1899,7 @@ fn main() {
             deploy_plugins_to_prefix(&st);
 
             let ini_sync = build_ini_sync_info(&st);
+            let save_sync = build_save_sync_info(&st);
             let config = build_launch_config_vfs(exe, &st);
             match mo2core::launcher::process::launch(&config) {
                 Ok(child) => {
@@ -1900,7 +1909,7 @@ fn main() {
                     let ui = ui_handle.unwrap();
                     ui.set_locked(true);
                     ui.set_locked_tool_name(SharedString::from(tool_name.as_str()));
-                    start_process_monitor(&timer, &ui_handle, &state, pid, ini_sync);
+                    start_process_monitor(&timer, &ui_handle, &state, pid, ini_sync, save_sync);
                 }
                 Err(e) => {
                     tracing::error!("Failed to launch '{}': {e}", tool_name);
@@ -2820,29 +2829,51 @@ fn deploy_plugins_to_prefix(state: &AppState) {
         return;
     };
 
-    // Build the plugin list and collect (filename, enabled) pairs
-    let plist = instance.build_plugin_list();
-    let mut sorted_plugins = plist.plugins.clone();
-    sorted_plugins.sort_by_key(|p| p.priority);
-    let plugins: Vec<(String, bool)> = sorted_plugins
-        .iter()
-        .map(|p| (p.filename.clone(), p.enabled))
-        .collect();
-
-    tracing::info!(
-        "Deploying plugins.txt ({} plugins) to prefix {:?} / {}",
-        plugins.len(),
-        prefix_path,
-        appdata_folder
-    );
-    for (name, enabled) in &plugins {
-        tracing::info!("  plugin: '{}' (enabled={})", name, enabled);
+    // Prefer profile-authored plugins/loadorder files (MO2-compatible behavior).
+    // Fallback to generated list if profile files are unavailable.
+    let mut deployed_from_profile = false;
+    if let Some(ref profile) = instance.active_profile {
+        match mo2core::launcher::wine_prefix::deploy_profile_plugin_files(
+            &prefix,
+            appdata_folder,
+            &profile.path,
+        ) {
+            Ok(()) => {
+                deployed_from_profile = true;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to deploy profile plugin files (falling back to generated list): {e}"
+                );
+            }
+        }
     }
 
-    if let Err(e) =
-        mo2core::launcher::wine_prefix::deploy_plugins(&prefix, appdata_folder, &plugins)
-    {
-        tracing::error!("Failed to deploy plugins.txt: {e}");
+    if !deployed_from_profile {
+        // Build the plugin list and collect (filename, enabled) pairs
+        let plist = instance.build_plugin_list();
+        let mut sorted_plugins = plist.plugins.clone();
+        sorted_plugins.sort_by_key(|p| p.priority);
+        let plugins: Vec<(String, bool)> = sorted_plugins
+            .iter()
+            .map(|p| (p.filename.clone(), p.enabled))
+            .collect();
+
+        tracing::info!(
+            "Deploying generated plugins.txt ({} plugins) to prefix {:?} / {}",
+            plugins.len(),
+            prefix_path,
+            appdata_folder
+        );
+        for (name, enabled) in &plugins {
+            tracing::info!("  plugin: '{}' (enabled={})", name, enabled);
+        }
+
+        if let Err(e) =
+            mo2core::launcher::wine_prefix::deploy_plugins(&prefix, appdata_folder, &plugins)
+        {
+            tracing::error!("Failed to deploy plugins.txt: {e}");
+        }
     }
 
     // Proactively enforce a safer launch display mode for Skyrim titles.
@@ -2875,10 +2906,15 @@ fn deploy_plugins_to_prefix(state: &AppState) {
 
             // Deploy profile-local saves if LocalSaves=true
             if profile.local_saves() {
+                let save_subdir = mo2core::launcher::wine_prefix::resolve_profile_save_subdir(
+                    &profile.path,
+                    &game_def.ini_files,
+                );
                 if let Err(e) = mo2core::launcher::wine_prefix::deploy_profile_saves(
                     &prefix,
                     my_games,
                     &profile.path,
+                    &save_subdir,
                 ) {
                     tracing::error!("Failed to deploy profile saves: {e}");
                 }
@@ -3964,6 +4000,14 @@ struct IniSyncInfo {
     ini_files: Vec<String>,
 }
 
+#[derive(Clone)]
+struct SaveSyncInfo {
+    prefix_path: PathBuf,
+    my_games_folder: String,
+    profile_path: PathBuf,
+    save_subdir: String,
+}
+
 /// Build INI sync-back info from the current app state, if LocalSettings is enabled.
 fn build_ini_sync_info(state: &AppState) -> Option<IniSyncInfo> {
     let instance = state.instance.as_ref()?;
@@ -3995,6 +4039,38 @@ fn build_ini_sync_info(state: &AppState) -> Option<IniSyncInfo> {
     })
 }
 
+fn build_save_sync_info(state: &AppState) -> Option<SaveSyncInfo> {
+    let instance = state.instance.as_ref()?;
+    let profile = instance.active_profile.as_ref()?;
+    if !profile.local_saves() {
+        return None;
+    }
+
+    let game_def = GameDef::from_instance(
+        instance.game_name(),
+        instance.config.game_directory().as_deref(),
+    )?;
+    let my_games_folder = game_def.my_games_folder.clone()?;
+
+    let prefix_path = if let Some(fluorine) =
+        mo2core::fluorine::FluorineConfig::load().filter(|c| c.prefix_exists())
+    {
+        PathBuf::from(&fluorine.prefix_path)
+    } else {
+        instance.config.wine_prefix_path()?.to_path_buf()
+    };
+
+    Some(SaveSyncInfo {
+        prefix_path,
+        my_games_folder,
+        profile_path: profile.path.clone(),
+        save_subdir: mo2core::launcher::wine_prefix::resolve_profile_save_subdir(
+            &profile.path,
+            &game_def.ini_files,
+        ),
+    })
+}
+
 /// Start a timer that polls every 2 seconds to check if the launched process has exited.
 /// When the process exits, unlocks the app state and optionally syncs INI files back.
 fn start_process_monitor(
@@ -4003,6 +4079,7 @@ fn start_process_monitor(
     state: &Rc<RefCell<AppState>>,
     pid: u32,
     ini_sync: Option<IniSyncInfo>,
+    save_sync: Option<SaveSyncInfo>,
 ) {
     let ui_handle = ui_handle.clone();
     let state = state.clone();
@@ -4030,6 +4107,21 @@ fn start_process_monitor(
                         &sync.ini_files,
                     ) {
                         tracing::error!("Failed to sync INI files back to profile: {e}");
+                    }
+                }
+            }
+
+            if let Some(ref sync) = save_sync {
+                if let Ok(prefix) =
+                    mo2core::launcher::wine_prefix::WinePrefix::load(&sync.prefix_path)
+                {
+                    if let Err(e) = mo2core::launcher::wine_prefix::sync_saves_back_to_profile(
+                        &prefix,
+                        &sync.my_games_folder,
+                        &sync.profile_path,
+                        &sync.save_subdir,
+                    ) {
+                        tracing::error!("Failed to sync save files back to profile: {e}");
                     }
                 }
             }

@@ -31,21 +31,21 @@ impl InodeTable {
 
     /// Get or allocate an inode for a path.
     pub fn get_or_create(&mut self, path: &str) -> u64 {
-        let normalized = normalize_path(path);
-        if let Some(&ino) = self.path_to_inode.get(&normalized) {
+        let key = normalize_key(path);
+        if let Some(&ino) = self.path_to_inode.get(&key) {
             return ino;
         }
 
         let ino = self.next_inode;
         self.next_inode += 1;
-        self.path_to_inode.insert(normalized.clone(), ino);
-        self.inode_to_path.insert(ino, normalized);
+        self.path_to_inode.insert(key, ino);
+        self.inode_to_path.insert(ino, canonicalize_path(path));
         ino
     }
 
     /// Look up an inode by path.
     pub fn get_inode(&self, path: &str) -> Option<u64> {
-        self.path_to_inode.get(&normalize_path(path)).copied()
+        self.path_to_inode.get(&normalize_key(path)).copied()
     }
 
     /// Look up a path by inode.
@@ -65,11 +65,11 @@ impl InodeTable {
 
     /// Rename an inode entry (update path mapping, keep same inode number).
     pub fn rename(&mut self, old_path: &str, new_path: &str) {
-        let old_normalized = normalize_path(old_path);
-        let new_normalized = normalize_path(new_path);
-        if let Some(ino) = self.path_to_inode.remove(&old_normalized) {
-            self.inode_to_path.insert(ino, new_normalized.clone());
-            self.path_to_inode.insert(new_normalized, ino);
+        let old_key = normalize_key(old_path);
+        let new_key = normalize_key(new_path);
+        if let Some(ino) = self.path_to_inode.remove(&old_key) {
+            self.inode_to_path.insert(ino, canonicalize_path(new_path));
+            self.path_to_inode.insert(new_key, ino);
         }
     }
 
@@ -89,12 +89,17 @@ impl Default for InodeTable {
     }
 }
 
-/// Normalize a path for inode lookup (lowercase, forward slashes, no trailing slash).
-fn normalize_path(path: &str) -> String {
+/// Normalize a path for case-insensitive inode lookup.
+fn normalize_key(path: &str) -> String {
     path.to_lowercase()
         .replace('\\', "/")
         .trim_matches('/')
         .to_string()
+}
+
+/// Canonicalize a path while preserving case.
+fn canonicalize_path(path: &str) -> String {
+    path.replace('\\', "/").trim_matches('/').to_string()
 }
 
 #[cfg(test)]
@@ -112,10 +117,10 @@ mod tests {
     #[test]
     fn test_allocate() {
         let mut table = InodeTable::new();
-        let ino = table.get_or_create("textures/armor.dds");
+        let ino = table.get_or_create("Textures/Armor.dds");
         assert_eq!(ino, 2);
         assert_eq!(table.get_inode("textures/armor.dds"), Some(2));
-        assert_eq!(table.get_path(2), Some("textures/armor.dds"));
+        assert_eq!(table.get_path(2), Some("Textures/Armor.dds"));
     }
 
     #[test]
@@ -132,6 +137,16 @@ mod tests {
         let ino1 = table.get_or_create("Textures/Armor.dds");
         let ino2 = table.get_or_create("textures/armor.dds");
         assert_eq!(ino1, ino2);
+        assert_eq!(table.get_path(ino1), Some("Textures/Armor.dds"));
+    }
+
+    #[test]
+    fn test_rename_preserves_case() {
+        let mut table = InodeTable::new();
+        let ino = table.get_or_create("Data/SKSE/Plugins/Foo.ini");
+        table.rename("data/skse/plugins/foo.ini", "Data/SKSE/Plugins/Bar.ini");
+        assert_eq!(table.get_inode("data/skse/plugins/bar.ini"), Some(ino));
+        assert_eq!(table.get_path(ino), Some("Data/SKSE/Plugins/Bar.ini"));
     }
 
     #[test]

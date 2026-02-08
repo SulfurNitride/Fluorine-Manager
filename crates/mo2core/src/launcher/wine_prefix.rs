@@ -4,6 +4,8 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 
+const SAVES_MANIFEST: &str = ".mo2linux_profile_saves_manifest";
+
 /// A Wine/Proton prefix directory.
 #[derive(Debug)]
 pub struct WinePrefix {
@@ -104,6 +106,49 @@ pub fn deploy_plugins(
         "Deployed plugins.txt + loadorder.txt ({} plugins) to {:?}",
         plugins.len(),
         plugins_path
+    );
+
+    Ok(())
+}
+
+/// Deploy profile-authored plugins.txt/loadorder.txt verbatim to AppData/Local.
+///
+/// This mirrors MO2 behavior: the profile files are authoritative and should
+/// be copied as-is instead of regenerated.
+pub fn deploy_profile_plugin_files(
+    prefix: &WinePrefix,
+    appdata_folder: &str,
+    profile_path: &Path,
+) -> Result<()> {
+    let plugins_dir = prefix.appdata_local().join(appdata_folder);
+    std::fs::create_dir_all(&plugins_dir)
+        .with_context(|| format!("Failed to create AppData dir {:?}", plugins_dir))?;
+
+    let src_plugins = profile_path.join("plugins.txt");
+    let src_loadorder = profile_path.join("loadorder.txt");
+    if !src_plugins.exists() || !src_loadorder.exists() {
+        bail!(
+            "Missing profile plugin files in {:?} (plugins.txt/loadorder.txt required)",
+            profile_path
+        );
+    }
+
+    let dest_plugins = plugins_dir.join("Plugins.txt");
+    let dest_loadorder = plugins_dir.join("loadorder.txt");
+
+    std::fs::copy(&src_plugins, &dest_plugins)
+        .with_context(|| format!("Failed to copy {:?} -> {:?}", src_plugins, dest_plugins))?;
+    std::fs::copy(&src_loadorder, &dest_loadorder).with_context(|| {
+        format!(
+            "Failed to copy {:?} -> {:?}",
+            src_loadorder, dest_loadorder
+        )
+    })?;
+
+    tracing::info!(
+        "Deployed profile plugin files to {:?} from {:?}",
+        plugins_dir,
+        profile_path
     );
 
     Ok(())
@@ -276,13 +321,14 @@ pub fn sync_ini_back_to_profile(
 
 /// Deploy profile-local saves to the Wine prefix's saves folder.
 ///
-/// When `LocalSaves=true`, saves are stored in `<profile>/saves/`.
-/// This creates a symlink from the prefix's save location to the profile saves dir,
-/// so the game reads/writes saves directly to the profile.
+/// When `LocalSaves=true`, saves are staged into the prefix save directory using
+/// reflink copies where possible (fallback: regular copy).
+/// Existing staged saves from another profile are removed on profile switch.
 pub fn deploy_profile_saves(
     prefix: &WinePrefix,
     my_games_folder: &str,
     profile_path: &Path,
+    save_subdir: &str,
 ) -> Result<()> {
     let profile_saves = profile_path.join("saves");
     std::fs::create_dir_all(&profile_saves)
@@ -292,41 +338,255 @@ pub fn deploy_profile_saves(
     std::fs::create_dir_all(&target_dir)
         .with_context(|| format!("Failed to create My Games dir {:?}", target_dir))?;
 
-    let saves_in_prefix = target_dir.join("Saves");
+    let saves_in_prefix = target_dir.join(save_subdir);
 
-    // If the saves dir in the prefix already exists and is NOT a symlink,
-    // move existing saves to the profile saves dir first.
-    if saves_in_prefix.exists() && !saves_in_prefix.is_symlink() {
-        if saves_in_prefix.is_dir() {
-            // Move any existing save files to profile saves
-            if let Ok(entries) = std::fs::read_dir(&saves_in_prefix) {
-                for entry in entries.flatten() {
-                    let dest = profile_saves.join(entry.file_name());
-                    if !dest.exists() {
-                        let _ = std::fs::rename(entry.path(), &dest);
-                    }
-                }
-            }
-            std::fs::remove_dir_all(&saves_in_prefix)
-                .with_context(|| format!("Failed to remove {:?}", saves_in_prefix))?;
+    // Remove stale symlink or non-directory path from older strategies/configs.
+    if saves_in_prefix.is_symlink() || (saves_in_prefix.exists() && !saves_in_prefix.is_dir()) {
+        std::fs::remove_file(&saves_in_prefix)
+            .with_context(|| format!("Failed to remove stale path {:?}", saves_in_prefix))?;
+    }
+    std::fs::create_dir_all(&saves_in_prefix)
+        .with_context(|| format!("Failed to create saves dir {:?}", saves_in_prefix))?;
+
+    cleanup_previous_profile_saves(&saves_in_prefix, profile_path)?;
+
+    let mut staged = Vec::new();
+    for src in list_files_recursive(&profile_saves)? {
+        let rel = src
+            .strip_prefix(&profile_saves)
+            .with_context(|| format!("Failed to strip prefix for {:?}", src))?;
+        let dst = saves_in_prefix.join(rel);
+        reflink_or_copy(&src, &dst)?;
+        staged.push(rel.to_path_buf());
+    }
+
+    write_saves_manifest(&saves_in_prefix, profile_path, &staged)?;
+    tracing::info!(
+        "Staged {} profile save files into {:?}",
+        staged.len(),
+        saves_in_prefix
+    );
+
+    Ok(())
+}
+
+/// Sync save files back from prefix `Saves/` to the profile save directory.
+pub fn sync_saves_back_to_profile(
+    prefix: &WinePrefix,
+    my_games_folder: &str,
+    profile_path: &Path,
+    save_subdir: &str,
+) -> Result<()> {
+    let saves_in_prefix = prefix
+        .my_games_path()
+        .join(my_games_folder)
+        .join(save_subdir);
+    if !saves_in_prefix.is_dir() {
+        return Ok(());
+    }
+
+    let profile_saves = profile_path.join("saves");
+    std::fs::create_dir_all(&profile_saves)
+        .with_context(|| format!("Failed to create profile saves dir {:?}", profile_saves))?;
+
+    let mut synced = 0usize;
+    let mut staged = Vec::new();
+    for src in list_files_recursive(&saves_in_prefix)? {
+        let rel = src
+            .strip_prefix(&saves_in_prefix)
+            .with_context(|| format!("Failed to strip prefix for {:?}", src))?;
+        if rel == Path::new(SAVES_MANIFEST) {
+            continue;
+        }
+
+        let dst = profile_saves.join(rel);
+        if should_copy_over(&src, &dst)? {
+            reflink_or_copy(&src, &dst)?;
+            synced += 1;
+        }
+        staged.push(rel.to_path_buf());
+    }
+
+    write_saves_manifest(&saves_in_prefix, profile_path, &staged)?;
+    if synced > 0 {
+        tracing::info!("Synced {} save files back to {:?}", synced, profile_saves);
+    }
+
+    Ok(())
+}
+
+fn should_copy_over(src: &Path, dst: &Path) -> Result<bool> {
+    if !dst.exists() {
+        return Ok(true);
+    }
+
+    let src_meta = src
+        .metadata()
+        .with_context(|| format!("Failed to stat {:?}", src))?;
+    let dst_meta = dst
+        .metadata()
+        .with_context(|| format!("Failed to stat {:?}", dst))?;
+    if src_meta.len() != dst_meta.len() {
+        return Ok(true);
+    }
+
+    let src_mtime = src_meta.modified().ok();
+    let dst_mtime = dst_meta.modified().ok();
+    Ok(src_mtime.zip(dst_mtime).is_some_and(|(s, d)| s > d))
+}
+
+fn list_files_recursive(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    if !root.exists() {
+        return Ok(out);
+    }
+    for entry in walkdir::WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
+        if entry.file_type().is_file() {
+            out.push(entry.path().to_path_buf());
+        }
+    }
+    Ok(out)
+}
+
+fn cleanup_previous_profile_saves(saves_in_prefix: &Path, profile_path: &Path) -> Result<()> {
+    let manifest = saves_in_prefix.join(SAVES_MANIFEST);
+    if !manifest.exists() {
+        return Ok(());
+    }
+
+    let content = std::fs::read_to_string(&manifest)
+        .with_context(|| format!("Failed to read {:?}", manifest))?;
+    let mut lines = content.lines();
+    let Some(profile_line) = lines.next() else {
+        return Ok(());
+    };
+    let Some(previous_profile) = profile_line.strip_prefix("profile=") else {
+        return Ok(());
+    };
+    if previous_profile == profile_path.to_string_lossy() {
+        return Ok(());
+    }
+
+    for rel in lines.filter(|l| !l.trim().is_empty()) {
+        let candidate = saves_in_prefix.join(rel);
+        if candidate.is_file() {
+            let _ = std::fs::remove_file(&candidate);
         }
     }
 
-    // Create symlink: prefix Saves/ -> profile saves/
-    if !saves_in_prefix.exists() {
-        std::os::unix::fs::symlink(&profile_saves, &saves_in_prefix).with_context(|| {
-            format!(
-                "Failed to symlink {:?} -> {:?}",
-                saves_in_prefix, profile_saves
-            )
-        })?;
-        tracing::info!(
-            "Symlinked saves: {:?} -> {:?}",
-            saves_in_prefix,
-            profile_saves
-        );
+    remove_empty_dirs(saves_in_prefix)?;
+    let _ = std::fs::remove_file(manifest);
+    Ok(())
+}
+
+fn remove_empty_dirs(root: &Path) -> Result<()> {
+    if !root.exists() {
+        return Ok(());
+    }
+    for entry in walkdir::WalkDir::new(root)
+        .contents_first(true)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        if entry.path() == root {
+            continue;
+        }
+        if entry.file_type().is_dir() {
+            let _ = std::fs::remove_dir(entry.path());
+        }
+    }
+    Ok(())
+}
+
+fn write_saves_manifest(saves_in_prefix: &Path, profile_path: &Path, files: &[PathBuf]) -> Result<()> {
+    let mut body = String::new();
+    body.push_str("profile=");
+    body.push_str(&profile_path.to_string_lossy());
+    body.push('\n');
+    for rel in files {
+        body.push_str(&rel.to_string_lossy().replace('\\', "/"));
+        body.push('\n');
+    }
+    let manifest = saves_in_prefix.join(SAVES_MANIFEST);
+    std::fs::write(&manifest, body).with_context(|| format!("Failed to write {:?}", manifest))?;
+    Ok(())
+}
+
+/// Resolve the save subdirectory in My Games for this profile.
+///
+/// Uses `SLocalSavePath` from `[General]` in the game's INI if present.
+/// Falls back to `"Saves"` when unset.
+pub fn resolve_profile_save_subdir(profile_path: &Path, ini_files: &[String]) -> String {
+    for ini_name in ini_files {
+        let ini_path = find_file_case_insensitive(profile_path, ini_name)
+            .unwrap_or_else(|| profile_path.join(ini_name));
+        if !ini_path.exists() {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&ini_path) else {
+            continue;
+        };
+        if let Some(p) = parse_slocal_save_path(&content) {
+            return p;
+        }
+    }
+    "Saves".to_string()
+}
+
+fn parse_slocal_save_path(content: &str) -> Option<String> {
+    let mut in_general = false;
+    for raw in content.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
+            continue;
+        }
+
+        if line.starts_with('[') && line.ends_with(']') {
+            in_general = line[1..line.len() - 1].eq_ignore_ascii_case("General");
+            continue;
+        }
+
+        if !in_general {
+            continue;
+        }
+
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
+        if !k.trim().eq_ignore_ascii_case("SLocalSavePath") {
+            continue;
+        }
+
+        let cleaned = v.trim().replace('\\', "/");
+        let cleaned = cleaned.trim_matches('/').trim();
+        if cleaned.is_empty() {
+            return None;
+        }
+        return Some(cleaned.to_string());
+    }
+    None
+}
+
+fn reflink_or_copy(src: &Path, dst: &Path) -> Result<()> {
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create parent dir for {:?}", dst))?;
     }
 
+    // Try reflink first on GNU cp; if unsupported or unavailable, fall back.
+    if let Ok(status) = Command::new("cp")
+        .arg("--reflink=auto")
+        .arg("--preserve=mode,timestamps")
+        .arg(src)
+        .arg(dst)
+        .status()
+    {
+        if status.success() {
+            return Ok(());
+        }
+    }
+
+    std::fs::copy(src, dst).with_context(|| format!("Failed to copy {:?} -> {:?}", src, dst))?;
     Ok(())
 }
 
@@ -495,6 +755,37 @@ mod tests {
     }
 
     #[test]
+    fn test_deploy_profile_plugin_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("drive_c")).unwrap();
+        let prefix = WinePrefix::load(dir.path()).unwrap();
+
+        let profile = dir.path().join("profile");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(
+            profile.join("plugins.txt"),
+            "# This file was automatically generated by Mod Organizer.\r\n*Skyrim.esm\r\n",
+        )
+        .unwrap();
+        std::fs::write(
+            profile.join("loadorder.txt"),
+            "# This file was automatically generated by Mod Organizer.\r\nSkyrim.esm\r\n",
+        )
+        .unwrap();
+
+        deploy_profile_plugin_files(&prefix, "Skyrim Special Edition", &profile).unwrap();
+
+        let app = prefix
+            .appdata_local()
+            .join("Skyrim Special Edition");
+        let plugins = std::fs::read_to_string(app.join("Plugins.txt")).unwrap();
+        let loadorder = std::fs::read_to_string(app.join("loadorder.txt")).unwrap();
+        assert!(plugins.contains("*Skyrim.esm"));
+        assert!(loadorder.contains("Skyrim.esm"));
+        assert!(!loadorder.contains("*Skyrim.esm"));
+    }
+
+    #[test]
     fn test_upsert_ini_key_updates_or_adds() {
         let content = "[Display]\nbBorderless=0\n";
         let updated = upsert_ini_key(content, "Display", "bBorderless", "1");
@@ -507,5 +798,89 @@ mod tests {
         let added_section = upsert_ini_key(no_section, "Display", "bBorderless", "1");
         assert!(added_section.contains("[Display]"));
         assert!(added_section.contains("bBorderless=1"));
+    }
+
+    #[test]
+    fn test_deploy_profile_saves_stages_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("drive_c")).unwrap();
+        let prefix = WinePrefix::load(dir.path()).unwrap();
+
+        let my_games = "Skyrim Special Edition";
+        let profile = dir.path().join("profile");
+        let profile_saves = profile.join("saves");
+        std::fs::create_dir_all(&profile_saves).unwrap();
+        std::fs::write(profile_saves.join("Save1.ess"), b"abc").unwrap();
+
+        deploy_profile_saves(&prefix, my_games, &profile, "Saves").unwrap();
+
+        let staged = prefix
+            .my_games_path()
+            .join(my_games)
+            .join("Saves/Save1.ess");
+        assert!(staged.exists());
+    }
+
+    #[test]
+    fn test_deploy_profile_saves_cleans_previous_profile_staged_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("drive_c")).unwrap();
+        let prefix = WinePrefix::load(dir.path()).unwrap();
+
+        let my_games = "Skyrim Special Edition";
+        let profile_a = dir.path().join("profile_a");
+        let profile_b = dir.path().join("profile_b");
+        std::fs::create_dir_all(profile_a.join("saves")).unwrap();
+        std::fs::create_dir_all(profile_b.join("saves")).unwrap();
+        std::fs::write(profile_a.join("saves/A.ess"), b"a").unwrap();
+        std::fs::write(profile_b.join("saves/B.ess"), b"b").unwrap();
+
+        deploy_profile_saves(&prefix, my_games, &profile_a, "Saves").unwrap();
+        deploy_profile_saves(&prefix, my_games, &profile_b, "Saves").unwrap();
+
+        let saves_dir = prefix.my_games_path().join(my_games).join("Saves");
+        assert!(!saves_dir.join("A.ess").exists());
+        assert!(saves_dir.join("B.ess").exists());
+    }
+
+    #[test]
+    fn test_sync_saves_back_to_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("drive_c")).unwrap();
+        let prefix = WinePrefix::load(dir.path()).unwrap();
+
+        let my_games = "Skyrim Special Edition";
+        let profile = dir.path().join("profile");
+        let profile_saves = profile.join("saves");
+        std::fs::create_dir_all(&profile_saves).unwrap();
+        std::fs::write(profile_saves.join("Save1.ess"), b"abc").unwrap();
+
+        deploy_profile_saves(&prefix, my_games, &profile, "Saves").unwrap();
+
+        let staged_dir = prefix.my_games_path().join(my_games).join("Saves");
+        std::fs::write(staged_dir.join("Save2.ess"), b"new-save").unwrap();
+        sync_saves_back_to_profile(&prefix, my_games, &profile, "Saves").unwrap();
+
+        assert!(profile_saves.join("Save1.ess").exists());
+        assert_eq!(
+            std::fs::read(profile_saves.join("Save2.ess")).unwrap(),
+            b"new-save"
+        );
+    }
+
+    #[test]
+    fn test_resolve_profile_save_subdir_from_ini() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = dir.path().join("profile");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(
+            profile.join("Skyrim.ini"),
+            "[General]\r\nSLocalSavePath=__MO_Saves\\\r\n",
+        )
+        .unwrap();
+
+        let ini_files = vec!["Skyrim.ini".to_string()];
+        let path = resolve_profile_save_subdir(&profile, &ini_files);
+        assert_eq!(path, "__MO_Saves");
     }
 }

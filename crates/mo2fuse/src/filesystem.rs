@@ -63,8 +63,8 @@ pub struct Mo2Filesystem {
     inodes: Arc<Mutex<InodeTable>>,
     /// Write manager (points to staging dir while mounted)
     overwrite: Arc<OverwriteManager>,
-    /// Open file handles: fh -> (real_path, writable)
-    open_files: Arc<Mutex<HashMap<u64, (PathBuf, bool)>>>,
+    /// Open file handles: fh -> (real_path, writable, relative_vfs_path)
+    open_files: Arc<Mutex<HashMap<u64, (PathBuf, bool, String)>>>,
     /// Next file handle (atomic — no mutex needed)
     next_fh: Arc<AtomicU64>,
     /// Origin label for files written through the VFS
@@ -496,7 +496,7 @@ impl Filesystem for Mo2Filesystem {
             open_files
                 .lock()
                 .unwrap()
-                .insert(fh, (actual_path, writable));
+                .insert(fh, (actual_path, writable, path));
 
             // FOPEN_KEEP_CACHE: tell kernel to keep page cache across open/close cycles.
             // Safe because we control all mutations through the FUSE daemon.
@@ -521,7 +521,7 @@ impl Filesystem for Mo2Filesystem {
             let real_path = {
                 let files = open_files.lock().unwrap();
                 match files.get(&fh) {
-                    Some((path, _)) => path.clone(),
+                    Some((path, _, _)) => path.clone(),
                     None => {
                         reply.error(libc::EBADF);
                         return;
@@ -561,12 +561,14 @@ impl Filesystem for Mo2Filesystem {
         // Copy data into owned buffer so we can move it into rayon::spawn
         let data = data.to_vec();
         let open_files = self.open_files.clone();
+        let tree = self.tree.clone();
+        let write_origin = self.write_origin.clone();
 
         rayon::spawn(move || {
-            let (real_path, writable) = {
+            let (real_path, writable, relative_path) = {
                 let files = open_files.lock().unwrap();
                 match files.get(&fh) {
-                    Some((p, w)) => (p.clone(), *w),
+                    Some((p, w, rel)) => (p.clone(), *w, rel.clone()),
                     None => {
                         reply.error(libc::EBADF);
                         return;
@@ -592,7 +594,21 @@ impl Filesystem for Mo2Filesystem {
                         return;
                     }
                     match file.write_all(&data) {
-                        Ok(()) => reply.written(data.len() as u32),
+                        Ok(()) => {
+                            // Keep VFS metadata (size/mtime) in sync with on-disk writes.
+                            if let Ok(metadata) = std::fs::metadata(&real_path) {
+                                let mut tree_guard = tree.write().unwrap();
+                                let components: Vec<&str> = relative_path.split('/').collect();
+                                tree_guard.root.insert_file(
+                                    &components,
+                                    real_path.clone(),
+                                    metadata.len(),
+                                    metadata.modified().unwrap_or(UNIX_EPOCH),
+                                    &write_origin,
+                                );
+                            }
+                            reply.written(data.len() as u32)
+                        }
                         Err(_) => reply.error(libc::EIO),
                     }
                 }
@@ -653,7 +669,10 @@ impl Filesystem for Mo2Filesystem {
                     let ino = inodes.lock().unwrap().get_or_create(&relative);
                     let attr = Self::file_attr(&ids, ino, 0, SystemTime::now());
                     let fh = Self::alloc_fh(&next_fh);
-                    open_files.lock().unwrap().insert(fh, (real_path, true));
+                    open_files
+                        .lock()
+                        .unwrap()
+                        .insert(fh, (real_path, true, relative));
                     reply.created(&TTL, &attr, 0, fh, 0);
                 }
                 Err(_) => {
@@ -888,7 +907,7 @@ impl Filesystem for Mo2Filesystem {
             if let Some(new_size) = size {
                 let real_path = if let Some(fh_val) = fh {
                     let files = open_files.lock().unwrap();
-                    files.get(&fh_val).map(|(p, _)| p.clone())
+                    files.get(&fh_val).map(|(p, _, _)| p.clone())
                 } else {
                     let ow_path = overwrite.overwrite_path(&path);
                     if ow_path.exists() {

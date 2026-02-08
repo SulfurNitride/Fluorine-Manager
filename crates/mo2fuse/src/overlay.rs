@@ -282,11 +282,46 @@ impl Default for VfsTree {
 /// Build a VFS tree from a list of active mods.
 ///
 /// `mods` is sorted by ascending priority (last entry wins conflicts).
-/// `overwrite_dir` is always applied last (highest priority).
+/// `overwrite_dir` is applied first so active mods can override it.
 pub fn build_vfs_tree(mods: &[(&str, &Path)], overwrite_dir: &Path) -> anyhow::Result<VfsTree> {
     let mut tree = VfsTree::new();
     let mut file_count = 0usize;
     let mut dir_count = 1usize; // Root
+
+    // Apply overwrite directory first (lower than active mods).
+    if overwrite_dir.exists() {
+        for entry in walkdir::WalkDir::new(overwrite_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let path = entry.path();
+            let relative = match path.strip_prefix(overwrite_dir) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+
+            let relative_str = relative.to_string_lossy();
+            if relative_str.is_empty() {
+                continue;
+            }
+
+            if entry.file_type().is_file() {
+                let metadata = entry.metadata()?;
+                let components: Vec<&str> = relative_str.split('/').collect();
+
+                tree.root.insert_file(
+                    &components,
+                    path.to_path_buf(),
+                    metadata.len(),
+                    metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+                    "Overwrite",
+                );
+                file_count += 1;
+            } else if entry.file_type().is_dir() {
+                dir_count += 1;
+            }
+        }
+    }
 
     // Process mods in priority order (lowest first, so higher priority overwrites)
     for (mod_name, mod_path) in mods {
@@ -328,41 +363,6 @@ pub fn build_vfs_tree(mods: &[(&str, &Path)], overwrite_dir: &Path) -> anyhow::R
         }
     }
 
-    // Apply overwrite directory (highest priority)
-    if overwrite_dir.exists() {
-        for entry in walkdir::WalkDir::new(overwrite_dir)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            let path = entry.path();
-            let relative = match path.strip_prefix(overwrite_dir) {
-                Ok(r) => r,
-                Err(_) => continue,
-            };
-
-            let relative_str = relative.to_string_lossy();
-            if relative_str.is_empty() {
-                continue;
-            }
-
-            if entry.file_type().is_file() {
-                let metadata = entry.metadata()?;
-                let components: Vec<&str> = relative_str.split('/').collect();
-
-                tree.root.insert_file(
-                    &components,
-                    path.to_path_buf(),
-                    metadata.len(),
-                    metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
-                    "Overwrite",
-                );
-                file_count += 1;
-            } else if entry.file_type().is_dir() {
-                dir_count += 1;
-            }
-        }
-    }
-
     tree.file_count = file_count;
     tree.dir_count = dir_count;
 
@@ -374,9 +374,10 @@ pub fn build_vfs_tree(mods: &[(&str, &Path)], overwrite_dir: &Path) -> anyhow::R
 /// Unlike `build_vfs_tree` (which only merges Data-level content), this creates
 /// a VFS of the **entire game folder**:
 /// - Game directory → VFS root (base layer, all files including .exe)
+/// - Overwrite directory → lower-priority mutable layer
 /// - Each mod's files → placed under `{data_dir_name}/` (e.g., "Data/")
 /// - Each mod's `Root/` folder → placed at VFS root (SKSE, ENB, engine fixes)
-/// - Overwrite directory → mirrors VFS structure (Data/ content + root content)
+/// - Active mods → highest priority
 ///
 /// The real game directory is NEVER modified. The VFS mount IS the merged view.
 ///
@@ -384,7 +385,7 @@ pub fn build_vfs_tree(mods: &[(&str, &Path)], overwrite_dir: &Path) -> anyhow::R
 /// - `game_dir` — the real game installation directory (base layer)
 /// - `data_dir_name` — name of the data subdirectory ("Data", "Data Files", etc.)
 /// - `mods` — list of (mod_name, mod_path) sorted by ascending priority
-/// - `overwrite_dir` — overwrite directory (highest priority)
+/// - `overwrite_dir` — overwrite directory (lower than active mods)
 pub fn build_full_game_vfs(
     game_dir: &Path,
     data_dir_name: &str,
@@ -408,7 +409,21 @@ pub fn build_full_game_vfs(
         )?;
     }
 
-    // Layer 2: Mods in priority order (lowest first, higher overwrites)
+    // Layer 2: Overwrite directory (lower than active mods)
+    // Overwrite mirrors the VFS structure: Data/ content + root-level content
+    if overwrite_dir.exists() {
+        add_directory_to_tree(
+            &mut tree.root,
+            overwrite_dir,
+            overwrite_dir,
+            "Overwrite",
+            &[], // overwrite maps directly to VFS root (it mirrors the game structure)
+            &mut file_count,
+            &mut dir_count,
+        )?;
+    }
+
+    // Layer 3: Mods in priority order (lowest first, higher overwrites)
     let data_prefix: Vec<&str> = data_dir_name.split('/').collect();
 
     for (mod_name, mod_path) in mods {
@@ -495,20 +510,6 @@ pub fn build_full_game_vfs(
                 dir_count += 1;
             }
         }
-    }
-
-    // Layer 3: Overwrite directory (highest priority)
-    // Overwrite mirrors the VFS structure: Data/ content + root-level content
-    if overwrite_dir.exists() {
-        add_directory_to_tree(
-            &mut tree.root,
-            overwrite_dir,
-            overwrite_dir,
-            "Overwrite",
-            &[], // overwrite maps directly to VFS root (it mirrors the game structure)
-            &mut file_count,
-            &mut dir_count,
-        )?;
     }
 
     tree.file_count = file_count;
@@ -654,7 +655,7 @@ mod tests {
     }
 
     #[test]
-    fn test_overwrite_priority() {
+    fn test_mod_priority_over_overwrite() {
         let tmp = tempfile::tempdir().unwrap();
 
         let mod_a = tmp.path().join("ModA");
@@ -670,7 +671,7 @@ mod tests {
 
         let node = tree.root.resolve("test.esp").unwrap();
         if let VfsNode::File { origin, .. } = node {
-            assert_eq!(origin, "Overwrite");
+            assert_eq!(origin, "ModA");
         } else {
             panic!("Expected file node");
         }
@@ -802,6 +803,37 @@ mod tests {
 
         // Overwrite root-level content
         assert!(tree.root.resolve("crash_log.txt").is_some());
+    }
+
+    #[test]
+    fn test_full_game_vfs_mod_overrides_overwrite() {
+        let tmp = tempfile::tempdir().unwrap();
+        let game_dir = make_game_dir(tmp.path());
+
+        let overwrite = tmp.path().join("overwrite");
+        std::fs::create_dir_all(overwrite.join("Data/SKSE/Plugins")).unwrap();
+        std::fs::write(
+            overwrite.join("Data/SKSE/Plugins/SSEDisplayTweaks.ini"),
+            "overwrite",
+        )
+        .unwrap();
+
+        let mod_a = tmp.path().join("DisplayTweaksMod");
+        std::fs::create_dir_all(mod_a.join("SKSE/Plugins")).unwrap();
+        std::fs::write(mod_a.join("SKSE/Plugins/SSEDisplayTweaks.ini"), "mod").unwrap();
+
+        let mods = vec![("DisplayTweaksMod", mod_a.as_path())];
+        let tree = build_full_game_vfs(&game_dir, "Data", &mods, &overwrite).unwrap();
+
+        let node = tree
+            .root
+            .resolve("Data/SKSE/Plugins/SSEDisplayTweaks.ini")
+            .unwrap();
+        if let VfsNode::File { origin, .. } = node {
+            assert_eq!(origin, "DisplayTweaksMod");
+        } else {
+            panic!("Expected file node");
+        }
     }
 
     #[test]
