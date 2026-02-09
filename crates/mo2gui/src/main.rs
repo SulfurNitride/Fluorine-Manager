@@ -302,12 +302,31 @@ fn main() {
         std::process::exit(0);
     }
 
-    if let Err(e) = slint::BackendSelector::new()
+    // Prefer Qt so packaged/GitHub builds match desktop systems with Qt installed.
+    // Fall back to winit for environments where Qt is unavailable.
+    let selected_backend = if let Ok(requested) = std::env::var("SLINT_BACKEND") {
+        if let Err(e) = slint::BackendSelector::new()
+            .backend_name(requested.clone())
+            .select()
+        {
+            panic!("Failed to select requested Slint backend '{requested}': {e}");
+        }
+        requested
+    } else if slint::BackendSelector::new()
+        .backend_name("qt".to_string())
+        .select()
+        .is_ok()
+    {
+        "qt".to_string()
+    } else if let Err(e) = slint::BackendSelector::new()
         .backend_name("winit".to_string())
         .select()
     {
-        panic!("Failed to select Slint winit backend (required for drag-and-drop): {e}");
-    }
+        panic!("Failed to select a Slint backend (tried qt, then winit): {e}");
+    } else {
+        "winit".to_string()
+    };
+    tracing::info!("Using Slint backend: {selected_backend}");
 
     let global_settings = match GlobalSettings::load() {
         Ok(gs) => gs,
@@ -344,8 +363,8 @@ fn main() {
         .collect();
     ui.set_known_games(ModelRc::new(VecModel::from(game_names)));
 
-    // External file drag-and-drop (winit backend): dropped archives open Install Mod dialog.
-    {
+    // External file drag-and-drop via winit: dropped archives open Install Mod dialog.
+    if selected_backend == "winit" {
         let ui_handle = ui.as_weak();
         let state = state.clone();
         ui.window().on_winit_window_event(move |_window, event| {
@@ -364,6 +383,10 @@ fn main() {
             }
             WinitEventResult::Propagate
         });
+    } else {
+        tracing::info!(
+            "Winit-only drag-and-drop handler disabled for Slint backend: {selected_backend}"
+        );
     }
 
     // Populate instance list

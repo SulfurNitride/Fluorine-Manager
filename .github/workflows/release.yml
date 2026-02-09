@@ -33,6 +33,8 @@ jobs:
         run: ./scripts/fetch-7zz.sh
 
       - name: Build release binary
+        env:
+          SLINT_BACKEND: qt
         run: cargo build --release -p mo2gui
 
       - name: Package artifact directory
