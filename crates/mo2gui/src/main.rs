@@ -24,7 +24,6 @@ use mo2core::saves;
 use mo2fuse::mount_manager::MountManager;
 use mo2fuse::overlay::{build_full_game_vfs, VfsTree};
 use mo2fuse::FuseController;
-use slint::winit_030::{winit, EventResult as WinitEventResult, WinitWindowAccessor};
 use slint::{LogicalSize, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -302,31 +301,14 @@ fn main() {
         std::process::exit(0);
     }
 
-    // Prefer Qt so packaged/GitHub builds match desktop systems with Qt installed.
-    // Fall back to winit for environments where Qt is unavailable.
-    let selected_backend = if let Ok(requested) = std::env::var("SLINT_BACKEND") {
-        if let Err(e) = slint::BackendSelector::new()
-            .backend_name(requested.clone())
-            .select()
-        {
-            panic!("Failed to select requested Slint backend '{requested}': {e}");
-        }
-        requested
-    } else if slint::BackendSelector::new()
+    // Enforce Qt backend to match KDE/system builds. No fallback is allowed.
+    if let Err(e) = slint::BackendSelector::new()
         .backend_name("qt".to_string())
         .select()
-        .is_ok()
     {
-        "qt".to_string()
-    } else if let Err(e) = slint::BackendSelector::new()
-        .backend_name("winit".to_string())
-        .select()
-    {
-        panic!("Failed to select a Slint backend (tried qt, then winit): {e}");
-    } else {
-        "winit".to_string()
-    };
-    tracing::info!("Using Slint backend: {selected_backend}");
+        panic!("Qt backend is required but could not be selected: {e}");
+    }
+    tracing::info!("Using Slint backend: qt (enforced)");
 
     let global_settings = match GlobalSettings::load() {
         Ok(gs) => gs,
@@ -363,31 +345,7 @@ fn main() {
         .collect();
     ui.set_known_games(ModelRc::new(VecModel::from(game_names)));
 
-    // External file drag-and-drop via winit: dropped archives open Install Mod dialog.
-    if selected_backend == "winit" {
-        let ui_handle = ui.as_weak();
-        let state = state.clone();
-        ui.window().on_winit_window_event(move |_window, event| {
-            if let winit::event::WindowEvent::DroppedFile(path) = event {
-                tracing::info!("Window dropped file: {}", path.display());
-                if is_supported_mod_archive(path) {
-                    if let Some(ui) = ui_handle.upgrade() {
-                        open_install_dialog_for_archive(&ui, &state, path);
-                    }
-                } else {
-                    tracing::info!(
-                        "Dropped file is not a supported archive type: {}",
-                        path.display()
-                    );
-                }
-            }
-            WinitEventResult::Propagate
-        });
-    } else {
-        tracing::info!(
-            "Winit-only drag-and-drop handler disabled for Slint backend: {selected_backend}"
-        );
-    }
+    tracing::info!("Winit-only drag-and-drop handler disabled (Qt backend enforced)");
 
     // Populate instance list
     refresh_instance_list(&ui, &state.borrow().global_settings);

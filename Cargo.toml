@@ -46,7 +46,7 @@ md-5 = "0.10"
 reqwest = { version = "0.12", features = ["stream", "json"] }
 
 # GUI
-slint = { version = "~1.15", features = ["unstable-winit-030"] }
+slint = { version = "~1.15", features = ["backend-qt", "unstable-winit-030"] }
 slint-build = "1.15"
 
 # XML
