@@ -21,7 +21,10 @@ jobs:
             libfuse3-dev \
             pkg-config \
             libfontconfig1-dev \
-            qtbase5-dev
+            qtbase5-dev \
+            qtbase5-dev-tools \
+            qt5-qmake \
+            qtchooser
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -29,13 +32,28 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
 
+      - name: Verify Qt toolchain
+        run: |
+          qmake --version
+          pkg-config --modversion Qt5Core
+
       - name: Fetch bundled 7zz
         run: ./scripts/fetch-7zz.sh
+
+      - name: Rebuild Slint Qt backend
+        run: cargo clean -p i-slint-backend-qt
 
       - name: Build release binary
         env:
           SLINT_BACKEND: qt
         run: cargo build --release -p mo2gui
+
+      - name: Assert binary includes Qt backend
+        run: |
+          if strings target/release/fluorine-manager | grep -q "compiled without Qt support"; then
+            echo "ERROR: Built artifact still lacks Qt backend support."
+            exit 1
+          fi
 
       - name: Package artifact directory
         run: |
