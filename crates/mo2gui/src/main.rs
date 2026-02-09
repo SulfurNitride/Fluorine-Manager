@@ -455,9 +455,9 @@ fn main() {
 
             let confirm = rfd::MessageDialog::new()
                 .set_title("Remove Instance")
-                .set_level(rfd::MessageLevel::Warning)
+                .set_level(rfd::MessageLevel::Info)
                 .set_description(format!(
-                    "Delete instance '{}'?\n\n{}\n\nThis permanently deletes the instance folder.",
+                    "Remove instance '{}' from the manager list?\n\n{}\n\nThis will NOT delete the folder.",
                     instance_name, instance_path
                 ))
                 .set_buttons(rfd::MessageButtons::YesNo)
@@ -467,47 +467,61 @@ fn main() {
             }
 
             let mut st = state.borrow_mut();
-            let target = PathBuf::from(&instance_path);
+            st.global_settings.hide_instance(&instance_path);
+            st.global_settings.clear_last_instance_if(&instance_path);
 
-            if st
-                .instance
-                .as_ref()
-                .map(|i| i.root == target)
-                .unwrap_or(false)
-            {
-                if let Some(mut mm) = st.mount_manager.take() {
-                    if let Err(e) = mm.unmount() {
-                        tracing::error!("Failed to unmount VFS before deleting instance: {e}");
+            let delete_confirm = rfd::MessageDialog::new()
+                .set_title("Delete Instance Folder?")
+                .set_level(rfd::MessageLevel::Warning)
+                .set_description(format!(
+                    "Also delete the instance folder from disk?\n\n{}\n\nDefault is to keep it.",
+                    instance_path
+                ))
+                .set_buttons(rfd::MessageButtons::YesNo)
+                .show();
+
+            if matches!(delete_confirm, rfd::MessageDialogResult::Yes) {
+                let target = PathBuf::from(&instance_path);
+                if st
+                    .instance
+                    .as_ref()
+                    .map(|i| i.root == target)
+                    .unwrap_or(false)
+                {
+                    if let Some(mut mm) = st.mount_manager.take() {
+                        if let Err(e) = mm.unmount() {
+                            tracing::error!("Failed to unmount VFS before deleting instance: {e}");
+                        }
+                    }
+                    st.instance = None;
+                    st.executables = ExecutablesList::default();
+                    st.conflict_cache.clear();
+                    ui.set_fuse_mounted(false);
+                }
+
+                match std::fs::remove_dir_all(&target) {
+                    Ok(()) => {
+                        st.global_settings.remove_recent_instance(&instance_path);
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to delete instance '{}': {e}", instance_path);
+                        let _ = rfd::MessageDialog::new()
+                            .set_title("Delete Failed")
+                            .set_level(rfd::MessageLevel::Error)
+                            .set_description(format!(
+                                "Failed to delete instance folder:\n{}\n\n{}",
+                                instance_path, e
+                            ))
+                            .set_buttons(rfd::MessageButtons::Ok)
+                            .show();
                     }
                 }
-                st.instance = None;
-                st.executables = ExecutablesList::default();
-                st.conflict_cache.clear();
-                ui.set_fuse_mounted(false);
             }
 
-            match std::fs::remove_dir_all(&target) {
-                Ok(()) => {
-                    st.global_settings.remove_recent_instance(&instance_path);
-                    st.global_settings.clear_last_instance_if(&instance_path);
-                    if let Err(e) = st.global_settings.save() {
-                        tracing::warn!("Failed to save global settings after deletion: {e}");
-                    }
-                    refresh_instance_list(&ui, &st.global_settings);
-                }
-                Err(e) => {
-                    tracing::error!("Failed to delete instance '{}': {e}", instance_path);
-                    let _ = rfd::MessageDialog::new()
-                        .set_title("Delete Failed")
-                        .set_level(rfd::MessageLevel::Error)
-                        .set_description(format!(
-                            "Failed to delete instance folder:\n{}\n\n{}",
-                            instance_path, e
-                        ))
-                        .set_buttons(rfd::MessageButtons::Ok)
-                        .show();
-                }
+            if let Err(e) = st.global_settings.save() {
+                tracing::warn!("Failed to save global settings after removing instance: {e}");
             }
+            refresh_instance_list(&ui, &st.global_settings);
         });
     }
 
@@ -4236,12 +4250,17 @@ fn refresh_instance_list(ui: &MainWindow, global_settings: &GlobalSettings) {
     let mut entries = Vec::new();
     let mut seen_paths = HashSet::new();
     let global_root = GlobalSettings::global_instances_root();
+    let hidden_instances: HashSet<String> =
+        global_settings.hidden_instances().into_iter().collect();
 
     // Global instances
     match list_global_instances() {
         Ok(instances) => {
             for info in instances {
                 let full_path = info.path.display().to_string();
+                if hidden_instances.contains(&full_path) {
+                    continue;
+                }
                 seen_paths.insert(full_path.clone());
                 entries.push(InstanceEntry {
                     name: SharedString::from(info.name.as_str()),
@@ -4264,6 +4283,9 @@ fn refresh_instance_list(ui: &MainWindow, global_settings: &GlobalSettings) {
     }
 
     for path_str in recent {
+        if hidden_instances.contains(&path_str) {
+            continue;
+        }
         if seen_paths.contains(&path_str) {
             continue;
         }

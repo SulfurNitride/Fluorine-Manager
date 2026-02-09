@@ -46,6 +46,7 @@ impl GlobalSettings {
     pub fn set_last_instance(&mut self, path: &str) {
         self.ini.set("General", "lastInstance", path);
         self.add_recent_instance(path);
+        self.unhide_instance(path);
     }
 
     /// Get recently used instance paths (most recent first).
@@ -89,6 +90,47 @@ impl GlobalSettings {
         if self.last_instance() == Some(path) {
             self.ini.remove("General", "lastInstance");
         }
+    }
+
+    /// Get hidden/unregistered instance paths.
+    pub fn hidden_instances(&self) -> Vec<String> {
+        self.ini
+            .get("General", "hiddenInstances")
+            .map(|s| {
+                s.split('\n')
+                    .map(str::trim)
+                    .filter(|p| !p.is_empty())
+                    .map(ToString::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Hide/unregister an instance path from the manager list.
+    pub fn hide_instance(&mut self, path: &str) {
+        let mut items = self.hidden_instances();
+        items.retain(|p| p != path);
+        items.insert(0, path.to_string());
+        items.truncate(128);
+        self.ini
+            .set("General", "hiddenInstances", &items.join("\n"));
+    }
+
+    /// Remove an instance path from the hidden/unregistered list.
+    pub fn unhide_instance(&mut self, path: &str) {
+        let mut items = self.hidden_instances();
+        items.retain(|p| p != path);
+        if items.is_empty() {
+            self.ini.remove("General", "hiddenInstances");
+        } else {
+            self.ini
+                .set("General", "hiddenInstances", &items.join("\n"));
+        }
+    }
+
+    /// Check whether an instance is hidden/unregistered.
+    pub fn is_instance_hidden(&self, path: &str) -> bool {
+        self.hidden_instances().iter().any(|p| p == path)
     }
 
     /// Get the launch wrapper command string (e.g. "mangohud gamescope -f --").
@@ -236,5 +278,24 @@ mod tests {
         let root = GlobalSettings::global_instances_root();
         // Should end with MO2Linux
         assert!(root.ends_with("MO2Linux"));
+    }
+
+    #[test]
+    fn test_hide_and_unhide_instance() {
+        let mut settings = GlobalSettings {
+            ini: IniFile::default(),
+            path: PathBuf::from("/tmp/test_settings.ini"),
+        };
+        settings.hide_instance("/x");
+        settings.hide_instance("/y");
+        settings.hide_instance("/x");
+        assert_eq!(
+            settings.hidden_instances(),
+            vec!["/x".to_string(), "/y".to_string()]
+        );
+        assert!(settings.is_instance_hidden("/x"));
+        settings.unhide_instance("/x");
+        assert!(!settings.is_instance_hidden("/x"));
+        assert_eq!(settings.hidden_instances(), vec!["/y".to_string()]);
     }
 }
