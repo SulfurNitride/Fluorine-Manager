@@ -2,7 +2,7 @@
 
 An attempt to port MO2 and all of its features over to Linux with a VFS replacement with the use of FUSE.
 
-See `docs/FAQ.md` for common questions and troubleshooting.
+See [`docs/FAQ.md`](https://github.com/SulfurNitride/Fluorine-Manager/blob/main/docs/FAQ.md) for common questions and troubleshooting.
 
 If you would like to help you can join the discord for the prereleases. [NaK Discord](https://discord.gg/9JWQzSeUWt) 
 
