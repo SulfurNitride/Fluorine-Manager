@@ -2328,11 +2328,12 @@ fn main() {
         let state = state.clone();
         ui.on_mod_context_action(move |action| {
             let ui = ui_handle.unwrap();
+            let action = action.to_string();
             let mod_name = ui.get_selected_mod_name().to_string();
-            if mod_name.is_empty() {
+            if !matches!(action.as_str(), "install-mod" | "create-separator") && mod_name.is_empty()
+            {
                 return;
             }
-            let action = action.to_string();
             match action.as_str() {
                 "install-mod" => {
                     let archive = rfd::FileDialog::new()
@@ -4113,8 +4114,33 @@ fn is_kernel_mountpoint(path: &Path) -> bool {
     mounts.lines().any(|line| {
         line.split_whitespace()
             .nth(1)
-            .is_some_and(|mp| mp == &*path_str)
+            .is_some_and(|mp| decode_proc_mount_field(mp) == path_str)
     })
+}
+
+/// /proc/mounts escapes spaces and some bytes as octal sequences (e.g. \040).
+fn decode_proc_mount_field(field: &str) -> String {
+    let mut out = String::with_capacity(field.len());
+    let bytes = field.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'\\'
+            && i + 3 < bytes.len()
+            && bytes[i + 1].is_ascii_digit()
+            && bytes[i + 2].is_ascii_digit()
+            && bytes[i + 3].is_ascii_digit()
+        {
+            let oct = &field[i + 1..i + 4];
+            if let Ok(v) = u8::from_str_radix(oct, 8) {
+                out.push(v as char);
+                i += 4;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
 }
 
 /// Resolve the game's data directory name (e.g., "Data", "Data Files").
@@ -4214,7 +4240,34 @@ fn auto_mount_vfs(state: &mut AppState) {
             );
             state.mount_manager = Some(mm);
         }
-        Err(e) => tracing::error!("Failed to mount full-game VFS: {e}"),
+        Err(e) => {
+            if e.root_cause()
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|ioe| ioe.raw_os_error() == Some(libc::EEXIST))
+            {
+                tracing::warn!(
+                    "Mount returned EEXIST at {:?}; trying stale-mount cleanup + retry",
+                    mount_point
+                );
+                FuseController::try_cleanup_stale_mount_at(&mount_point);
+                if let Err(e2) = mm.mount(&game_dir, &data_dir_name, &mods) {
+                    tracing::error!(
+                        "Failed to mount full-game VFS at {:?} after retry: {e2}",
+                        mount_point
+                    );
+                    return;
+                }
+                tracing::info!(
+                    "Full-game VFS mounted at {:?} after stale-mount retry (game: {:?}, {} mods)",
+                    mount_point,
+                    game_dir,
+                    mods.len()
+                );
+                state.mount_manager = Some(mm);
+                return;
+            }
+            tracing::error!("Failed to mount full-game VFS at {:?}: {e}", mount_point);
+        }
     }
 }
 

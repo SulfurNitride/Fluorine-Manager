@@ -213,6 +213,7 @@ export component MainWindow inherits Window {
     in-out property <bool> context-mod-is-separator: false;
     in-out property <bool> context-mod-enabled: false;
     in-out property <bool> context-mod-is-overwrite: false;
+    in-out property <bool> context-mod-has-selection: false;
 
     // --- Plugin context menu ---
     in-out property <bool> show-plugin-context-menu: false;
@@ -1586,6 +1587,7 @@ export component MainWindow inherits Window {
                                         if (event.kind == PointerEventKind.up && event.button == PointerEventButton.right) {
                                             root.select-mod(entry.name);
                                             root.selected-mod-index = index;
+                                            root.context-mod-has-selection = true;
                                             root.context-mod-is-separator = entry.is-separator;
                                             root.context-mod-enabled = entry.enabled;
                                             root.context-mod-is-overwrite = entry.is-overwrite;
@@ -1744,6 +1746,34 @@ export component MainWindow inherits Window {
                                         font-size: 11px;
                                         color: entry.enabled ? Palette.foreground.transparentize(20%)
                                             : Palette.foreground.transparentize(60%);
+                                    }
+                                }
+                            }
+
+                            // Empty area below the last row: allow install actions even when list is sparse.
+                            Rectangle {
+                                vertical-stretch: 1;
+                                background: transparent;
+                                TouchArea {
+                                    pointer-event(event) => {
+                                        if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
+                                            root.selected-mod-index = -1;
+                                            root.selected-mod-name = "";
+                                        }
+                                        if (event.kind == PointerEventKind.up && event.button == PointerEventButton.right) {
+                                            root.selected-mod-index = -1;
+                                            root.selected-mod-name = "";
+                                            root.context-mod-has-selection = false;
+                                            root.context-mod-is-separator = false;
+                                            root.context-mod-enabled = false;
+                                            root.context-mod-is-overwrite = false;
+                                            root.mod-context-menu-x = self.absolute-position.x + self.mouse-x;
+                                            root.mod-context-menu-y = self.absolute-position.y + self.mouse-y;
+                                            root.show-mod-context-menu = true;
+                                        }
+                                    }
+                                    double-clicked => {
+                                        root.mod-context-action("install-mod");
                                     }
                                 }
                             }
@@ -2910,7 +2940,9 @@ export component MainWindow inherits Window {
                 x: root.mod-context-menu-x;
                 y: root.mod-context-menu-y;
                 width: 200px;
-                height: root.context-mod-is-separator ? 168px : root.context-mod-is-overwrite ? 268px : 236px;
+                height: !root.context-mod-has-selection ? 68px
+                    : root.context-mod-is-separator ? 168px
+                    : root.context-mod-is-overwrite ? 268px : 236px;
                 background: Palette.background;
                 border-radius: 6px;
                 border-width: 1px;
@@ -2964,7 +2996,7 @@ export component MainWindow inherits Window {
                     }
 
                     // --- Create Mod from Overwrite (only on overwrite entry) ---
-                    if root.context-mod-is-overwrite : Rectangle {
+                    if root.context-mod-has-selection && root.context-mod-is-overwrite : Rectangle {
                         height: 28px;
                         background: ctx-create-mod-touch.has-hover ? Palette.accent-background.transparentize(70%) : transparent;
                         border-radius: 4px;
@@ -2987,7 +3019,7 @@ export component MainWindow inherits Window {
                     Rectangle { height: 4px; }
 
                     // --- Regular mod items ---
-                    if !root.context-mod-is-separator : Rectangle {
+                    if root.context-mod-has-selection && !root.context-mod-is-separator : Rectangle {
                         height: 28px;
                         background: ctx-toggle-touch.has-hover ? Palette.accent-background.transparentize(70%) : transparent;
                         border-radius: 4px;
@@ -3005,7 +3037,7 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
-                    if !root.context-mod-is-separator : Rectangle {
+                    if root.context-mod-has-selection && !root.context-mod-is-separator : Rectangle {
                         height: 28px;
                         background: ctx-rename-touch.has-hover ? Palette.accent-background.transparentize(70%) : transparent;
                         border-radius: 4px;
@@ -3023,7 +3055,7 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
-                    if !root.context-mod-is-separator : Rectangle {
+                    if root.context-mod-has-selection && !root.context-mod-is-separator : Rectangle {
                         height: 28px;
                         background: ctx-open-touch.has-hover ? Palette.accent-background.transparentize(70%) : transparent;
                         border-radius: 4px;
@@ -3041,14 +3073,14 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
-                    if !root.context-mod-is-separator : Rectangle {
+                    if root.context-mod-has-selection && !root.context-mod-is-separator : Rectangle {
                         height: 1px;
                         background: Palette.border;
                     }
-                    if !root.context-mod-is-separator : Rectangle {
+                    if root.context-mod-has-selection && !root.context-mod-is-separator : Rectangle {
                         height: 4px;
                     }
-                    if !root.context-mod-is-separator : Rectangle {
+                    if root.context-mod-has-selection && !root.context-mod-is-separator : Rectangle {
                         height: 28px;
                         background: ctx-delete-touch.has-hover ? #f44336.transparentize(70%) : transparent;
                         border-radius: 4px;
@@ -3068,7 +3100,7 @@ export component MainWindow inherits Window {
                     }
 
                     // --- Separator items ---
-                    if root.context-mod-is-separator : Rectangle {
+                    if root.context-mod-has-selection && root.context-mod-is-separator : Rectangle {
                         height: 28px;
                         background: ctx-sep-rename-touch.has-hover ? Palette.accent-background.transparentize(70%) : transparent;
                         border-radius: 4px;
@@ -3086,14 +3118,14 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
-                    if root.context-mod-is-separator : Rectangle {
+                    if root.context-mod-has-selection && root.context-mod-is-separator : Rectangle {
                         height: 1px;
                         background: Palette.border;
                     }
-                    if root.context-mod-is-separator : Rectangle {
+                    if root.context-mod-has-selection && root.context-mod-is-separator : Rectangle {
                         height: 4px;
                     }
-                    if root.context-mod-is-separator : Rectangle {
+                    if root.context-mod-has-selection && root.context-mod-is-separator : Rectangle {
                         height: 28px;
                         background: ctx-sep-delete-touch.has-hover ? #f44336.transparentize(70%) : transparent;
                         border-radius: 4px;

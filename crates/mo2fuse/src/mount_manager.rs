@@ -92,6 +92,8 @@ impl MountManager {
 
         // Clean up stale FUSE mount from a previous crash
         crate::FuseController::try_cleanup_stale_mount_at(&self.mount_point);
+        // Also clean stale real files in the mount directory (can cause EEXIST on mount).
+        self.cleanup_mount_point_contents()?;
 
         let fs = Mo2Filesystem::new(self.tree.clone(), self.staging_dir.clone());
         let options = vec![
@@ -266,8 +268,33 @@ fn is_mountpoint(path: &Path) -> bool {
     mounts.lines().any(|line| {
         line.split_whitespace()
             .nth(1)
-            .is_some_and(|mp| mp == &*path_str)
+            .is_some_and(|mp| decode_proc_mount_field(mp) == path_str)
     })
+}
+
+/// /proc/mounts escapes spaces and some bytes as octal sequences (e.g. \040).
+fn decode_proc_mount_field(field: &str) -> String {
+    let mut out = String::with_capacity(field.len());
+    let bytes = field.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'\\'
+            && i + 3 < bytes.len()
+            && bytes[i + 1].is_ascii_digit()
+            && bytes[i + 2].is_ascii_digit()
+            && bytes[i + 3].is_ascii_digit()
+        {
+            let oct = &field[i + 1..i + 4];
+            if let Ok(v) = u8::from_str_radix(oct, 8) {
+                out.push(v as char);
+                i += 4;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
 }
 
 impl Drop for MountManager {
