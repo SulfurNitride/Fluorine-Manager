@@ -9,8 +9,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    container:
+      image: fedora:40
     env:
-      QMAKE: qmake-qt5
+      QMAKE: qmake6
 
     steps:
       - name: Checkout
@@ -18,15 +20,19 @@ jobs:
 
       - name: Install system deps
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libfuse3-dev \
-            pkg-config \
-            libfontconfig1-dev \
-            qtbase5-dev \
-            qtbase5-dev-tools \
-            qt5-qmake \
-            qtchooser
+          dnf -y update
+          dnf -y install \
+            gcc \
+            gcc-c++ \
+            make \
+            git \
+            which \
+            file \
+            binutils \
+            fuse3-devel \
+            pkgconf-pkg-config \
+            fontconfig-devel \
+            qt6-qtbase-devel
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -40,7 +46,7 @@ jobs:
           ${QMAKE} -query QT_VERSION
           ${QMAKE} -query QT_INSTALL_HEADERS
           ${QMAKE} -query QT_INSTALL_LIBS
-          pkg-config --modversion Qt5Core
+          pkg-config --modversion Qt6Core
 
       - name: Fetch bundled 7zz
         run: ./scripts/fetch-7zz.sh
