@@ -28,6 +28,9 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
 
+      - name: Fetch bundled 7zz
+        run: ./scripts/fetch-7zz.sh
+
       - name: Build release binary
         run: cargo build --release -p mo2gui
 
