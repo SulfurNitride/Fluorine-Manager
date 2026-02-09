@@ -20,7 +20,8 @@ jobs:
           sudo apt-get install -y \
             libfuse3-dev \
             pkg-config \
-            libfontconfig1-dev
+            libfontconfig1-dev \
+            qtbase5-dev
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
