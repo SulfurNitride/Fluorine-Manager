@@ -9,6 +9,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      QMAKE: qmake-qt5
 
     steps:
       - name: Checkout
@@ -34,14 +36,19 @@ jobs:
 
       - name: Verify Qt toolchain
         run: |
-          qmake --version
+          ${QMAKE} --version
+          ${QMAKE} -query QT_VERSION
+          ${QMAKE} -query QT_INSTALL_HEADERS
+          ${QMAKE} -query QT_INSTALL_LIBS
           pkg-config --modversion Qt5Core
 
       - name: Fetch bundled 7zz
         run: ./scripts/fetch-7zz.sh
 
       - name: Rebuild Slint Qt backend
-        run: cargo clean -p i-slint-backend-qt
+        run: |
+          cargo clean -p qttypes
+          cargo clean -p i-slint-backend-qt
 
       - name: Build release binary
         env:
