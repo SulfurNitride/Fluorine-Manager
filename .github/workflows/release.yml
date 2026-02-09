@@ -37,6 +37,7 @@ jobs:
           mkdir -p dist/bin
           cp target/release/fluorine-manager dist/
           cp target/release/bin/7zz dist/bin/7zz
+          cp target/release/bin/umu-run dist/bin/umu-run
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
