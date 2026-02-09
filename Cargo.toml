@@ -10,7 +10,7 @@ resolver = "2"
 version = "0.0.1"
 edition = "2021"
 license = "GPL-3.0"
-authors = ["MO2Linux Contributors"]
+authors = ["Fluorine Manager Contributors"]
 
 [workspace.dependencies]
 # Error handling
@@ -61,6 +61,3 @@ chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
 regex = "1"
 
-# Patch nak_rust to use local copy (symlinks feature gate fix)
-[patch."https://github.com/SulfurNitride/NaK"]
-nak_rust = { path = "/home/luke/Documents/NaK-main" }

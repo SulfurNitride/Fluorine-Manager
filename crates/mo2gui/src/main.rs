@@ -174,7 +174,7 @@ fn write_startup_diagnostics(file: &mut File, app_dir: &Path) -> std::io::Result
         })
         .unwrap_or_else(|| "Unknown".to_string());
 
-    writeln!(file, "MO2 Linux startup diagnostics")?;
+    writeln!(file, "Fluorine Manager startup diagnostics")?;
     writeln!(file, "timestamp={timestamp}")?;
     writeln!(file, "version={}", env!("CARGO_PKG_VERSION"))?;
     writeln!(file, "app_dir={}", app_dir.display())?;
@@ -1146,7 +1146,7 @@ fn main() {
                     ui.set_show_filter_panel(!current);
                 }
                 "about" => {
-                    tracing::info!("MO2 Linux - Mod Organizer 2 for Linux (Slint/Rust)");
+                    tracing::info!("Fluorine Manager - Mod Organizer 2 for Linux (Slint/Rust)");
                 }
                 _ => {
                     tracing::warn!("Unknown menu action: {action}");

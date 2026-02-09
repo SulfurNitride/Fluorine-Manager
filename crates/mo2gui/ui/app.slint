@@ -129,7 +129,7 @@ export struct InstallTreeEntry {
 // ===== Main Window =====
 
 export component MainWindow inherits Window {
-    title: root.game-name != "" ? root.game-name + " – MO2 Linux" : "MO2 Linux";
+    title: root.game-name != "" ? root.game-name + " – Fluorine Manager" : "Fluorine Manager";
     preferred-width: 1200px;
     preferred-height: 700px;
     min-width: 1200px;
@@ -477,7 +477,7 @@ export component MainWindow inherits Window {
             spacing: 8px;
 
             Text {
-                text: "MO2 Linux — Instance Manager";
+                text: "Fluorine Manager — Instance Manager";
                 font-size: 18px;
                 font-weight: 700;
                 vertical-alignment: center;
@@ -2803,7 +2803,7 @@ export component MainWindow inherits Window {
                             mouse-cursor: pointer;
                             clicked => { root.menu-action("about"); root.open-menu = -1; }
                         }
-                        HorizontalLayout { padding-left: 12px; Text { text: "About MO2 Linux"; font-size: 12px; vertical-alignment: center; color: Palette.foreground; } }
+                        HorizontalLayout { padding-left: 12px; Text { text: "About Fluorine Manager"; font-size: 12px; vertical-alignment: center; color: Palette.foreground; } }
                     }
                 }
             }

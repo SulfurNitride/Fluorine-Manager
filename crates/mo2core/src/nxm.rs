@@ -13,9 +13,9 @@ use anyhow::{bail, Context, Result};
 /// Well-known socket path for NXM IPC.
 fn socket_path() -> PathBuf {
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-        PathBuf::from(runtime_dir).join("mo2linux-nxm.sock")
+        PathBuf::from(runtime_dir).join("fluorine-manager-nxm.sock")
     } else {
-        PathBuf::from("/tmp/mo2linux-nxm.sock")
+        PathBuf::from("/tmp/fluorine-manager-nxm.sock")
     }
 }
 
@@ -77,9 +77,9 @@ impl NxmLink {
     }
 }
 
-/// Send an NXM link to a running MO2Linux instance via Unix socket.
+/// Send an NXM link to a running Fluorine Manager instance via Unix socket.
 ///
-/// Used by the desktop handler subprocess (`mo2linux nxm-handle <url>`).
+/// Used by the desktop handler subprocess (`fluorine-manager nxm-handle <url>`).
 pub fn send_to_socket(nxm_url: &str) -> Result<()> {
     let path = socket_path();
     let result = (|| -> Result<()> {
@@ -170,13 +170,14 @@ pub fn start_listener() -> Result<mpsc::Receiver<NxmLink>> {
 // ============================================================================
 
 const NEXUS_API_BASE: &str = "https://api.nexusmods.com/v1";
+const USER_AGENT: &str = concat!("FluorineManager/", env!("CARGO_PKG_VERSION"));
 
 /// Validate that an API key works by checking the user's account.
 /// Returns the username on success.
 pub fn validate_api_key(api_key: &str) -> Result<String> {
     let resp: serde_json::Value = ureq::get(&format!("{NEXUS_API_BASE}/users/validate.json"))
         .set("apikey", api_key)
-        .set("User-Agent", "MO2Linux/0.1")
+        .set("User-Agent", USER_AGENT)
         .call()
         .context("Nexus API request failed")?
         .into_json()
@@ -198,7 +199,7 @@ pub fn get_download_urls(api_key: &str, link: &NxmLink) -> Result<Vec<String>> {
 
     let resp: serde_json::Value = ureq::get(&url)
         .set("apikey", api_key)
-        .set("User-Agent", "MO2Linux/0.1")
+        .set("User-Agent", USER_AGENT)
         .call()
         .context("Nexus download link request failed")?
         .into_json()
@@ -239,7 +240,7 @@ pub fn get_file_info(
     let mod_url = format!("{NEXUS_API_BASE}/games/{game_domain}/mods/{mod_id}.json");
     let mod_resp: serde_json::Value = ureq::get(&mod_url)
         .set("apikey", api_key)
-        .set("User-Agent", "MO2Linux/0.1")
+        .set("User-Agent", USER_AGENT)
         .call()
         .context("Nexus mod info request failed")?
         .into_json()
@@ -255,7 +256,7 @@ pub fn get_file_info(
         format!("{NEXUS_API_BASE}/games/{game_domain}/mods/{mod_id}/files/{file_id}.json");
     let file_resp: serde_json::Value = ureq::get(&file_url)
         .set("apikey", api_key)
-        .set("User-Agent", "MO2Linux/0.1")
+        .set("User-Agent", USER_AGENT)
         .call()
         .context("Nexus file info request failed")?
         .into_json()
@@ -285,7 +286,7 @@ pub fn download_file(
     progress_cb: &dyn Fn(u64, u64),
 ) -> Result<()> {
     let resp = ureq::get(url)
-        .set("User-Agent", "MO2Linux/0.1")
+        .set("User-Agent", USER_AGENT)
         .call()
         .context("Download request failed")?;
 
@@ -370,7 +371,7 @@ pub fn register_handler() -> Result<()> {
     let bin_dir = format!("{}/.local/bin", home);
     std::fs::create_dir_all(&bin_dir).context("Failed to create ~/.local/bin")?;
 
-    let wrapper_path = format!("{}/mo2linux-nxm", bin_dir);
+    let wrapper_path = format!("{}/fluorine-manager-nxm", bin_dir);
     let wrapper_script = format!("#!/bin/sh\nexec \"{}\" \"$@\"\n", exe_path.display());
     std::fs::write(&wrapper_path, &wrapper_script)
         .with_context(|| format!("Failed to write wrapper script {}", wrapper_path))?;
@@ -383,13 +384,13 @@ pub fn register_handler() -> Result<()> {
     // Desktop file uses the wrapper (no spaces, no quotes needed)
     let desktop_entry = "[Desktop Entry]\n\
         Type=Application\n\
-        Name=MO2Linux NXM Handler\n\
-        Exec=mo2linux-nxm nxm-handle %u\n\
+        Name=Fluorine Manager NXM Handler\n\
+        Exec=fluorine-manager-nxm nxm-handle %u\n\
         MimeType=x-scheme-handler/nxm;\n\
         NoDisplay=true\n";
 
     let apps_dir = format!("{}/.local/share/applications", home);
-    let desktop_path = format!("{}/mo2linux-nxm.desktop", apps_dir);
+    let desktop_path = format!("{}/fluorine-manager-nxm.desktop", apps_dir);
 
     std::fs::create_dir_all(&apps_dir).context("Failed to create applications directory")?;
     std::fs::write(&desktop_path, desktop_entry)
@@ -400,7 +401,7 @@ pub fn register_handler() -> Result<()> {
     update_mimeapps_list(
         &local_mimeapps,
         "x-scheme-handler/nxm",
-        "mo2linux-nxm.desktop",
+        "fluorine-manager-nxm.desktop",
     )?;
 
     let config_dir = format!("{}/.config", home);
@@ -409,7 +410,7 @@ pub fn register_handler() -> Result<()> {
     update_mimeapps_list(
         &config_mimeapps,
         "x-scheme-handler/nxm",
-        "mo2linux-nxm.desktop",
+        "fluorine-manager-nxm.desktop",
     )?;
 
     // Rebuild mimeinfo.cache so xdg-mime picks up the new desktop file
@@ -516,6 +517,6 @@ mod tests {
     #[test]
     fn test_socket_path() {
         let path = socket_path();
-        assert!(path.to_string_lossy().contains("mo2linux-nxm.sock"));
+        assert!(path.to_string_lossy().contains("fluorine-manager-nxm.sock"));
     }
 }

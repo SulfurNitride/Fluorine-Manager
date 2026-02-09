@@ -35,11 +35,11 @@ jobs:
         run: |
           mkdir -p dist
           mkdir -p dist/bin
-          cp target/release/mo2gui dist/
+          cp target/release/fluorine-manager dist/
           cp target/release/bin/7zz dist/bin/7zz
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: mo2gui-linux-x86_64
+          name: fluorine-manager-linux-x86_64
           path: dist/

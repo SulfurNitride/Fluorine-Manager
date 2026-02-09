@@ -3,6 +3,10 @@ name = "mo2gui"
 version.workspace = true
 edition.workspace = true
 
+[[bin]]
+name = "fluorine-manager"
+path = "src/main.rs"
+
 [dependencies]
 mo2core = { path = "../mo2core" }
 mo2fuse = { path = "../mo2fuse" }

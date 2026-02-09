@@ -23,5 +23,5 @@ cargo build --release
 ## Run
 
 ```bash
-cargo run -p mo2gui
+cargo run -p mo2gui --bin fluorine-manager
 ```
