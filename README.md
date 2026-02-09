@@ -6,9 +6,11 @@ If you would like to help you can join the discord for the prereleases. [NaK Dis
 
 ## Status
 
-Currently, FUSE VFS is working, Root Building is working as well. NaK for prefix generation and deps install. 
+Currently, FUSE VFS is working, Root Building is working as well. NaK for prefix generation and deps install. Conflicts system. NXM handling. 
 
-Whats not working as of right now: NXM handler, drag and drop install mods.
+What's not implemented FOMOD handling. BSA conflicts system. Mod info to show conflicting files.
+
+What cannot be implemented: Drag and drop install mods (Slint UI limitation)
 
 Whats planned: Improvements to the installer flow, BSA loose file loading to show conflicts. And others to come.
 
