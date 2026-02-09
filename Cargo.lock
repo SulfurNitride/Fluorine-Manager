@@ -2740,7 +2740,7 @@ dependencies = [
 
 [[package]]
 name = "mo2core"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2754,12 +2754,13 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "unicode-normalization",
+ "ureq",
  "walkdir",
 ]
 
 [[package]]
 name = "mo2fuse"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "fuser",
@@ -2775,13 +2776,15 @@ dependencies = [
 
 [[package]]
 name = "mo2gui"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "chrono",
+ "libc",
  "mo2core",
  "mo2fuse",
  "nak_rust",
  "rfd",
+ "shell-words",
  "slint",
  "slint-build",
  "tempfile",
@@ -2822,7 +2825,6 @@ dependencies = [
 [[package]]
 name = "nak_rust"
 version = "4.4.1"
-source = "git+https://github.com/SulfurNitride/NaK#4044249521aec1c82ee67cd99f36dee6b94ee5a9"
 dependencies = [
  "chrono",
  "rand",
@@ -4262,6 +4264,12 @@ checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
 ]
+
+[[package]]
+name = "shell-words"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 
 [[package]]
 name = "shlex"

@@ -91,6 +91,53 @@ impl GlobalSettings {
         }
     }
 
+    /// Get the launch wrapper command string (e.g. "mangohud gamescope -f --").
+    pub fn launch_wrapper(&self) -> Option<&str> {
+        self.ini.get("General", "launchWrapper")
+    }
+
+    /// Set the launch wrapper command string.
+    pub fn set_launch_wrapper(&mut self, wrapper: &str) {
+        if wrapper.trim().is_empty() {
+            self.ini.remove("General", "launchWrapper");
+        } else {
+            self.ini.set("General", "launchWrapper", wrapper.trim());
+        }
+    }
+
+    /// Whether launches should use bundled UMU (`umu-run`) instead of direct `proton run`.
+    ///
+    /// Defaults to `true` when unset.
+    pub fn use_umu_launcher(&self) -> bool {
+        self.ini
+            .get("General", "useUmuLauncher")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(true)
+    }
+
+    /// Enable or disable UMU launcher backend.
+    pub fn set_use_umu_launcher(&mut self, enabled: bool) {
+        self.ini.set(
+            "General",
+            "useUmuLauncher",
+            if enabled { "true" } else { "false" },
+        );
+    }
+
+    /// Get the Nexus Mods API key.
+    pub fn nexus_api_key(&self) -> Option<&str> {
+        self.ini.get("Nexus", "apiKey")
+    }
+
+    /// Set the Nexus Mods API key.
+    pub fn set_nexus_api_key(&mut self, key: &str) {
+        if key.trim().is_empty() {
+            self.ini.remove("Nexus", "apiKey");
+        } else {
+            self.ini.set("Nexus", "apiKey", key.trim());
+        }
+    }
+
     /// Get the global instances root directory (`~/.local/share/MO2Linux/`).
     pub fn global_instances_root() -> PathBuf {
         dirs::data_dir()

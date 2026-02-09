@@ -9,6 +9,7 @@ pub mod install;
 pub mod instance;
 pub mod launcher;
 pub mod modinfo;
+pub mod nxm;
 pub mod paths;
 pub mod plugin_list;
 pub mod profile;

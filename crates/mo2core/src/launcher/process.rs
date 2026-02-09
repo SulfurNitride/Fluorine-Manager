@@ -3,6 +3,72 @@ use std::process::{Child, Command};
 
 use anyhow::{Context, Result};
 
+/// Check if a wineserver process is still running for the given WINEPREFIX.
+///
+/// Scans `/proc/*/comm` for `wineserver` processes, then reads their
+/// `/proc/{pid}/environ` (null-separated key=value) looking for a
+/// `WINEPREFIX` that matches the target (canonicalized). Falls back to
+/// checking `/proc/{pid}/cmdline` for the prefix path.
+pub fn is_wineserver_running(prefix_path: &Path) -> bool {
+    let target = match prefix_path.canonicalize() {
+        Ok(p) => p,
+        Err(_) => prefix_path.to_path_buf(),
+    };
+
+    let Ok(proc_entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+
+    for entry in proc_entries.flatten() {
+        let pid_str = entry.file_name();
+        let pid_str = pid_str.to_string_lossy();
+        if !pid_str.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+
+        let proc_dir = entry.path();
+
+        // Check if this is a wineserver process
+        let comm_path = proc_dir.join("comm");
+        let Ok(comm) = std::fs::read_to_string(&comm_path) else {
+            continue;
+        };
+        if comm.trim() != "wineserver" {
+            continue;
+        }
+
+        // Check /proc/{pid}/environ for matching WINEPREFIX
+        let environ_path = proc_dir.join("environ");
+        if let Ok(environ) = std::fs::read(&environ_path) {
+            for var in environ.split(|&b| b == 0) {
+                if let Ok(s) = std::str::from_utf8(var) {
+                    if let Some(val) = s.strip_prefix("WINEPREFIX=") {
+                        let val_path = Path::new(val);
+                        let val_canon = val_path
+                            .canonicalize()
+                            .unwrap_or_else(|_| val_path.to_path_buf());
+                        if val_canon == target {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback: check /proc/{pid}/cmdline for prefix path
+        let cmdline_path = proc_dir.join("cmdline");
+        if let Ok(cmdline) = std::fs::read(&cmdline_path) {
+            let cmdline_str = String::from_utf8_lossy(&cmdline);
+            let target_str = target.to_string_lossy();
+            if cmdline_str.contains(target_str.as_ref()) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// Configuration for launching an executable.
 #[derive(Debug, Clone)]
 pub struct LaunchConfig {
@@ -20,6 +86,10 @@ pub struct LaunchConfig {
     pub steam_app_id: Option<u32>,
     /// Additional environment variables.
     pub env_vars: Vec<(String, String)>,
+    /// Wrapper commands prepended before the real command (e.g. mangohud, gamescope).
+    pub wrapper_commands: Vec<String>,
+    /// Use bundled `umu-run` launcher backend instead of direct `proton run`.
+    pub use_umu: bool,
 }
 
 impl LaunchConfig {
@@ -32,6 +102,8 @@ impl LaunchConfig {
             prefix_path: None,
             steam_app_id: None,
             env_vars: Vec::new(),
+            wrapper_commands: Vec::new(),
+            use_umu: false,
         }
     }
 
@@ -64,20 +136,57 @@ impl LaunchConfig {
         self.env_vars.push((key.into(), value.into()));
         self
     }
+
+    pub fn with_wrapper(mut self, commands: Vec<String>) -> Self {
+        self.wrapper_commands = commands;
+        self
+    }
+
+    pub fn with_umu(mut self, enabled: bool) -> Self {
+        self.use_umu = enabled;
+        self
+    }
 }
 
 /// Launch an executable, either directly or via Proton.
 pub fn launch(config: &LaunchConfig) -> Result<Child> {
-    if let Some(proton_path) = &config.proton_path {
+    if config.use_umu {
+        launch_with_umu(config)
+    } else if let Some(proton_path) = &config.proton_path {
         launch_with_proton(config, proton_path)
     } else {
         launch_direct(config)
     }
 }
 
+fn bundled_umu_path() -> Result<PathBuf> {
+    let exe = std::env::current_exe().context("Failed to resolve current executable path")?;
+    let Some(exe_dir) = exe.parent() else {
+        anyhow::bail!("Current executable has no parent directory");
+    };
+    let path = exe_dir.join("bin").join("umu-run");
+    if !path.is_file() {
+        anyhow::bail!(
+            "Bundled umu-run not found at {}. Bundling failed; rebuild mo2gui release/debug artifacts.",
+            path.display()
+        );
+    }
+    Ok(path)
+}
+
 /// Launch directly (native executable).
 fn launch_direct(config: &LaunchConfig) -> Result<Child> {
-    let mut cmd = Command::new(&config.binary);
+    let mut cmd = if config.wrapper_commands.is_empty() {
+        Command::new(&config.binary)
+    } else {
+        let mut c = Command::new(&config.wrapper_commands[0]);
+        // Insert remaining wrapper args, then the real binary
+        for arg in &config.wrapper_commands[1..] {
+            c.arg(arg);
+        }
+        c.arg(&config.binary);
+        c
+    };
     cmd.args(&config.arguments);
 
     if let Some(dir) = &config.working_dir {
@@ -128,7 +237,16 @@ fn launch_with_proton(config: &LaunchConfig, proton_path: &Path) -> Result<Child
 
     let proton_script = proton_path.join("proton");
 
-    let mut cmd = Command::new(&proton_script);
+    let mut cmd = if config.wrapper_commands.is_empty() {
+        Command::new(&proton_script)
+    } else {
+        let mut c = Command::new(&config.wrapper_commands[0]);
+        for arg in &config.wrapper_commands[1..] {
+            c.arg(arg);
+        }
+        c.arg(&proton_script);
+        c
+    };
     cmd.arg("run");
     cmd.arg(&config.binary);
     cmd.args(&config.arguments);
@@ -185,9 +303,70 @@ fn launch_with_proton(config: &LaunchConfig, proton_path: &Path) -> Result<Child
         wine_prefix,
         compat_data,
     );
+    if let Some((_, v)) = config
+        .env_vars
+        .iter()
+        .find(|(k, _)| k == "PROTON_ENABLE_WAYLAND")
+    {
+        tracing::info!("Proton env: PROTON_ENABLE_WAYLAND={v}");
+    }
 
     cmd.spawn()
         .with_context(|| format!("Failed to launch {} via Proton", config.binary.display()))
+}
+
+/// Launch via bundled UMU (`umu-run <exe>`), using configured Proton path/prefix.
+fn launch_with_umu(config: &LaunchConfig) -> Result<Child> {
+    let umu_run = bundled_umu_path()?;
+
+    let mut cmd = if config.wrapper_commands.is_empty() {
+        Command::new(&umu_run)
+    } else {
+        let mut c = Command::new(&config.wrapper_commands[0]);
+        for arg in &config.wrapper_commands[1..] {
+            c.arg(arg);
+        }
+        c.arg(&umu_run);
+        c
+    };
+    cmd.arg(&config.binary);
+    cmd.args(&config.arguments);
+
+    if let Some(dir) = &config.working_dir {
+        cmd.current_dir(dir);
+    }
+
+    if let Some(prefix) = &config.prefix_path {
+        cmd.env("WINEPREFIX", prefix);
+    }
+    if let Some(proton_path) = &config.proton_path {
+        cmd.env("PROTONPATH", proton_path);
+    }
+    if let Some(app_id) = config.steam_app_id {
+        cmd.env("GAMEID", app_id.to_string());
+    }
+
+    for (key, value) in &config.env_vars {
+        cmd.env(key, value);
+    }
+
+    tracing::info!(
+        "UMU launch: {} {} (prefix: {:?}, proton: {:?})",
+        umu_run.display(),
+        config.binary.display(),
+        config.prefix_path,
+        config.proton_path,
+    );
+    if let Some((_, v)) = config
+        .env_vars
+        .iter()
+        .find(|(k, _)| k == "PROTON_ENABLE_WAYLAND")
+    {
+        tracing::info!("UMU env: PROTON_ENABLE_WAYLAND={v}");
+    }
+
+    cmd.spawn()
+        .with_context(|| format!("Failed to launch {} via UMU", config.binary.display()))
 }
 
 #[cfg(test)]
@@ -224,5 +403,18 @@ mod tests {
         assert!(config.prefix_path.is_none());
         assert!(config.steam_app_id.is_none());
         assert!(config.env_vars.is_empty());
+        assert!(config.wrapper_commands.is_empty());
+        assert!(!config.use_umu);
+    }
+
+    #[test]
+    fn test_launch_config_with_wrapper() {
+        let config = LaunchConfig::new("/path/to/game.exe").with_wrapper(vec![
+            "mangohud".to_string(),
+            "gamescope".to_string(),
+            "-f".to_string(),
+        ]);
+        assert_eq!(config.wrapper_commands.len(), 3);
+        assert_eq!(config.wrapper_commands[0], "mangohud");
     }
 }

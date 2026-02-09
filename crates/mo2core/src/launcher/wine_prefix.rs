@@ -138,12 +138,8 @@ pub fn deploy_profile_plugin_files(
 
     std::fs::copy(&src_plugins, &dest_plugins)
         .with_context(|| format!("Failed to copy {:?} -> {:?}", src_plugins, dest_plugins))?;
-    std::fs::copy(&src_loadorder, &dest_loadorder).with_context(|| {
-        format!(
-            "Failed to copy {:?} -> {:?}",
-            src_loadorder, dest_loadorder
-        )
-    })?;
+    std::fs::copy(&src_loadorder, &dest_loadorder)
+        .with_context(|| format!("Failed to copy {:?} -> {:?}", src_loadorder, dest_loadorder))?;
 
     tracing::info!(
         "Deployed profile plugin files to {:?} from {:?}",
@@ -440,7 +436,10 @@ fn list_files_recursive(root: &Path) -> Result<Vec<PathBuf>> {
     if !root.exists() {
         return Ok(out);
     }
-    for entry in walkdir::WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
+    for entry in walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
         if entry.file_type().is_file() {
             out.push(entry.path().to_path_buf());
         }
@@ -498,7 +497,11 @@ fn remove_empty_dirs(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_saves_manifest(saves_in_prefix: &Path, profile_path: &Path, files: &[PathBuf]) -> Result<()> {
+fn write_saves_manifest(
+    saves_in_prefix: &Path,
+    profile_path: &Path,
+    files: &[PathBuf],
+) -> Result<()> {
     let mut body = String::new();
     body.push_str("profile=");
     body.push_str(&profile_path.to_string_lossy());
@@ -775,9 +778,7 @@ mod tests {
 
         deploy_profile_plugin_files(&prefix, "Skyrim Special Edition", &profile).unwrap();
 
-        let app = prefix
-            .appdata_local()
-            .join("Skyrim Special Edition");
+        let app = prefix.appdata_local().join("Skyrim Special Edition");
         let plugins = std::fs::read_to_string(app.join("Plugins.txt")).unwrap();
         let loadorder = std::fs::read_to_string(app.join("loadorder.txt")).unwrap();
         assert!(plugins.contains("*Skyrim.esm"));

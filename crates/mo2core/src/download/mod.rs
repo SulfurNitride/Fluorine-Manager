@@ -26,6 +26,8 @@ pub struct DownloadInfo {
     pub installed: bool,
     /// Version string (from companion .meta file)
     pub version: Option<String>,
+    /// Mod name (from companion .meta file)
+    pub mod_name: Option<String>,
 }
 
 /// Known archive extensions for downloads.
@@ -68,18 +70,19 @@ pub fn scan_downloads(downloads_dir: &Path) -> anyhow::Result<Vec<DownloadInfo>>
 
         // Try to read companion .meta file
         let meta_path = path.with_extension(format!("{}.meta", ext));
-        let (nexus_id, file_id, game_name, version) = if meta_path.exists() {
+        let (nexus_id, file_id, game_name, version, mod_name) = if meta_path.exists() {
             match MetaIni::read(&meta_path) {
                 Ok(meta) => (
                     meta.mod_id(),
                     meta.file_id(),
                     meta.game_name().map(String::from),
                     meta.version().map(String::from),
+                    meta.mod_name().map(String::from),
                 ),
-                Err(_) => (None, None, None, None),
+                Err(_) => (None, None, None, None, None),
             }
         } else {
-            (None, None, None, None)
+            (None, None, None, None, None)
         };
 
         downloads.push(DownloadInfo {
@@ -90,6 +93,7 @@ pub fn scan_downloads(downloads_dir: &Path) -> anyhow::Result<Vec<DownloadInfo>>
             file_id,
             game_name,
             version,
+            mod_name,
             installed: false, // Will be set by caller comparing against installed mods
         });
     }

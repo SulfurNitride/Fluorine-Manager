@@ -4,23 +4,27 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     slint_build::compile("ui/app.slint").unwrap();
-    maybe_bundle_7zz();
+    maybe_bundle_binary("7zz");
+    maybe_bundle_binary("umu-run");
 }
 
-fn maybe_bundle_7zz() {
+fn maybe_bundle_binary(binary_name: &str) {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap_or_default());
 
     let source = [
-        manifest_dir.join("bin/7zz"),
-        manifest_dir.join("../bin/7zz"),
-        manifest_dir.join("../../bin/7zz"),
+        manifest_dir.join(format!("bin/{binary_name}")),
+        manifest_dir.join(format!("../bin/{binary_name}")),
+        manifest_dir.join(format!("../../bin/{binary_name}")),
     ]
     .into_iter()
     .find(|p| p.exists() && p.is_file());
 
     let Some(source) = source else {
-        println!("cargo:warning=No bundled 7zz found (expected at crates/mo2gui/bin/7zz or workspace bin/7zz); falling back to system PATH at runtime");
+        println!(
+            "cargo:warning=No bundled {} found (expected at crates/mo2gui/bin/{} or workspace bin/{})",
+            binary_name, binary_name, binary_name
+        );
         return;
     };
 
@@ -33,17 +37,19 @@ fn maybe_bundle_7zz() {
 
     let Some(profile_dir) = profile_dir else {
         println!(
-            "cargo:warning=Could not infer target profile dir from OUT_DIR; skipping 7zz bundling"
+            "cargo:warning=Could not infer target profile dir from OUT_DIR; skipping {} bundling",
+            binary_name
         );
         return;
     };
 
     let dest_dir = profile_dir.join("bin");
-    let dest = dest_dir.join("7zz");
+    let dest = dest_dir.join(binary_name);
 
     if let Err(e) = fs::create_dir_all(&dest_dir) {
         println!(
-            "cargo:warning=Failed creating bundled 7zz dir {}: {e}",
+            "cargo:warning=Failed creating bundled {} dir {}: {e}",
+            binary_name,
             dest_dir.display()
         );
         return;
@@ -61,14 +67,16 @@ fn maybe_bundle_7zz() {
                 }
             }
             println!(
-                "cargo:warning=Bundled 7zz: {} -> {}",
+                "cargo:warning=Bundled {}: {} -> {}",
+                binary_name,
                 source.display(),
                 dest.display()
             );
         }
         Err(e) => {
             println!(
-                "cargo:warning=Failed copying bundled 7zz {} -> {}: {e}",
+                "cargo:warning=Failed copying bundled {} {} -> {}: {e}",
+                binary_name,
                 source.display(),
                 dest.display()
             );

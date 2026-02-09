@@ -88,6 +88,7 @@ export struct DataEntry {
 
 export struct DownloadEntry {
     filename: string,
+    mod-name: string,
     size-text: string,
     nexus-id: int,
     version: string,
@@ -211,6 +212,7 @@ export component MainWindow inherits Window {
     in-out property <length> mod-context-menu-y: 0px;
     in-out property <bool> context-mod-is-separator: false;
     in-out property <bool> context-mod-enabled: false;
+    in-out property <bool> context-mod-is-overwrite: false;
 
     // --- Plugin context menu ---
     in-out property <bool> show-plugin-context-menu: false;
@@ -389,7 +391,45 @@ export component MainWindow inherits Window {
     callback set-proton-version(/* proton name */ string);
     callback create-prefix();
     callback delete-prefix();
+    callback recreate-prefix();
     callback browse-wine-prefix();
+    callback open-prefix-folder();
+    callback fix-registry();
+    callback apply-registry-for-game(/* game index */ int, /* path */ string);
+    callback browse-registry-game-path();
+    callback register-nxm-handler();
+
+    // --- Registry Game Dialog ---
+    in-out property <bool> show-registry-dialog: false;
+    in-out property <[string]> registry-game-names;
+    in-out property <int> registry-selected-game: 0;
+    in-out property <string> registry-game-path;
+
+    // --- Launch wrapper ---
+    in-out property <string> launch-wrapper-command;
+    callback set-launch-wrapper(/* command */ string);
+    in-out property <bool> use-umu-launcher: true;
+    callback set-use-umu-launcher(/* enabled */ bool);
+
+    // --- Nexus API ---
+    in-out property <string> nexus-api-key;
+    in-out property <string> nexus-api-status;
+    callback set-nexus-api-key(/* key */ string);
+    callback validate-nexus-api-key();
+
+    // --- Downloads ---
+    in-out property <int> download-filter-index: 0;
+    callback filter-downloads(/* filter-index */ int);
+    callback download-context-action(/* filename */ string, /* action */ string);
+    in-out property <int> download-context-index: -1;
+    in-out property <bool> show-download-context-menu: false;
+    in-out property <length> download-context-x: 0px;
+    in-out property <length> download-context-y: 0px;
+
+    // --- Create Mod from Overwrite ---
+    in-out property <bool> show-create-mod-dialog: false;
+    in-out property <string> create-mod-name;
+    callback create-mod-from-overwrite(/* mod-name */ string);
 
     // --- Rename dialog ---
     in-out property <bool> show-rename-dialog: false;
@@ -406,6 +446,7 @@ export component MainWindow inherits Window {
     in-out property <bool> install-data-valid: false;
     in-out property <string> install-data-path;
     in-out property <string> install-staging-path;  // temp staging dir (for Rust to reference)
+    in-out property <string> install-archive-name; // original archive filename for meta.ini
     in-out property <bool> show-install-tree-menu: false;
     in-out property <length> install-tree-menu-x: 0px;
     in-out property <length> install-tree-menu-y: 0px;
@@ -416,6 +457,14 @@ export component MainWindow inherits Window {
     callback install-set-data-dir(/* path */ string);
     callback install-toggle-expand(/* path */ string);
     callback install-create-folder(/* parent-path */ string);
+    callback install-delete-entry(/* path */ string);
+    callback install-rename-entry(/* old-path */ string, /* new-name */ string);
+    callback install-start-rename(/* path */ string);
+    callback install-move-entry(/* source-path */ string, /* dest-dir */ string);
+    in-out property <string> install-move-source: "";
+    in-out property <bool> show-install-rename-dialog: false;
+    in-out property <string> install-rename-path;
+    in-out property <string> install-rename-value;
 
     // =====================================================
     // PAGE 0: Instance Manager
@@ -495,13 +544,13 @@ export component MainWindow inherits Window {
                         width: 70px;
                         height: 22px;
                         border-radius: 4px;
-                        background: inst.is-portable ? #2196f3 : #4caf50;
+                        background: #2196f3;
                         VerticalLayout {
                             alignment: center;
                             HorizontalLayout {
                                 alignment: center;
                                 Text {
-                                    text: inst.is-portable ? "Portable" : "Global";
+                                    text: "Portable";
                                     font-size: 11px;
                                     color: #ffffff;
                                 }
@@ -570,83 +619,8 @@ export component MainWindow inherits Window {
             background: Palette.border;
         }
 
-        // Step 0: Type selection
+        // Step 0: Game selection
         if root.wizard-step == 0 : VerticalBox {
-            spacing: 12px;
-
-            Text {
-                text: "Choose instance type:";
-                font-size: 14px;
-                color: Palette.foreground;
-            }
-
-            HorizontalBox {
-                spacing: 16px;
-
-                // Global option
-                Rectangle {
-                    horizontal-stretch: 1;
-                    height: 100px;
-                    border-radius: 8px;
-                    border-width: 2px;
-                    border-color: !root.wizard-is-portable ? Palette.accent-background : Palette.border;
-                    background: !root.wizard-is-portable ? Palette.accent-background.transparentize(90%) : Palette.background;
-
-                    TouchArea {
-                        clicked => { root.wizard-is-portable = false; }
-                    }
-
-                    VerticalBox {
-                        padding: 12px;
-                        spacing: 4px;
-                        Text {
-                            text: "Global Instance";
-                            font-weight: 700;
-                            font-size: 14px;
-                            color: Palette.foreground;
-                        }
-                        Text {
-                            text: "Stored in ~/.local/share/MO2Linux/";
-                            font-size: 11px;
-                            color: Palette.foreground.transparentize(40%);
-                        }
-                    }
-                }
-
-                // Portable option
-                Rectangle {
-                    horizontal-stretch: 1;
-                    height: 100px;
-                    border-radius: 8px;
-                    border-width: 2px;
-                    border-color: root.wizard-is-portable ? Palette.accent-background : Palette.border;
-                    background: root.wizard-is-portable ? Palette.accent-background.transparentize(90%) : Palette.background;
-
-                    TouchArea {
-                        clicked => { root.wizard-is-portable = true; }
-                    }
-
-                    VerticalBox {
-                        padding: 12px;
-                        spacing: 4px;
-                        Text {
-                            text: "Portable Instance";
-                            font-weight: 700;
-                            font-size: 14px;
-                            color: Palette.foreground;
-                        }
-                        Text {
-                            text: "Choose any folder. Creates portable.txt marker.";
-                            font-size: 11px;
-                            color: Palette.foreground.transparentize(40%);
-                        }
-                    }
-                }
-            }
-        }
-
-        // Step 1: Game selection
-        if root.wizard-step == 1 : VerticalBox {
             spacing: 12px;
 
             HorizontalBox {
@@ -729,8 +703,8 @@ export component MainWindow inherits Window {
             }
         }
 
-        // Step 2: Game directory
-        if root.wizard-step == 2 : VerticalBox {
+        // Step 1: Game directory
+        if root.wizard-step == 1 : VerticalBox {
             spacing: 12px;
 
             Text {
@@ -762,31 +736,21 @@ export component MainWindow inherits Window {
             }
         }
 
-        // Step 3: Instance name or location
-        if root.wizard-step == 3 : VerticalBox {
+        // Step 2: Instance location
+        if root.wizard-step == 2 : VerticalBox {
             spacing: 12px;
 
-            if !root.wizard-is-portable : VerticalBox {
-                spacing: 8px;
-                Text {
-                    text: "Instance name:";
-                    font-size: 14px;
-                    color: Palette.foreground;
-                }
-                wizard-name-input := LineEdit {
-                    height: 32px;
-                    text: root.wizard-instance-name;
-                    edited(value) => { root.wizard-instance-name = value; }
-                    placeholder-text: "My Skyrim Setup";
-                }
-            }
-
-            if root.wizard-is-portable : VerticalBox {
+            VerticalBox {
                 spacing: 8px;
                 Text {
                     text: "Instance location:";
                     font-size: 14px;
                     color: Palette.foreground;
+                }
+                Text {
+                    text: "Choose a folder for this instance. A portable.txt marker will be created.";
+                    font-size: 12px;
+                    color: Palette.foreground.transparentize(40%);
                 }
                 HorizontalBox {
                     spacing: 8px;
@@ -806,8 +770,8 @@ export component MainWindow inherits Window {
             }
         }
 
-        // Step 4: Summary
-        if root.wizard-step == 4 : VerticalBox {
+        // Step 3: Summary
+        if root.wizard-step == 3 : VerticalBox {
             spacing: 8px;
 
             Text {
@@ -821,13 +785,6 @@ export component MainWindow inherits Window {
                 spacing: 8px;
 
                 Row {
-                    Text { text: "Type:"; font-weight: 600; color: Palette.foreground; }
-                    Text {
-                        text: root.wizard-is-portable ? "Portable" : "Global";
-                        color: Palette.foreground;
-                    }
-                }
-                Row {
                     Text { text: "Game:"; font-weight: 600; color: Palette.foreground; }
                     Text { text: root.wizard-game-name; color: Palette.foreground; }
                 }
@@ -840,13 +797,9 @@ export component MainWindow inherits Window {
                     }
                 }
                 Row {
+                    Text { text: "Location:"; font-weight: 600; color: Palette.foreground; }
                     Text {
-                        text: root.wizard-is-portable ? "Location:" : "Name:";
-                        font-weight: 600;
-                        color: Palette.foreground;
-                    }
-                    Text {
-                        text: root.wizard-is-portable ? root.wizard-location : root.wizard-instance-name;
+                        text: root.wizard-location;
                         color: Palette.foreground;
                         overflow: elide;
                     }
@@ -878,17 +831,17 @@ export component MainWindow inherits Window {
                 text: "Back";
                 clicked => { root.wizard-step -= 1; }
             }
-            if root.wizard-step < 4 : Button {
+            if root.wizard-step < 3 : Button {
                 text: "Next";
                 clicked => { root.wizard-step += 1; }
             }
-            if root.wizard-step == 4 : Button {
+            if root.wizard-step == 3 : Button {
                 text: "Create";
                 clicked => {
                     root.wizard-finish(
-                        root.wizard-is-portable,
+                        true,
                         root.wizard-game-name,
-                        root.wizard-is-portable ? root.wizard-location : root.wizard-instance-name
+                        root.wizard-location
                     );
                 }
             }
@@ -1635,6 +1588,7 @@ export component MainWindow inherits Window {
                                             root.selected-mod-index = index;
                                             root.context-mod-is-separator = entry.is-separator;
                                             root.context-mod-enabled = entry.enabled;
+                                            root.context-mod-is-overwrite = entry.is-overwrite;
                                             root.mod-context-menu-x = self.absolute-position.x + self.mouse-x;
                                             root.mod-context-menu-y = self.absolute-position.y + self.mouse-y;
                                             root.show-mod-context-menu = true;
@@ -2557,6 +2511,15 @@ export component MainWindow inherits Window {
                                             font-weight: 700;
                                             font-size: 12px;
                                         }
+                                        ComboBox {
+                                            width: 130px;
+                                            model: ["All", "Not Installed", "Installed"];
+                                            current-index: root.download-filter-index;
+                                            selected(value) => {
+                                                root.download-filter-index = self.current-index;
+                                                root.filter-downloads(self.current-index);
+                                            }
+                                        }
                                     }
                                 }
                                 // --- Column headers ---
@@ -2567,15 +2530,8 @@ export component MainWindow inherits Window {
                                         padding-left: 8px;
                                         spacing: 0px;
                                         Text {
-                                            text: "Filename";
-                                            width: 300px;
-                                            font-weight: 700;
-                                            font-size: 11px;
-                                            vertical-alignment: center;
-                                        }
-                                        Text {
-                                            text: "Version";
-                                            width: 80px;
+                                            text: "Mod Name";
+                                            horizontal-stretch: 1;
                                             font-weight: 700;
                                             font-size: 11px;
                                             vertical-alignment: center;
@@ -2589,7 +2545,7 @@ export component MainWindow inherits Window {
                                         }
                                         Text {
                                             text: "Status";
-                                            horizontal-stretch: 1;
+                                            width: 100px;
                                             font-weight: 700;
                                             font-size: 11px;
                                             vertical-alignment: center;
@@ -2601,23 +2557,36 @@ export component MainWindow inherits Window {
                                 if root.download-count > 0 : ListView {
                                     for entry[idx] in root.download-list : Rectangle {
                                         height: 26px;
-                                        background: mod(idx, 2) == 0 ? transparent : Palette.background.darker(0.03);
+                                        background: idx == root.download-context-index
+                                            ? Palette.accent-background.transparentize(60%)
+                                            : mod(idx, 2) == 0
+                                                ? transparent
+                                                : Palette.background.darker(0.03);
+
+                                        TouchArea {
+                                            pointer-event(pe) => {
+                                                if pe.kind == PointerEventKind.down && pe.button == PointerEventButton.right {
+                                                    root.download-context-index = idx;
+                                                    root.download-context-x = self.mouse-x + self.absolute-position.x;
+                                                    root.download-context-y = self.mouse-y + self.absolute-position.y;
+                                                    root.show-download-context-menu = true;
+                                                }
+                                            }
+                                            double-clicked => {
+                                                // Double-click to install
+                                                root.download-context-action(entry.filename, "install");
+                                            }
+                                        }
+
                                         HorizontalLayout {
                                             padding-left: 8px;
                                             spacing: 0px;
                                             Text {
-                                                text: entry.filename;
-                                                width: 300px;
+                                                text: entry.mod-name != "" ? entry.mod-name : entry.filename;
+                                                horizontal-stretch: 1;
                                                 vertical-alignment: center;
                                                 font-size: 11px;
                                                 overflow: elide;
-                                            }
-                                            Text {
-                                                text: entry.version;
-                                                width: 80px;
-                                                vertical-alignment: center;
-                                                font-size: 11px;
-                                                color: Palette.foreground.transparentize(20%);
                                             }
                                             Text {
                                                 text: entry.size-text;
@@ -2628,7 +2597,7 @@ export component MainWindow inherits Window {
                                             }
                                             Text {
                                                 text: entry.installed ? "Installed" : "Not installed";
-                                                horizontal-stretch: 1;
+                                                width: 100px;
                                                 vertical-alignment: center;
                                                 font-size: 11px;
                                                 color: entry.installed ? #4caf50 : Palette.foreground.transparentize(40%);
@@ -2941,7 +2910,7 @@ export component MainWindow inherits Window {
                 x: root.mod-context-menu-x;
                 y: root.mod-context-menu-y;
                 width: 200px;
-                height: root.context-mod-is-separator ? 168px : 236px;
+                height: root.context-mod-is-separator ? 168px : root.context-mod-is-overwrite ? 268px : 236px;
                 background: Palette.background;
                 border-radius: 6px;
                 border-width: 1px;
@@ -2987,6 +2956,26 @@ export component MainWindow inherits Window {
                             padding-left: 12px;
                             Text {
                                 text: "Create Separator";
+                                font-size: 12px;
+                                vertical-alignment: center;
+                                color: Palette.foreground;
+                            }
+                        }
+                    }
+
+                    // --- Create Mod from Overwrite (only on overwrite entry) ---
+                    if root.context-mod-is-overwrite : Rectangle {
+                        height: 28px;
+                        background: ctx-create-mod-touch.has-hover ? Palette.accent-background.transparentize(70%) : transparent;
+                        border-radius: 4px;
+                        ctx-create-mod-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.mod-context-action("create-from-overwrite"); root.show-mod-context-menu = false; }
+                        }
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            Text {
+                                text: "Create Mod...";
                                 font-size: 12px;
                                 vertical-alignment: center;
                                 color: Palette.foreground;
@@ -3127,6 +3116,85 @@ export component MainWindow inherits Window {
         }
 
         // ===== Plugin Context Menu Popup =====
+        // ===== Download Context Menu =====
+        if root.show-download-context-menu : Rectangle {
+            background: transparent;
+
+            TouchArea {
+                clicked => { root.show-download-context-menu = false; }
+            }
+
+            Rectangle {
+                x: root.download-context-x;
+                y: root.download-context-y;
+                width: 180px;
+                height: 68px;
+                background: Palette.background;
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: Palette.border;
+                drop-shadow-blur: 8px;
+                drop-shadow-color: #000000.transparentize(70%);
+                clip: true;
+
+                VerticalLayout {
+                    padding: 4px;
+                    spacing: 0px;
+
+                    if root.download-context-index >= 0 && !root.download-list[root.download-context-index].installed : Rectangle {
+                        height: 28px;
+                        background: ctx-dl-install-touch.has-hover ? Palette.accent-background.transparentize(70%) : transparent;
+                        border-radius: 4px;
+                        ctx-dl-install-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.download-context-action(root.download-list[root.download-context-index].filename, "install");
+                                root.show-download-context-menu = false;
+                            }
+                        }
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            Text { text: "Install..."; font-size: 12px; vertical-alignment: center; }
+                        }
+                    }
+
+                    if root.download-context-index >= 0 && root.download-list[root.download-context-index].installed : Rectangle {
+                        height: 28px;
+                        background: ctx-dl-reinstall-touch.has-hover ? Palette.accent-background.transparentize(70%) : transparent;
+                        border-radius: 4px;
+                        ctx-dl-reinstall-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.download-context-action(root.download-list[root.download-context-index].filename, "install");
+                                root.show-download-context-menu = false;
+                            }
+                        }
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            Text { text: "Reinstall..."; font-size: 12px; vertical-alignment: center; }
+                        }
+                    }
+
+                    Rectangle {
+                        height: 28px;
+                        background: ctx-dl-delete-touch.has-hover ? #f44336.transparentize(70%) : transparent;
+                        border-radius: 4px;
+                        ctx-dl-delete-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.download-context-action(root.download-list[root.download-context-index].filename, "delete");
+                                root.show-download-context-menu = false;
+                            }
+                        }
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            Text { text: "Delete"; font-size: 12px; vertical-alignment: center; color: #f44336; }
+                        }
+                    }
+                }
+            }
+        }
+
         if root.show-plugin-context-menu : Rectangle {
             background: transparent;
 
@@ -3226,6 +3294,147 @@ export component MainWindow inherits Window {
                             clicked => {
                                 root.confirm-rename(rename-input.text);
                                 root.show-rename-dialog = false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ===== Create Mod from Overwrite Dialog =====
+        if root.show-create-mod-dialog : Rectangle {
+            background: #000000.transparentize(50%);
+
+            TouchArea {
+                clicked => { root.show-create-mod-dialog = false; }
+            }
+
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 420px;
+                height: 160px;
+                background: Palette.background;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: Palette.border;
+                drop-shadow-blur: 8px;
+                drop-shadow-color: #000000.transparentize(70%);
+
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 12px;
+
+                    Text {
+                        text: "Create Mod from Overwrite";
+                        font-size: 16px;
+                        font-weight: 700;
+                        color: Palette.foreground;
+                    }
+
+                    create-mod-input := LineEdit {
+                        text: root.create-mod-name;
+                        placeholder-text: "Enter mod name...";
+                        accepted => {
+                            root.create-mod-from-overwrite(self.text);
+                            root.show-create-mod-dialog = false;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Rectangle { horizontal-stretch: 1; }
+                        Button {
+                            text: "Cancel";
+                            clicked => { root.show-create-mod-dialog = false; }
+                        }
+                        Button {
+                            text: "Create";
+                            primary: true;
+                            clicked => {
+                                root.create-mod-from-overwrite(create-mod-input.text);
+                                root.show-create-mod-dialog = false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Registry Game Selection Dialog
+        if root.show-registry-dialog : Rectangle {
+            background: #000000.transparentize(50%);
+
+            TouchArea {
+                clicked => { root.show-registry-dialog = false; }
+                scroll-event(e) => { accept }
+            }
+
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 500px;
+                height: 280px;
+                background: Palette.background;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: Palette.border;
+                drop-shadow-blur: 8px;
+                drop-shadow-color: #000000.transparentize(70%);
+
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 12px;
+
+                    Text {
+                        text: "Fix Registry — Select Game";
+                        font-size: 16px;
+                        font-weight: 700;
+                        color: Palette.foreground;
+                    }
+
+                    Text {
+                        text: "Writes the game install path to the Wine registry so mods and tools can find it.";
+                        font-size: 11px;
+                        color: Palette.foreground.transparentize(40%);
+                        wrap: word-wrap;
+                    }
+
+                    ComboBox {
+                        model: root.registry-game-names;
+                        current-index: root.registry-selected-game;
+                        selected(value) => {
+                            root.registry-selected-game = self.current-index;
+                        }
+                    }
+
+                    HorizontalBox {
+                        spacing: 8px;
+                        registry-path-input := LineEdit {
+                            horizontal-stretch: 1;
+                            text: root.registry-game-path;
+                            placeholder-text: "/path/to/game";
+                            edited(value) => { root.registry-game-path = value; }
+                        }
+                        Button {
+                            text: "Browse...";
+                            clicked => { root.browse-registry-game-path(); }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Rectangle { horizontal-stretch: 1; }
+                        Button {
+                            text: "Cancel";
+                            clicked => { root.show-registry-dialog = false; }
+                        }
+                        Button {
+                            text: "Apply";
+                            primary: true;
+                            clicked => {
+                                root.apply-registry-for-game(root.registry-selected-game, registry-path-input.text);
+                                root.show-registry-dialog = false;
                             }
                         }
                     }
@@ -3355,9 +3564,52 @@ export component MainWindow inherits Window {
 
                     Rectangle { height: 1px; background: Palette.border; }
 
+                    // Move mode indicator
+                    if root.install-move-source != "" : Rectangle {
+                        height: 26px;
+                        background: #2196F3.transparentize(85%);
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            spacing: 8px;
+                            Text {
+                                text: "Moving: " + root.install-move-source;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                                color: #2196F3;
+                                overflow: elide;
+                                horizontal-stretch: 1;
+                            }
+                            TouchArea {
+                                width: 60px;
+                                mouse-cursor: pointer;
+                                clicked => { root.install-move-source = ""; }
+                                Text {
+                                    text: "Cancel";
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                    color: #2196F3;
+                                    font-weight: 700;
+                                }
+                            }
+                        }
+                    }
+
                     // Content tree
                     ScrollView {
                         vertical-stretch: 1;
+
+                        // Right-click on empty space → create folder at root
+                        TouchArea {
+                            pointer-event(pe) => {
+                                if pe.kind == PointerEventKind.up && pe.button == PointerEventButton.right {
+                                    root.install-tree-context-path = "";
+                                    root.install-tree-context-is-dir = false;
+                                    root.install-tree-menu-x = self.absolute-position.x + self.mouse-x;
+                                    root.install-tree-menu-y = self.absolute-position.y + self.mouse-y;
+                                    root.show-install-tree-menu = true;
+                                }
+                            }
+                        }
 
                         VerticalLayout {
                             spacing: 0;
@@ -3461,26 +3713,92 @@ export component MainWindow inherits Window {
 
         if root.show-install-tree-menu : Rectangle {
             TouchArea {
-                clicked => { root.show-install-tree-menu = false; }
+                clicked => {
+                    root.show-install-tree-menu = false;
+                }
             }
 
             Rectangle {
-                x: root.install-tree-menu-x;
-                y: root.install-tree-menu-y;
-                width: 190px;
-                height: root.install-tree-context-is-dir ? 57px : 28px;
+                x: min(root.install-tree-menu-x, parent.width - self.width - 8px);
+                y: min(root.install-tree-menu-y, parent.height - self.height - 8px);
+                width: 200px;
+                height: install-ctx-layout.preferred-height;
                 background: Palette.background;
-                border-radius: 4px;
+                border-radius: 6px;
                 border-width: 1px;
                 border-color: Palette.border;
-                clip: true;
+                drop-shadow-blur: 8px;
+                drop-shadow-color: #000000.transparentize(70%);
                 z: 2000;
 
-                VerticalLayout {
+                install-ctx-layout := VerticalLayout {
+                    padding: 4px;
                     spacing: 0px;
-                    if root.install-tree-context-is-dir : Rectangle {
+
+                    // ===== MOVE MODE ACTIVE =====
+                    // "Move Here" — on dir or empty space
+                    if root.install-move-source != ""
+                        && (root.install-tree-context-is-dir || root.install-tree-context-path == "")
+                        && root.install-tree-context-path != root.install-move-source : Rectangle {
+                        height: 28px;
+                        background: install-ctx-move-here.has-hover ? Palette.accent-background.transparentize(70%) : transparent;
+                        border-radius: 4px;
+                        install-ctx-move-here := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.install-move-entry(root.install-move-source, root.install-tree-context-path);
+                                root.install-move-source = "";
+                                root.show-install-tree-menu = false;
+                            }
+                        }
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            Text { text: "Move Here"; font-size: 12px; vertical-alignment: center; font-weight: 700; }
+                        }
+                    }
+
+                    // "Cancel Move"
+                    if root.install-move-source != "" : Rectangle {
+                        height: 28px;
+                        background: install-ctx-move-cancel.has-hover ? Palette.accent-background.transparentize(70%) : transparent;
+                        border-radius: 4px;
+                        install-ctx-move-cancel := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.install-move-source = "";
+                                root.show-install-tree-menu = false;
+                            }
+                        }
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            Text { text: "Cancel Move"; font-size: 12px; vertical-alignment: center; }
+                        }
+                    }
+
+                    // ===== NORMAL MODE =====
+                    // --- Empty space: "New Folder" ---
+                    if root.install-move-source == "" && root.install-tree-context-path == "" : Rectangle {
+                        height: 28px;
+                        background: install-ctx-newfolder-empty.has-hover ? Palette.accent-background.transparentize(70%) : transparent;
+                        border-radius: 4px;
+                        install-ctx-newfolder-empty := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.install-create-folder("");
+                                root.show-install-tree-menu = false;
+                            }
+                        }
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            Text { text: "New Folder"; font-size: 12px; vertical-alignment: center; }
+                        }
+                    }
+
+                    // --- Directory: "Set as Data Directory" ---
+                    if root.install-move-source == "" && root.install-tree-context-is-dir && root.install-tree-context-path != "" : Rectangle {
                         height: 28px;
                         background: install-ctx-data.has-hover ? Palette.accent-background.transparentize(70%) : transparent;
+                        border-radius: 4px;
                         install-ctx-data := TouchArea {
                             mouse-cursor: pointer;
                             clicked => {
@@ -3489,14 +3807,16 @@ export component MainWindow inherits Window {
                             }
                         }
                         HorizontalLayout {
-                            padding-left: 10px;
-                            Text { text: "Set as Data Directory"; font-size: 11px; vertical-alignment: center; }
+                            padding-left: 12px;
+                            Text { text: "Set as Data Directory"; font-size: 12px; vertical-alignment: center; }
                         }
                     }
-                    if root.install-tree-context-is-dir : Rectangle { height: 1px; background: Palette.border; }
-                    Rectangle {
+
+                    // --- Directory: "New Subfolder" ---
+                    if root.install-move-source == "" && root.install-tree-context-is-dir && root.install-tree-context-path != "" : Rectangle {
                         height: 28px;
                         background: install-ctx-folder.has-hover ? Palette.accent-background.transparentize(70%) : transparent;
+                        border-radius: 4px;
                         install-ctx-folder := TouchArea {
                             mouse-cursor: pointer;
                             clicked => {
@@ -3505,8 +3825,110 @@ export component MainWindow inherits Window {
                             }
                         }
                         HorizontalLayout {
-                            padding-left: 10px;
-                            Text { text: "Create Folder Here"; font-size: 11px; vertical-alignment: center; }
+                            padding-left: 12px;
+                            Text { text: "New Subfolder"; font-size: 12px; vertical-alignment: center; }
+                        }
+                    }
+
+                    // --- "Move" (start move) ---
+                    if root.install-move-source == "" && root.install-tree-context-path != "" : Rectangle {
+                        height: 28px;
+                        background: install-ctx-move.has-hover ? Palette.accent-background.transparentize(70%) : transparent;
+                        border-radius: 4px;
+                        install-ctx-move := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.install-move-source = root.install-tree-context-path;
+                                root.show-install-tree-menu = false;
+                            }
+                        }
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            Text { text: "Move"; font-size: 12px; vertical-alignment: center; }
+                        }
+                    }
+
+                    // --- "Rename" ---
+                    if root.install-move-source == "" && root.install-tree-context-path != "" : Rectangle {
+                        height: 28px;
+                        background: install-ctx-rename.has-hover ? Palette.accent-background.transparentize(70%) : transparent;
+                        border-radius: 4px;
+                        install-ctx-rename := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.show-install-tree-menu = false;
+                                root.install-start-rename(root.install-tree-context-path);
+                            }
+                        }
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            Text { text: "Rename"; font-size: 12px; vertical-alignment: center; }
+                        }
+                    }
+
+                    // --- "Delete" ---
+                    if root.install-move-source == "" && root.install-tree-context-path != "" : Rectangle {
+                        height: 28px;
+                        background: install-ctx-delete.has-hover ? #f44336.transparentize(70%) : transparent;
+                        border-radius: 4px;
+                        install-ctx-delete := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.install-delete-entry(root.install-tree-context-path);
+                                root.show-install-tree-menu = false;
+                            }
+                        }
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            Text { text: "Delete"; font-size: 12px; vertical-alignment: center; color: #f44336; }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ===== Install Rename Dialog =====
+        if root.show-install-rename-dialog : Rectangle {
+            background: #000000.transparentize(50%);
+            TouchArea { clicked => { root.show-install-rename-dialog = false; } }
+
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 420px;
+                height: 140px;
+                background: Palette.background;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: Palette.border;
+                drop-shadow-blur: 8px;
+                drop-shadow-color: #000000.transparentize(70%);
+
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 12px;
+                    Text { text: "Rename"; font-size: 14px; font-weight: 700; }
+                    install-rename-input := LineEdit {
+                        text: root.install-rename-value;
+                        accepted => {
+                            root.install-rename-entry(root.install-rename-path, self.text);
+                            root.show-install-rename-dialog = false;
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Rectangle { horizontal-stretch: 1; }
+                        Button {
+                            text: "Cancel";
+                            clicked => { root.show-install-rename-dialog = false; }
+                        }
+                        Button {
+                            text: "OK";
+                            primary: true;
+                            clicked => {
+                                root.install-rename-entry(root.install-rename-path, install-rename-input.text);
+                                root.show-install-rename-dialog = false;
+                            }
                         }
                     }
                 }
@@ -3760,13 +4182,17 @@ export component MainWindow inherits Window {
         if root.show-settings : Rectangle {
             background: #000000.transparentize(50%);
 
-            TouchArea { }
+            TouchArea {
+                scroll-event(e) => {
+                    accept
+                }
+            }
 
             Rectangle {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 width: min(parent.width - 40px, 750px);
-                height: min(parent.height - 60px, 560px);
+                height: min(parent.height - 60px, 640px);
                 background: Palette.background;
                 border-radius: 8px;
                 border-width: 1px;
@@ -3843,12 +4269,14 @@ export component MainWindow inherits Window {
                         background: Palette.border;
                     }
 
-                    // Tab content
-                    ScrollView {
+                    // Tab content area
+                    Rectangle {
                         vertical-stretch: 1;
+                        clip: true;
 
                         // === General tab ===
-                        if root.settings-tab == 0 : VerticalBox {
+                        if root.settings-tab == 0 : ScrollView {
+                        VerticalBox {
                             padding: 16px;
                             spacing: 6px;
 
@@ -3909,11 +4337,60 @@ export component MainWindow inherits Window {
                                 checked: true;
                             }
 
-                            Rectangle { vertical-stretch: 1; }
+                            Rectangle { height: 12px; }
+
+                            Text {
+                                text: "Nexus Mods";
+                                font-weight: 700;
+                                color: Palette.foreground;
+                            }
+                            Text {
+                                text: "API key for downloading mods. Get yours at nexusmods.com > Settings > API.";
+                                font-size: 11px;
+                                color: Palette.foreground.transparentize(40%);
+                                wrap: word-wrap;
+                            }
+                            HorizontalBox {
+                                spacing: 8px;
+                                LineEdit {
+                                    horizontal-stretch: 1;
+                                    text <=> root.nexus-api-key;
+                                    placeholder-text: "Paste your Nexus Mods API key...";
+                                    input-type: password;
+                                    edited(value) => {
+                                        root.set-nexus-api-key(value);
+                                    }
+                                }
+                                Button {
+                                    text: "Validate";
+                                    clicked => { root.validate-nexus-api-key(); }
+                                }
+                            }
+                            Text {
+                                text: root.nexus-api-status;
+                                font-size: 11px;
+                                color: Palette.foreground.transparentize(30%);
+                            }
+                            HorizontalBox {
+                                spacing: 8px;
+                                Button {
+                                    text: "Register as NXM Handler";
+                                    clicked => { root.register-nxm-handler(); }
+                                }
+                            }
+                            Text {
+                                text: "Register this application as the handler for nxm:// links so 'Download with Manager' works on Nexus Mods.";
+                                font-size: 11px;
+                                color: Palette.foreground.transparentize(40%);
+                                wrap: word-wrap;
+                            }
+
+                        }
                         }
 
                         // === Mod List tab ===
-                        if root.settings-tab == 1 : VerticalBox {
+                        if root.settings-tab == 1 : ScrollView {
+                        VerticalBox {
                             padding: 16px;
                             spacing: 6px;
 
@@ -4013,11 +4490,12 @@ export component MainWindow inherits Window {
                                 checked: false;
                             }
 
-                            Rectangle { vertical-stretch: 1; }
+                        }
                         }
 
                         // === Paths tab ===
-                        if root.settings-tab == 2 : VerticalBox {
+                        if root.settings-tab == 2 : ScrollView {
+                        VerticalBox {
                             padding: 16px;
                             spacing: 8px;
 
@@ -4032,26 +4510,11 @@ export component MainWindow inherits Window {
                                     }
                                     HorizontalBox {
                                         spacing: 4px;
-                                        Rectangle {
+                                        LineEdit {
                                             horizontal-stretch: 1;
-                                            height: 28px;
-                                            border-radius: 4px;
-                                            border-width: 1px;
-                                            border-color: Palette.border;
-                                            background: Palette.alternate-background;
-                                            clip: true;
-                                            HorizontalBox {
-                                                padding-left: 6px;
-                                                padding-right: 6px;
-                                                Text {
-                                                    text: root.settings-base-dir;
-                                                    vertical-alignment: center;
-                                                    horizontal-alignment: right;
-                                                    overflow: elide;
-                                                    color: Palette.foreground;
-                                                    font-size: 12px;
-                                                }
-                                            }
+                                            text: root.settings-base-dir;
+                                            read-only: true;
+                                            font-size: 12px;
                                         }
                                         Button {
                                             text: "...";
@@ -4075,26 +4538,11 @@ export component MainWindow inherits Window {
                                     }
                                     HorizontalBox {
                                         spacing: 4px;
-                                        Rectangle {
+                                        LineEdit {
                                             horizontal-stretch: 1;
-                                            height: 28px;
-                                            border-radius: 4px;
-                                            border-width: 1px;
-                                            border-color: Palette.border;
-                                            background: Palette.alternate-background;
-                                            clip: true;
-                                            HorizontalBox {
-                                                padding-left: 6px;
-                                                padding-right: 6px;
-                                                Text {
-                                                    text: root.settings-downloads-dir;
-                                                    vertical-alignment: center;
-                                                    horizontal-alignment: right;
-                                                    overflow: elide;
-                                                    color: Palette.foreground;
-                                                    font-size: 12px;
-                                                }
-                                            }
+                                            text: root.settings-downloads-dir;
+                                            read-only: true;
+                                            font-size: 12px;
                                         }
                                         Button {
                                             text: "...";
@@ -4111,26 +4559,11 @@ export component MainWindow inherits Window {
                                     }
                                     HorizontalBox {
                                         spacing: 4px;
-                                        Rectangle {
+                                        LineEdit {
                                             horizontal-stretch: 1;
-                                            height: 28px;
-                                            border-radius: 4px;
-                                            border-width: 1px;
-                                            border-color: Palette.border;
-                                            background: Palette.alternate-background;
-                                            clip: true;
-                                            HorizontalBox {
-                                                padding-left: 6px;
-                                                padding-right: 6px;
-                                                Text {
-                                                    text: root.settings-mods-dir;
-                                                    vertical-alignment: center;
-                                                    horizontal-alignment: right;
-                                                    overflow: elide;
-                                                    color: Palette.foreground;
-                                                    font-size: 12px;
-                                                }
-                                            }
+                                            text: root.settings-mods-dir;
+                                            read-only: true;
+                                            font-size: 12px;
                                         }
                                         Button {
                                             text: "...";
@@ -4147,26 +4580,11 @@ export component MainWindow inherits Window {
                                     }
                                     HorizontalBox {
                                         spacing: 4px;
-                                        Rectangle {
+                                        LineEdit {
                                             horizontal-stretch: 1;
-                                            height: 28px;
-                                            border-radius: 4px;
-                                            border-width: 1px;
-                                            border-color: Palette.border;
-                                            background: Palette.alternate-background;
-                                            clip: true;
-                                            HorizontalBox {
-                                                padding-left: 6px;
-                                                padding-right: 6px;
-                                                Text {
-                                                    text: root.settings-profiles-dir;
-                                                    vertical-alignment: center;
-                                                    horizontal-alignment: right;
-                                                    overflow: elide;
-                                                    color: Palette.foreground;
-                                                    font-size: 12px;
-                                                }
-                                            }
+                                            text: root.settings-profiles-dir;
+                                            read-only: true;
+                                            font-size: 12px;
                                         }
                                         Button {
                                             text: "...";
@@ -4183,26 +4601,11 @@ export component MainWindow inherits Window {
                                     }
                                     HorizontalBox {
                                         spacing: 4px;
-                                        Rectangle {
+                                        LineEdit {
                                             horizontal-stretch: 1;
-                                            height: 28px;
-                                            border-radius: 4px;
-                                            border-width: 1px;
-                                            border-color: Palette.border;
-                                            background: Palette.alternate-background;
-                                            clip: true;
-                                            HorizontalBox {
-                                                padding-left: 6px;
-                                                padding-right: 6px;
-                                                Text {
-                                                    text: root.settings-overwrite-dir;
-                                                    vertical-alignment: center;
-                                                    horizontal-alignment: right;
-                                                    overflow: elide;
-                                                    color: Palette.foreground;
-                                                    font-size: 12px;
-                                                }
-                                            }
+                                            text: root.settings-overwrite-dir;
+                                            read-only: true;
+                                            font-size: 12px;
                                         }
                                         Button {
                                             text: "...";
@@ -4232,26 +4635,11 @@ export component MainWindow inherits Window {
                                     }
                                     HorizontalBox {
                                         spacing: 4px;
-                                        Rectangle {
+                                        LineEdit {
                                             horizontal-stretch: 1;
-                                            height: 28px;
-                                            border-radius: 4px;
-                                            border-width: 1px;
-                                            border-color: Palette.border;
-                                            background: Palette.alternate-background;
-                                            clip: true;
-                                            HorizontalBox {
-                                                padding-left: 6px;
-                                                padding-right: 6px;
-                                                Text {
-                                                    text: root.game-path;
-                                                    vertical-alignment: center;
-                                                    horizontal-alignment: right;
-                                                    overflow: elide;
-                                                    color: Palette.foreground;
-                                                    font-size: 12px;
-                                                }
-                                            }
+                                            text: root.game-path;
+                                            read-only: true;
+                                            font-size: 12px;
                                         }
                                         Button {
                                             text: "...";
@@ -4262,17 +4650,17 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            Rectangle { vertical-stretch: 1; }
-
                             Text {
                                 text: "All directories must be writable.";
                                 font-size: 11px;
                                 color: Palette.foreground.transparentize(50%);
                             }
                         }
+                        }
 
                         // === Wine/Proton tab (Fluorine Manager) ===
-                        if root.settings-tab == 3 : VerticalBox {
+                        if root.settings-tab == 3 : ScrollView {
+                        VerticalBox {
                             padding: 16px;
                             spacing: 10px;
 
@@ -4315,9 +4703,11 @@ export component MainWindow inherits Window {
                                         }
 
                                         Text {
-                                            text: root.prefix-status-text;
+                                            text: root.prefix-exists
+                                                ? "Proton: " + root.selected-proton-name
+                                                : root.prefix-status-text;
                                             font-size: 11px;
-                                            color: Palette.foreground.transparentize(40%);
+                                            color: Palette.foreground.transparentize(20%);
                                             overflow: elide;
                                         }
                                     }
@@ -4377,6 +4767,21 @@ export component MainWindow inherits Window {
                                     text: "Delete Prefix";
                                     clicked => { root.delete-prefix(); }
                                 }
+
+                                if root.prefix-exists : Button {
+                                    text: "Recreate Prefix";
+                                    clicked => { root.recreate-prefix(); }
+                                }
+
+                                if root.prefix-exists : Button {
+                                    text: "Open Prefix";
+                                    clicked => { root.open-prefix-folder(); }
+                                }
+
+                                if root.prefix-exists : Button {
+                                    text: "Fix Registry";
+                                    clicked => { root.fix-registry(); }
+                                }
                             }
 
                             Text {
@@ -4390,7 +4795,42 @@ export component MainWindow inherits Window {
                                 wrap: word-wrap;
                             }
 
-                            Rectangle { vertical-stretch: 1; }
+                            Rectangle { height: 16px; }
+
+                            // --- Launch Wrapper ---
+                            Text {
+                                text: "Launch Options";
+                                font-weight: 700;
+                                font-size: 13px;
+                            }
+                            Text {
+                                text: "Wrapper commands prepended to every launch (e.g. mangohud, gamescope -f --, gamemoderun).";
+                                font-size: 11px;
+                                color: Palette.foreground.transparentize(40%);
+                                wrap: word-wrap;
+                            }
+                            LineEdit {
+                                text <=> root.launch-wrapper-command;
+                                placeholder-text: "e.g. mangohud gamescope -f --";
+                                edited(value) => {
+                                    root.set-launch-wrapper(value);
+                                }
+                            }
+
+                            CheckBox {
+                                text: "Use UMU launcher (recommended)";
+                                checked: root.use-umu-launcher;
+                                toggled => { root.set-use-umu-launcher(self.checked); }
+                            }
+                            Text {
+                                text: "Disable to use direct proton run (legacy behavior).";
+                                font-size: 11px;
+                                color: Palette.foreground.transparentize(40%);
+                                wrap: word-wrap;
+                            }
+
+                            Rectangle { height: 16px; }
+                        }
                         }
                     }
 

@@ -169,8 +169,7 @@ impl Instance {
     /// Apply a profile's mod list to the loaded mods.
     fn apply_profile_to_mods(&mut self, profile: &Profile) {
         // Remove synthetic separators from previous profiles.
-        self.mods
-            .retain(|m| !(m.is_separator() && !m.path.exists()));
+        self.mods.retain(|m| !m.is_separator() || m.path.exists());
 
         // Windows MO2 stores separators in modlist.txt as `_separator_<Name>`
         // without requiring a physical folder in `mods/`.
@@ -335,6 +334,49 @@ impl Instance {
         archives
     }
 
+    /// Move all contents of the overwrite directory into a new mod.
+    ///
+    /// Creates `mods/{mod_name}/`, moves every file/dir from overwrite into it,
+    /// and recreates an empty overwrite directory.
+    pub fn create_mod_from_overwrite(&self, mod_name: &str) -> anyhow::Result<()> {
+        let mod_name = mod_name.trim();
+        if mod_name.is_empty() {
+            anyhow::bail!("Mod name cannot be empty");
+        }
+
+        let dest = self.mods_dir().join(mod_name);
+        if dest.exists() {
+            anyhow::bail!("A mod named '{}' already exists", mod_name);
+        }
+
+        let overwrite = self.overwrite_dir();
+        if !overwrite.exists() {
+            anyhow::bail!("Overwrite directory does not exist");
+        }
+
+        // Check overwrite is not empty
+        let has_contents = std::fs::read_dir(&overwrite)?.next().is_some();
+        if !has_contents {
+            anyhow::bail!("Overwrite directory is empty");
+        }
+
+        // Rename overwrite → new mod dir (fast if same filesystem)
+        match std::fs::rename(&overwrite, &dest) {
+            Ok(()) => {}
+            Err(_) => {
+                // Cross-filesystem: copy + remove
+                std::fs::create_dir_all(&dest)?;
+                copy_dir_recursive(&overwrite, &dest)?;
+                std::fs::remove_dir_all(&overwrite)?;
+            }
+        }
+
+        // Recreate empty overwrite directory
+        std::fs::create_dir_all(&overwrite)?;
+
+        Ok(())
+    }
+
     /// Find a mod by name (case-insensitive).
     pub fn find_mod(&self, name: &str) -> Option<&ModInfo> {
         let lower = name.to_lowercase();
@@ -357,6 +399,22 @@ pub struct InstanceInfo {
     pub path: PathBuf,
     pub game_name: String,
     pub is_portable: bool,
+}
+
+/// Recursively copy a directory's contents from src to dest.
+fn copy_dir_recursive(src: &Path, dest: &Path) -> anyhow::Result<()> {
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dest_path = dest.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            std::fs::create_dir_all(&dest_path)?;
+            copy_dir_recursive(&src_path, &dest_path)?;
+        } else {
+            std::fs::copy(&src_path, &dest_path)?;
+        }
+    }
+    Ok(())
 }
 
 /// Check if a directory is a portable MO2 instance.

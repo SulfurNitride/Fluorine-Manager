@@ -177,12 +177,12 @@ impl PluginList {
                 continue;
             }
             let is_primary = primary_lookup.contains(lower);
-            let ext = extension_lower(&filename);
+            let ext = extension_lower(filename);
             let enabled = if is_primary || ext == "esm" {
                 true
             } else {
                 plugins_txt
-                    .find(&filename)
+                    .find(filename)
                     .map(|e| e.enabled)
                     .unwrap_or(true)
             }; // Base game plugins default enabled

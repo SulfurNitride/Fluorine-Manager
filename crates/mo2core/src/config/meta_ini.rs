@@ -21,6 +21,7 @@
 //! - `hasCustomURL` - whether URL was manually set
 
 use std::path::Path;
+use std::str::FromStr;
 
 use super::ini::IniFile;
 
@@ -36,7 +37,7 @@ pub enum EndorsedState {
 }
 
 impl EndorsedState {
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s.trim().to_lowercase().as_str() {
             "true" | "endorsed" => Self::Endorsed,
             "abstained" | "false" => Self::Abstained,
@@ -50,6 +51,14 @@ impl EndorsedState {
             Self::Endorsed => "Endorsed",
             Self::Abstained => "Abstained",
         }
+    }
+}
+
+impl FromStr for EndorsedState {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self::parse(s))
     }
 }
 
@@ -162,7 +171,7 @@ impl MetaIni {
     pub fn endorsed(&self) -> EndorsedState {
         self.ini
             .get("General", "endorsed")
-            .map(EndorsedState::from_str)
+            .map(EndorsedState::parse)
             .unwrap_or(EndorsedState::Unknown)
     }
 
@@ -195,6 +204,10 @@ impl MetaIni {
 
     pub fn set_notes(&mut self, notes: &str) {
         self.ini.set("General", "notes", notes);
+    }
+
+    pub fn mod_name(&self) -> Option<&str> {
+        self.ini.get("General", "modName")
     }
 
     pub fn file_id(&self) -> Option<i64> {
@@ -307,12 +320,9 @@ size=2\r\n\
 
     #[test]
     fn test_endorsed_states() {
-        assert_eq!(EndorsedState::from_str("Endorsed"), EndorsedState::Endorsed);
-        assert_eq!(EndorsedState::from_str("true"), EndorsedState::Endorsed);
-        assert_eq!(
-            EndorsedState::from_str("Abstained"),
-            EndorsedState::Abstained
-        );
-        assert_eq!(EndorsedState::from_str(""), EndorsedState::Unknown);
+        assert_eq!(EndorsedState::parse("Endorsed"), EndorsedState::Endorsed);
+        assert_eq!(EndorsedState::parse("true"), EndorsedState::Endorsed);
+        assert_eq!(EndorsedState::parse("Abstained"), EndorsedState::Abstained);
+        assert_eq!(EndorsedState::parse(""), EndorsedState::Unknown);
     }
 }

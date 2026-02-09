@@ -1,5 +1,9 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::fs::{self, File};
+use std::io::Write;
+#[cfg(target_family = "unix")]
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -11,8 +15,7 @@ use mo2core::gamedef::GameDef;
 use mo2core::gamedef::GameId;
 use mo2core::global_settings::GlobalSettings;
 use mo2core::instance::{
-    create_global_instance, create_portable_instance, list_global_instances,
-    portable_instance_info, Instance,
+    create_portable_instance, list_global_instances, portable_instance_info, Instance,
 };
 use mo2core::launcher::process::LaunchConfig;
 use mo2core::launcher::vfs as vfs_launch;
@@ -23,6 +26,7 @@ use mo2fuse::overlay::{build_full_game_vfs, VfsTree};
 use mo2fuse::FuseController;
 use slint::winit_030::{winit, EventResult as WinitEventResult, WinitWindowAccessor};
 use slint::{LogicalSize, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 slint::include_modules!();
 
@@ -42,6 +46,8 @@ struct AppState {
     collapsed_separators: HashSet<String>,
     /// PID of currently running launched process (for lock state)
     locked_pid: Option<u32>,
+    /// Wine prefix path for wineserver-based lock detection
+    locked_prefix: Option<PathBuf>,
 }
 
 fn prefer_prefix_separator_style(entries: &[mo2core::config::modlist::ModListEntry]) -> bool {
@@ -82,8 +88,219 @@ fn known_game_names() -> Vec<&'static str> {
         .collect()
 }
 
+fn application_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn read_os_release_pretty_name() -> Option<String> {
+    let contents = fs::read_to_string("/etc/os-release").ok()?;
+    for line in contents.lines() {
+        if let Some(value) = line.strip_prefix("PRETTY_NAME=") {
+            return Some(value.trim_matches('"').to_string());
+        }
+    }
+    None
+}
+
+fn read_cpu_model() -> Option<String> {
+    let contents = fs::read_to_string("/proc/cpuinfo").ok()?;
+    for line in contents.lines() {
+        if let Some(value) = line.strip_prefix("model name\t: ") {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn read_memory_total_bytes() -> Option<u64> {
+    let contents = fs::read_to_string("/proc/meminfo").ok()?;
+    for line in contents.lines() {
+        if let Some(rest) = line.strip_prefix("MemTotal:") {
+            let kib = rest.split_whitespace().next()?.parse::<u64>().ok()?;
+            return kib.checked_mul(1024);
+        }
+    }
+    None
+}
+
+#[cfg(target_family = "unix")]
+fn read_storage_bytes(path: &Path) -> Option<(u64, u64)> {
+    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    let rc = unsafe { libc::statvfs(c_path.as_ptr(), stats.as_mut_ptr()) };
+    if rc != 0 {
+        return None;
+    }
+    let stats = unsafe { stats.assume_init() };
+    let total = (stats.f_blocks as u128).saturating_mul(stats.f_frsize as u128);
+    let available = (stats.f_bavail as u128).saturating_mul(stats.f_frsize as u128);
+    Some((
+        total.min(u64::MAX as u128) as u64,
+        available.min(u64::MAX as u128) as u64,
+    ))
+}
+
+#[cfg(not(target_family = "unix"))]
+fn read_storage_bytes(_path: &Path) -> Option<(u64, u64)> {
+    None
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+    format!("{:.2} GiB", bytes as f64 / GIB)
+}
+
+fn write_startup_diagnostics(file: &mut File, app_dir: &Path) -> std::io::Result<()> {
+    let timestamp = chrono::Local::now().to_rfc3339();
+    let distro = read_os_release_pretty_name().unwrap_or_else(|| "Unknown".to_string());
+    let kernel = fs::read_to_string("/proc/sys/kernel/osrelease")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "Unknown".to_string());
+    let cpu = read_cpu_model().unwrap_or_else(|| "Unknown".to_string());
+    let mem = read_memory_total_bytes()
+        .map(format_bytes)
+        .unwrap_or_else(|| "Unknown".to_string());
+    let storage = read_storage_bytes(app_dir)
+        .map(|(total, free)| {
+            format!(
+                "free {} / total {}",
+                format_bytes(free),
+                format_bytes(total)
+            )
+        })
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    writeln!(file, "MO2 Linux startup diagnostics")?;
+    writeln!(file, "timestamp={timestamp}")?;
+    writeln!(file, "version={}", env!("CARGO_PKG_VERSION"))?;
+    writeln!(file, "app_dir={}", app_dir.display())?;
+    writeln!(file, "distro={distro}")?;
+    writeln!(file, "kernel={kernel}")?;
+    writeln!(file, "arch={}", std::env::consts::ARCH)?;
+    writeln!(file, "cpu={cpu}")?;
+    writeln!(file, "memory_total={mem}")?;
+    writeln!(file, "storage={storage}")?;
+    writeln!(file)?;
+    Ok(())
+}
+
+fn prune_old_logs(logs_dir: &Path, max_logs: usize) {
+    let Ok(entries) = fs::read_dir(logs_dir) else {
+        return;
+    };
+    let mut logs: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.extension().and_then(|s| s.to_str()) == Some("log")
+                && p.file_name()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|name| name.starts_with("mo2linux-"))
+        })
+        .collect();
+    logs.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+
+    let remove_count = logs.len().saturating_sub(max_logs);
+    for path in logs.into_iter().take(remove_count) {
+        if let Err(e) = fs::remove_file(&path) {
+            eprintln!("Failed to remove old log {}: {e}", path.display());
+        }
+    }
+}
+
+fn init_logging() {
+    let app_dir = application_dir();
+    let logs_dir = app_dir.join("logs");
+
+    if let Err(e) = fs::create_dir_all(&logs_dir) {
+        eprintln!(
+            "Failed to create logs directory {}: {e}",
+            logs_dir.display()
+        );
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            )
+            .init();
+        return;
+    }
+
+    let log_name = format!(
+        "mo2linux-{}.log",
+        chrono::Local::now().format("%Y%m%d-%H%M%S")
+    );
+    let log_path = logs_dir.join(log_name);
+    let mut log_file = match File::options().create(true).append(true).open(&log_path) {
+        Ok(file) => file,
+        Err(e) => {
+            eprintln!("Failed to open log file {}: {e}", log_path.display());
+            tracing_subscriber::fmt()
+                .with_env_filter(
+                    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+                )
+                .init();
+            return;
+        }
+    };
+
+    if let Err(e) = write_startup_diagnostics(&mut log_file, &app_dir) {
+        eprintln!(
+            "Failed to write startup diagnostics to {}: {e}",
+            log_path.display()
+        );
+    }
+    prune_old_logs(&logs_dir, 10);
+
+    let file_writer = match log_file.try_clone() {
+        Ok(file) => file,
+        Err(e) => {
+            eprintln!(
+                "Failed to clone log file writer {}: {e}",
+                log_path.display()
+            );
+            tracing_subscriber::fmt()
+                .with_env_filter(
+                    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+                )
+                .init();
+            return;
+        }
+    };
+
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let stderr_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_ansi(false)
+        .with_writer(move || {
+            file_writer
+                .try_clone()
+                .expect("failed to clone tracing log file handle")
+        });
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(stderr_layer)
+        .with(file_layer)
+        .init();
+
+    tracing::info!("Logging to {}", log_path.display());
+}
+
 fn main() {
-    tracing_subscriber::fmt::init();
+    init_logging();
+
+    // CLI: handle nxm:// links sent from the desktop handler
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 3 && args[1] == "nxm-handle" {
+        if let Err(e) = mo2core::nxm::send_to_socket(&args[2]) {
+            tracing::error!("Failed to send NXM link: {e}");
+            std::process::exit(1);
+        }
+        std::process::exit(0);
+    }
 
     if let Err(e) = slint::BackendSelector::new()
         .backend_name("winit".to_string())
@@ -117,6 +334,7 @@ fn main() {
         data_expanded: HashSet::new(),
         collapsed_separators: HashSet::new(),
         locked_pid: None,
+        locked_prefix: None,
     }));
 
     // Set known games for wizard (from NaK's game database)
@@ -316,7 +534,7 @@ fn main() {
     {
         let ui_handle = ui.as_weak();
         let state = state.clone();
-        ui.on_wizard_finish(move |is_portable, game_name, name_or_path| {
+        ui.on_wizard_finish(move |_is_portable, game_name, name_or_path| {
             let ui = ui_handle.unwrap();
             let game = game_name.to_string();
             let target = name_or_path.to_string();
@@ -334,22 +552,15 @@ fn main() {
                 let _ = rfd::MessageDialog::new()
                     .set_title("Create Instance Failed")
                     .set_level(rfd::MessageLevel::Error)
-                    .set_description(if is_portable {
-                        "Please choose a portable instance location."
-                    } else {
-                        "Please provide an instance name."
-                    })
+                    .set_description("Please choose a portable instance location.")
                     .set_buttons(rfd::MessageButtons::Ok)
                     .show();
                 return;
             }
 
-            let result = if is_portable {
+            let result = {
                 let path = PathBuf::from(target);
                 create_portable_instance(&path, &game)
-            } else {
-                let name = target;
-                create_global_instance(&name, &game)
             };
 
             match result {
@@ -1553,7 +1764,7 @@ fn main() {
                 }
 
                 ui.set_prefix_status_text(SharedString::from(
-                    format!("AppID: {} | Proton: {}", config.app_id, proton_name).as_str(),
+                    format!("Proton: {}", proton_name).as_str(),
                 ));
                 tracing::info!(
                     "Updated Fluorine Proton to {proton_name} without recreating prefix"
@@ -1705,7 +1916,7 @@ fn main() {
                     ui.set_prefix_exists(true);
                     ui.set_prefix_progress(1.0);
                     ui.set_prefix_status_text(SharedString::from(
-                        format!("AppID: {} | Proton: {}", app_id, proton_name_bg).as_str(),
+                        format!("Proton: {}", proton_name_bg).as_str(),
                     ));
                     ui.set_wine_prefix_path(prefix_path.display().to_string().into());
                     ui.set_steam_app_id(SharedString::from(app_id.to_string().as_str()));
@@ -1759,6 +1970,148 @@ fn main() {
 
                 tracing::info!("Fluorine prefix deleted (AppID: {})", app_id);
             }
+        });
+    }
+
+    // --- Recreate Fluorine Prefix ---
+    {
+        let ui_handle = ui.as_weak();
+        ui.on_recreate_prefix(move || {
+            let ui = ui_handle.unwrap();
+
+            let Some(fluorine) =
+                mo2core::fluorine::FluorineConfig::load().filter(|c| c.prefix_exists())
+            else {
+                ui.set_prefix_status_text(SharedString::from("No existing prefix to recreate"));
+                return;
+            };
+
+            let proton_name = fluorine.proton_name.clone();
+            let proton_path_str = fluorine.proton_path.clone();
+            let app_id = fluorine.app_id;
+            let prefix_path = PathBuf::from(&fluorine.prefix_path);
+
+            let protons = nak_rust::steam::find_steam_protons();
+            let Some(steam_proton) = protons.iter().find(|p| p.name == proton_name).cloned() else {
+                ui.set_prefix_status_text(SharedString::from(
+                    format!("Proton '{}' not found", proton_name).as_str(),
+                ));
+                return;
+            };
+
+            // Delete existing prefix directory (keep Steam shortcut + config)
+            if prefix_path.exists() {
+                if let Err(e) = std::fs::remove_dir_all(&prefix_path) {
+                    tracing::error!("Failed to remove prefix directory: {e}");
+                    ui.set_prefix_status_text(SharedString::from(
+                        format!("Failed to remove prefix: {e}").as_str(),
+                    ));
+                    return;
+                }
+            }
+
+            ui.set_prefix_busy(true);
+            ui.set_prefix_progress(0.0);
+            ui.set_prefix_status_text(SharedString::from("Recreating prefix..."));
+
+            let ui_weak = ui.as_weak();
+            std::thread::spawn(move || {
+                let cancel_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+                let ui_status = ui_weak.clone();
+                let ui_progress = ui_weak.clone();
+                let ctx = nak_rust::installers::TaskContext::new(
+                    move |msg: String| {
+                        let ui_w = ui_status.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = ui_w.upgrade() {
+                                ui.set_prefix_status_text(SharedString::from(msg.as_str()));
+                            }
+                        });
+                    },
+                    |msg| tracing::debug!("Prefix log: {msg}"),
+                    move |progress: f32| {
+                        let ui_w = ui_progress.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = ui_w.upgrade() {
+                                ui.set_prefix_progress(progress);
+                            }
+                        });
+                    },
+                    cancel_flag,
+                );
+
+                let install_err: Option<String> = nak_rust::installers::install_all_dependencies(
+                    &prefix_path,
+                    &steam_proton,
+                    &ctx,
+                    0.0,
+                    0.8,
+                    app_id,
+                )
+                .err()
+                .map(|e| e.to_string());
+
+                // Run symlinks + registry after deps
+                if install_err.is_none() {
+                    // Ensure temp directory exists
+                    nak_rust::installers::symlinks::ensure_temp_directory(&prefix_path);
+
+                    // Auto-detect games and create symlinks
+                    nak_rust::installers::symlinks::create_game_symlinks_auto(&prefix_path);
+
+                    // Apply registry settings
+                    let log_cb = |msg: String| {
+                        tracing::info!("[registry] {}", msg);
+                    };
+                    let _ = nak_rust::installers::apply_wine_registry_settings(
+                        &prefix_path,
+                        &steam_proton,
+                        &log_cb,
+                        None,
+                    );
+                }
+
+                let ui_final = ui_weak.clone();
+                let proton_name_final = proton_name.clone();
+                let proton_path_final = proton_path_str.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(ui) = ui_final.upgrade() else {
+                        return;
+                    };
+                    ui.set_prefix_busy(false);
+
+                    if let Some(err) = install_err {
+                        tracing::error!("Failed to recreate prefix: {err}");
+                        ui.set_prefix_status_text(SharedString::from(
+                            format!("Error: {err}").as_str(),
+                        ));
+                        return;
+                    }
+
+                    // Save updated Fluorine config
+                    let config = mo2core::fluorine::FluorineConfig {
+                        app_id,
+                        prefix_path: prefix_path.display().to_string(),
+                        proton_name: proton_name_final.clone(),
+                        proton_path: proton_path_final.clone(),
+                        created: chrono::Local::now().to_rfc3339(),
+                    };
+                    let _ = config.save();
+
+                    ui.set_prefix_exists(true);
+                    ui.set_prefix_progress(1.0);
+                    ui.set_prefix_status_text(SharedString::from(
+                        format!("Prefix recreated | Proton: {}", proton_name_final).as_str(),
+                    ));
+
+                    tracing::info!(
+                        "Fluorine prefix recreated with symlinks: AppID={}, prefix={}",
+                        app_id,
+                        prefix_path.display()
+                    );
+                });
+            });
         });
     }
 
@@ -1833,14 +2186,14 @@ fn main() {
                 return;
             };
 
-            // Auto-mount VFS before running.
-            // Avoid forced remount churn here; it can create transient stale mounts.
-            if !is_vfs_mounted(&st) {
-                auto_mount_vfs(&mut st);
-                ui.set_fuse_mounted(is_vfs_mounted(&st));
-            }
+            // Always run mount health check before launch. This repairs stale
+            // userland-vs-kernel mount state where session tracking says mounted
+            // but the kernel mount vanished, which would otherwise cause ENOENT
+            // for translated VFS executable paths.
+            auto_mount_vfs(&mut st);
+            ui.set_fuse_mounted(is_vfs_mounted(&st));
 
-            let exe = &st.executables.executables[idx];
+            let exe = st.executables.executables[idx].clone();
             let tool_name = exe.title.clone();
             tracing::info!("Playing: {} ({})", exe.title, exe.binary);
 
@@ -1849,18 +2202,28 @@ fn main() {
 
             let ini_sync = build_ini_sync_info(&st);
             let save_sync = build_save_sync_info(&st);
-            let config = build_launch_config_vfs(exe, &st);
+            let config = build_launch_config_checked(&exe, &mut st);
+            let launch_prefix = config.prefix_path.clone();
             match mo2core::launcher::process::launch(&config) {
                 Ok(child) => {
                     let pid = child.id();
                     tracing::info!("Tool '{}' launched (pid: {})", tool_name, pid);
                     st.locked_pid = Some(pid);
+                    st.locked_prefix = launch_prefix.clone();
                     ui.set_locked(true);
                     ui.set_locked_tool_name(SharedString::from(tool_name.as_str()));
-                    start_process_monitor(&timer, &ui_handle, &state, pid, ini_sync, save_sync);
+                    start_process_monitor(
+                        &timer,
+                        &ui_handle,
+                        &state,
+                        child,
+                        launch_prefix,
+                        ini_sync,
+                        save_sync,
+                    );
                 }
                 Err(e) => {
-                    tracing::error!("Failed to launch '{}': {e}", tool_name);
+                    tracing::error!("Failed to launch '{}': {e:#}", tool_name);
                 }
             }
         });
@@ -1884,14 +2247,13 @@ fn main() {
                 return;
             }
 
-            // Auto-mount VFS before running.
-            if !is_vfs_mounted(&st) {
-                auto_mount_vfs(&mut st);
-                let ui = ui_handle.unwrap();
-                ui.set_fuse_mounted(is_vfs_mounted(&st));
-            }
+            // Always run mount health check before launch to repair stale
+            // userland-vs-kernel mount state.
+            auto_mount_vfs(&mut st);
+            let ui = ui_handle.unwrap();
+            ui.set_fuse_mounted(is_vfs_mounted(&st));
 
-            let exe = &st.executables.executables[idx];
+            let exe = st.executables.executables[idx].clone();
             let tool_name = exe.title.clone();
             tracing::info!("Launching tool: {} ({})", exe.title, exe.binary);
 
@@ -1900,19 +2262,29 @@ fn main() {
 
             let ini_sync = build_ini_sync_info(&st);
             let save_sync = build_save_sync_info(&st);
-            let config = build_launch_config_vfs(exe, &st);
+            let config = build_launch_config_checked(&exe, &mut st);
+            let launch_prefix = config.prefix_path.clone();
             match mo2core::launcher::process::launch(&config) {
                 Ok(child) => {
                     let pid = child.id();
                     tracing::info!("Tool '{}' launched (pid: {})", tool_name, pid);
                     st.locked_pid = Some(pid);
+                    st.locked_prefix = launch_prefix.clone();
                     let ui = ui_handle.unwrap();
                     ui.set_locked(true);
                     ui.set_locked_tool_name(SharedString::from(tool_name.as_str()));
-                    start_process_monitor(&timer, &ui_handle, &state, pid, ini_sync, save_sync);
+                    start_process_monitor(
+                        &timer,
+                        &ui_handle,
+                        &state,
+                        child,
+                        launch_prefix,
+                        ini_sync,
+                        save_sync,
+                    );
                 }
                 Err(e) => {
-                    tracing::error!("Failed to launch '{}': {e}", tool_name);
+                    tracing::error!("Failed to launch '{}': {e:#}", tool_name);
                 }
             }
         });
@@ -1928,6 +2300,7 @@ fn main() {
             if let Some(pid) = st.locked_pid.take() {
                 tracing::warn!("Force unlocking (pid {} may still be running)", pid);
             }
+            st.locked_prefix = None;
             timer.stop();
             let ui = ui_handle.unwrap();
             ui.set_locked(false);
@@ -2079,6 +2452,11 @@ fn main() {
                     refresh_ui(&ui, &st);
                     ui.set_selected_mod_name(SharedString::default());
                     rebuild_vfs_if_mounted(&mut st);
+                }
+                "create-from-overwrite" => {
+                    // Show create mod from overwrite dialog
+                    ui.set_create_mod_name(SharedString::from("New Mod"));
+                    ui.set_show_create_mod_dialog(true);
                 }
                 "rename-sep" => {
                     // Show rename dialog for separator
@@ -2402,6 +2780,16 @@ fn main() {
                 }
             }
 
+            // Write meta.ini with installationFile so downloads tab can track installed status
+            let archive_name = ui.get_install_archive_name().to_string();
+            if !archive_name.is_empty() {
+                let mut meta = mo2core::config::meta_ini::MetaIni::new_empty();
+                meta.set_installation_file(&archive_name);
+                if let Err(e) = meta.write(&mod_dir.join("meta.ini")) {
+                    tracing::warn!("Failed to write meta.ini for '{}': {e}", mod_name);
+                }
+            }
+
             // Add to modlist
             if let Some(ref mut profile) = instance.active_profile {
                 let max_priority = profile
@@ -2449,6 +2837,7 @@ fn main() {
                 let _ = std::fs::remove_dir_all(&staging_path);
             }
             ui.set_show_install_tree_menu(false);
+            ui.set_install_move_source(SharedString::default());
             ui.set_show_install_dialog(false);
         });
     }
@@ -2581,6 +2970,689 @@ fn main() {
         });
     }
 
+    // --- Install Start Rename ---
+    {
+        let ui_handle = ui.as_weak();
+        ui.on_install_start_rename(move |path| {
+            let ui = ui_handle.unwrap();
+            let path_str = path.to_string();
+            // Extract just the filename (last path segment)
+            let name = path_str.rsplit('/').next().unwrap_or(&path_str);
+            ui.set_install_rename_path(SharedString::from(path_str.as_str()));
+            ui.set_install_rename_value(SharedString::from(name));
+            ui.set_show_install_rename_dialog(true);
+        });
+    }
+
+    // --- Install Move Entry ---
+    {
+        let ui_handle = ui.as_weak();
+        ui.on_install_move_entry(move |source_path, dest_dir| {
+            let ui = ui_handle.unwrap();
+            let source_str = source_path.to_string();
+            let dest_str = dest_dir.to_string();
+            let staging_path_str = ui.get_install_staging_path().to_string();
+            if staging_path_str.is_empty() || source_str.is_empty() {
+                return;
+            }
+
+            let staging_path = PathBuf::from(&staging_path_str);
+            let source_full = staging_path.join(&source_str);
+            if !source_full.exists() {
+                return;
+            }
+
+            // Determine destination directory
+            let dest_parent = if dest_str.is_empty() {
+                staging_path.clone()
+            } else {
+                staging_path.join(&dest_str)
+            };
+            if !dest_parent.is_dir() {
+                return;
+            }
+
+            // Get the filename of the source
+            let name = source_full
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let dest_full = dest_parent.join(&name);
+
+            // Don't move into itself or if already there
+            if dest_full == source_full {
+                return;
+            }
+            // Don't move a directory into its own subtree
+            if dest_parent.starts_with(&source_full) {
+                return;
+            }
+            // Handle name collision
+            if dest_full.exists() {
+                tracing::warn!("Move target already exists: {}", dest_full.display());
+                return;
+            }
+
+            if let Err(e) = std::fs::rename(&source_full, &dest_full) {
+                tracing::error!("Failed to move: {e}");
+                return;
+            }
+
+            // Rebuild tree
+            let model = ui.get_install_tree();
+            let mut expanded_paths: HashSet<String> = HashSet::new();
+            for i in 0..model.row_count() {
+                let entry = model.row_data(i).unwrap();
+                if entry.is_expanded {
+                    expanded_paths.insert(entry.path.to_string());
+                }
+            }
+            // Expand the destination so the moved item is visible
+            if !dest_str.is_empty() {
+                expanded_paths.insert(dest_str);
+            }
+
+            let data_path = ui.get_install_data_path().to_string();
+            let entries = build_install_tree_with_state(&staging_path, &expanded_paths, &data_path);
+            ui.set_install_tree(ModelRc::new(VecModel::from(entries)));
+
+            // Re-validate — fall back to staging root if data_path no longer exists
+            let check_dir = if data_path.is_empty() || !staging_path.join(&data_path).is_dir() {
+                staging_path.clone()
+            } else {
+                staging_path.join(&data_path)
+            };
+            ui.set_install_data_valid(mo2core::install::looks_like_game_data(&check_dir));
+        });
+    }
+
+    // --- Install Delete Entry ---
+    {
+        let ui_handle = ui.as_weak();
+        ui.on_install_delete_entry(move |path| {
+            let ui = ui_handle.unwrap();
+            let path_str = path.to_string();
+            let staging_path_str = ui.get_install_staging_path().to_string();
+            if staging_path_str.is_empty() || path_str.is_empty() {
+                return;
+            }
+
+            let staging_path = PathBuf::from(&staging_path_str);
+            let full_path = staging_path.join(&path_str);
+
+            if full_path.is_dir() {
+                let _ = std::fs::remove_dir_all(&full_path);
+            } else if full_path.is_file() {
+                let _ = std::fs::remove_file(&full_path);
+            }
+
+            // Rebuild tree
+            let model = ui.get_install_tree();
+            let mut expanded_paths: HashSet<String> = HashSet::new();
+            for i in 0..model.row_count() {
+                let entry = model.row_data(i).unwrap();
+                if entry.is_expanded {
+                    expanded_paths.insert(entry.path.to_string());
+                }
+            }
+            let mut data_path = ui.get_install_data_path().to_string();
+
+            // If we deleted the data root, clear it so validation falls back to staging root
+            if !data_path.is_empty()
+                && (data_path == path_str || data_path.starts_with(&format!("{path_str}/")))
+            {
+                data_path = String::new();
+                ui.set_install_data_path(SharedString::default());
+            }
+
+            let entries = build_install_tree_with_state(&staging_path, &expanded_paths, &data_path);
+            ui.set_install_tree(ModelRc::new(VecModel::from(entries)));
+
+            // Re-validate — if data_path doesn't exist, fall back to staging root
+            let check_dir = if data_path.is_empty() || !staging_path.join(&data_path).is_dir() {
+                staging_path.clone()
+            } else {
+                staging_path.join(&data_path)
+            };
+            ui.set_install_data_valid(mo2core::install::looks_like_game_data(&check_dir));
+        });
+    }
+
+    // --- Install Rename Entry ---
+    {
+        let ui_handle = ui.as_weak();
+        ui.on_install_rename_entry(move |old_path, new_name| {
+            let ui = ui_handle.unwrap();
+            let old_path_str = old_path.to_string();
+            let new_name_str = new_name.to_string().trim().to_string();
+            let staging_path_str = ui.get_install_staging_path().to_string();
+            if staging_path_str.is_empty() || old_path_str.is_empty() || new_name_str.is_empty() {
+                return;
+            }
+            // Prevent path traversal
+            if new_name_str.contains('/') || new_name_str.contains('\\') || new_name_str == ".." {
+                return;
+            }
+
+            let staging_path = PathBuf::from(&staging_path_str);
+            let full_old = staging_path.join(&old_path_str);
+            let new_full = full_old
+                .parent()
+                .unwrap_or(&staging_path)
+                .join(&new_name_str);
+
+            if new_full.exists() || !full_old.exists() {
+                return;
+            }
+
+            if let Err(e) = std::fs::rename(&full_old, &new_full) {
+                tracing::error!("Failed to rename: {e}");
+                return;
+            }
+
+            // Rebuild tree
+            let model = ui.get_install_tree();
+            let mut expanded_paths: HashSet<String> = HashSet::new();
+            for i in 0..model.row_count() {
+                let entry = model.row_data(i).unwrap();
+                if entry.is_expanded {
+                    expanded_paths.insert(entry.path.to_string());
+                }
+            }
+            let data_path = ui.get_install_data_path().to_string();
+            // If the renamed entry was the data root, update data path
+            let data_path = if data_path == old_path_str {
+                let new_rel = new_full
+                    .strip_prefix(&staging_path)
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+                ui.set_install_data_path(SharedString::from(new_rel.as_str()));
+                new_rel
+            } else {
+                data_path
+            };
+            let entries = build_install_tree_with_state(&staging_path, &expanded_paths, &data_path);
+            ui.set_install_tree(ModelRc::new(VecModel::from(entries)));
+
+            // Re-validate — fall back to staging root if data_path no longer exists
+            let check_dir = if data_path.is_empty() || !staging_path.join(&data_path).is_dir() {
+                staging_path.clone()
+            } else {
+                staging_path.join(&data_path)
+            };
+            ui.set_install_data_valid(mo2core::install::looks_like_game_data(&check_dir));
+        });
+    }
+
+    // --- Open Prefix Folder ---
+    {
+        ui.on_open_prefix_folder(move || {
+            if let Some(fluorine) = mo2core::fluorine::FluorineConfig::load() {
+                if fluorine.prefix_exists() {
+                    let _ = std::process::Command::new("xdg-open")
+                        .arg(&fluorine.prefix_path)
+                        .spawn();
+                }
+            }
+        });
+    }
+
+    // --- Fix Registry (show game selection dialog) ---
+    {
+        let ui_handle = ui.as_weak();
+        let state = state.clone();
+        ui.on_fix_registry(move || {
+            let ui = ui_handle.unwrap();
+            if !mo2core::fluorine::FluorineConfig::load().is_some_and(|c| c.prefix_exists()) {
+                ui.set_prefix_status_text(SharedString::from(
+                    "No active prefix — cannot fix registry",
+                ));
+                return;
+            }
+
+            // Populate game list from NaK's known games
+            let game_names = nak_rust::installers::known_game_names();
+            let model: Vec<SharedString> =
+                game_names.iter().map(|n| SharedString::from(*n)).collect();
+            ui.set_registry_game_names(ModelRc::from(model.as_slice()));
+
+            // Pre-select the current instance's game if possible
+            let st = state.borrow();
+            let game_path = st
+                .instance
+                .as_ref()
+                .and_then(|inst| inst.config.game_directory())
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+            ui.set_registry_game_path(SharedString::from(game_path.as_str()));
+
+            // Try to match the current instance's game to the list
+            if let Some(inst) = st.instance.as_ref() {
+                if let Some(gd) = GameDef::from_instance(
+                    inst.game_name(),
+                    inst.config.game_directory().as_deref(),
+                ) {
+                    if let Some(app_id) = gd.steam_app_id {
+                        let app_id_str = app_id.to_string();
+                        // Find matching index in known games by steam app ID
+                        let known = nak_rust::game_finder::known_games::KNOWN_GAMES;
+                        for (i, kg) in known.iter().enumerate() {
+                            if kg.steam_app_id == app_id_str {
+                                ui.set_registry_selected_game(i as i32);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            drop(st);
+
+            // Close settings so the registry dialog isn't hidden behind it
+            ui.set_show_settings(false);
+            ui.set_show_registry_dialog(true);
+        });
+    }
+
+    // --- Browse Registry Game Path ---
+    {
+        let ui_handle = ui.as_weak();
+        ui.on_browse_registry_game_path(move || {
+            let Some(folder) = rfd::FileDialog::new().pick_folder() else {
+                return;
+            };
+            let ui = ui_handle.unwrap();
+            ui.set_registry_game_path(SharedString::from(folder.display().to_string().as_str()));
+        });
+    }
+
+    // --- Apply Registry for Selected Game ---
+    {
+        let ui_handle = ui.as_weak();
+        ui.on_apply_registry_for_game(move |game_index, path| {
+            let ui = ui_handle.unwrap();
+            let Some(fluorine) =
+                mo2core::fluorine::FluorineConfig::load().filter(|c| c.prefix_exists())
+            else {
+                return;
+            };
+            let prefix_path = PathBuf::from(&fluorine.prefix_path);
+            let protons = nak_rust::steam::find_steam_protons();
+            let Some(proton) = protons.iter().find(|p| p.name == fluorine.proton_name) else {
+                ui.set_prefix_status_text(SharedString::from(
+                    format!("Proton '{}' not found", fluorine.proton_name).as_str(),
+                ));
+                return;
+            };
+
+            let known = nak_rust::game_finder::known_games::KNOWN_GAMES;
+            let idx = game_index as usize;
+            if idx >= known.len() {
+                return;
+            }
+            let game_name = known[idx].name;
+            let game_path = PathBuf::from(path.to_string());
+
+            if !game_path.exists() {
+                ui.set_prefix_status_text(SharedString::from(
+                    format!("Game path not found: {}", game_path.display()).as_str(),
+                ));
+                return;
+            }
+
+            ui.set_prefix_busy(true);
+            ui.set_prefix_status_text(SharedString::from(
+                format!("Applying registry for {}...", game_name).as_str(),
+            ));
+
+            let log_cb = |msg: String| {
+                tracing::info!("[registry] {}", msg);
+            };
+
+            // Step 1: Apply general Wine registry settings
+            if let Err(e) = nak_rust::installers::apply_wine_registry_settings(
+                &prefix_path,
+                proton,
+                &log_cb,
+                None,
+            ) {
+                tracing::error!("Failed to apply wine registry settings: {e}");
+            }
+
+            // Step 2: Apply registry for the selected game with the user's path
+            match nak_rust::installers::apply_registry_for_game_path(
+                &prefix_path,
+                proton,
+                game_name,
+                &game_path,
+                &log_cb,
+            ) {
+                Ok(()) => {
+                    ui.set_prefix_status_text(SharedString::from(
+                        format!(
+                            "Registry fixed for {} -> {}",
+                            game_name,
+                            game_path.display()
+                        )
+                        .as_str(),
+                    ));
+                }
+                Err(e) => {
+                    ui.set_prefix_status_text(SharedString::from(
+                        format!("Registry fix failed: {e}").as_str(),
+                    ));
+                }
+            }
+
+            ui.set_prefix_busy(false);
+        });
+    }
+
+    // --- Set Launch Wrapper ---
+    {
+        let state = state.clone();
+        ui.on_set_launch_wrapper(move |value| {
+            let mut st = state.borrow_mut();
+            st.global_settings.set_launch_wrapper(value.as_ref());
+            let _ = st.global_settings.save();
+        });
+    }
+
+    // --- Set Launch Backend (UMU vs direct Proton) ---
+    {
+        let state = state.clone();
+        ui.on_set_use_umu_launcher(move |enabled| {
+            let mut st = state.borrow_mut();
+            st.global_settings.set_use_umu_launcher(enabled);
+            let _ = st.global_settings.save();
+        });
+    }
+
+    // --- Set Nexus API Key ---
+    {
+        let state = state.clone();
+        ui.on_set_nexus_api_key(move |value| {
+            let mut st = state.borrow_mut();
+            st.global_settings.set_nexus_api_key(value.as_ref());
+            let _ = st.global_settings.save();
+        });
+    }
+
+    // --- Validate Nexus API Key ---
+    {
+        let ui_handle = ui.as_weak();
+        let state = state.clone();
+        ui.on_validate_nexus_api_key(move || {
+            let ui = ui_handle.unwrap();
+            let st = state.borrow();
+            let api_key = match st.global_settings.nexus_api_key() {
+                Some(k) if !k.is_empty() => k.to_string(),
+                _ => {
+                    ui.set_nexus_api_status(SharedString::from("No API key entered"));
+                    return;
+                }
+            };
+            drop(st);
+
+            ui.set_nexus_api_status(SharedString::from("Validating..."));
+
+            let ui_weak = ui.as_weak();
+            std::thread::spawn(move || {
+                let result = mo2core::nxm::validate_api_key(&api_key);
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(ui) = ui_weak.upgrade() else {
+                        return;
+                    };
+                    match result {
+                        Ok(name) => {
+                            ui.set_nexus_api_status(SharedString::from(
+                                format!("Valid - logged in as: {}", name).as_str(),
+                            ));
+                        }
+                        Err(e) => {
+                            ui.set_nexus_api_status(SharedString::from(
+                                format!("Invalid key: {}", e).as_str(),
+                            ));
+                        }
+                    }
+                });
+            });
+        });
+    }
+
+    // --- Filter Downloads ---
+    {
+        let ui_handle = ui.as_weak();
+        let state = state.clone();
+        ui.on_filter_downloads(move |filter_index| {
+            let ui = ui_handle.unwrap();
+            let st = state.borrow();
+            let Some(ref instance) = st.instance else {
+                return;
+            };
+
+            let downloads_dir = instance.downloads_dir();
+            let download_infos = download::scan_downloads(&downloads_dir).unwrap_or_default();
+            let installed_files: HashSet<String> = instance
+                .mods
+                .iter()
+                .filter_map(|m| m.installation_file().map(|f| f.to_lowercase()))
+                .collect();
+
+            let download_entries: Vec<DownloadEntry> = download_infos
+                .iter()
+                .filter_map(|d| {
+                    let installed = installed_files.contains(&d.filename.to_lowercase());
+                    // filter_index: 0=All, 1=Not Installed, 2=Installed
+                    match filter_index {
+                        1 if installed => return None,
+                        2 if !installed => return None,
+                        _ => {}
+                    }
+                    Some(DownloadEntry {
+                        filename: SharedString::from(d.filename.as_str()),
+                        mod_name: SharedString::from(d.mod_name.as_deref().unwrap_or("")),
+                        size_text: SharedString::from(download::format_size(d.size).as_str()),
+                        nexus_id: d.nexus_id.unwrap_or(0) as i32,
+                        version: SharedString::from(d.version.as_deref().unwrap_or("")),
+                        installed,
+                    })
+                })
+                .collect();
+
+            ui.set_download_count(download_entries.len() as i32);
+            ui.set_download_list(ModelRc::new(VecModel::from(download_entries)));
+        });
+    }
+
+    // --- Download Context Actions ---
+    {
+        let ui_handle = ui.as_weak();
+        let state = state.clone();
+        ui.on_download_context_action(move |filename, action| {
+            let ui = ui_handle.unwrap();
+            let filename = filename.to_string();
+            let action = action.to_string();
+
+            let st = state.borrow();
+            let Some(ref instance) = st.instance else {
+                return;
+            };
+            let downloads_dir = instance.downloads_dir();
+            drop(st);
+
+            let archive_path = downloads_dir.join(&filename);
+            if !archive_path.exists() {
+                return;
+            }
+
+            match action.as_str() {
+                "install" => {
+                    open_install_dialog_for_archive(&ui, &state, &archive_path);
+                }
+                "delete" => {
+                    // Delete the archive and its .meta file
+                    let _ = std::fs::remove_file(&archive_path);
+                    let mut meta_name = archive_path.as_os_str().to_os_string();
+                    meta_name.push(".meta");
+                    let _ = std::fs::remove_file(std::path::PathBuf::from(meta_name));
+                    ui.invoke_refresh();
+                }
+                _ => {}
+            }
+        });
+    }
+
+    // --- Create Mod from Overwrite ---
+    {
+        let ui_handle = ui.as_weak();
+        let state = state.clone();
+        ui.on_create_mod_from_overwrite(move |mod_name| {
+            let ui = ui_handle.unwrap();
+            let mod_name = mod_name.to_string();
+            if mod_name.trim().is_empty() {
+                tracing::warn!("Empty mod name");
+                return;
+            }
+
+            let mut st = state.borrow_mut();
+            let Some(ref instance) = st.instance else {
+                return;
+            };
+
+            if let Err(e) = instance.create_mod_from_overwrite(&mod_name) {
+                tracing::error!("Failed to create mod from overwrite: {e}");
+                return;
+            }
+
+            // Reload instance to pick up the new mod
+            let inst_path = instance.root.clone();
+            if let Err(()) = load_instance(&ui, &mut st, &inst_path) {
+                tracing::error!("Failed to reload instance after creating mod");
+            }
+        });
+    }
+
+    // --- Register NXM Handler ---
+    {
+        ui.on_register_nxm_handler(move || {
+            if let Err(e) = mo2core::nxm::register_handler() {
+                tracing::error!("Failed to register NXM handler: {e}");
+            }
+        });
+    }
+
+    // --- NXM Socket Listener ---
+    // Timer must live until ui.run() returns — store in outer scope.
+    let _nxm_timer = mo2core::nxm::start_listener().ok().map(|nxm_rx| {
+        let state = state.clone();
+        let ui_handle = ui.as_weak();
+        let timer = Timer::default();
+        timer.start(
+            TimerMode::Repeated,
+            std::time::Duration::from_millis(500),
+            move || {
+                while let Ok(link) = nxm_rx.try_recv() {
+                    tracing::info!(
+                        "NXM link received: {} mod {} file {}",
+                        link.game_domain,
+                        link.mod_id,
+                        link.file_id,
+                    );
+
+                    let st = state.borrow();
+                    let api_key = st.global_settings.nexus_api_key().map(|s| s.to_string());
+                    let downloads_dir = st.instance.as_ref().map(|inst| inst.downloads_dir());
+                    drop(st);
+
+                    let Some(api_key) = api_key.filter(|k| !k.is_empty()) else {
+                        tracing::warn!("NXM link received but no API key configured");
+                        continue;
+                    };
+                    let Some(downloads_dir) = downloads_dir else {
+                        tracing::warn!("NXM link received but no instance loaded");
+                        continue;
+                    };
+
+                    let ui_weak = ui_handle.clone();
+                    std::thread::spawn(move || {
+                        // Get file info from Nexus API
+                        let file_info = match mo2core::nxm::get_file_info(
+                            &api_key,
+                            &link.game_domain,
+                            link.mod_id,
+                            link.file_id,
+                        ) {
+                            Ok(info) => info,
+                            Err(e) => {
+                                tracing::error!("Failed to get file info: {e}");
+                                return;
+                            }
+                        };
+
+                        tracing::info!(
+                            "Downloading: {} ({})",
+                            file_info.file_name,
+                            file_info.mod_name
+                        );
+
+                        // Get download URL
+                        let urls = match mo2core::nxm::get_download_urls(&api_key, &link) {
+                            Ok(u) => u,
+                            Err(e) => {
+                                tracing::error!("Failed to get download URL: {e}");
+                                return;
+                            }
+                        };
+
+                        let dest = downloads_dir.join(&file_info.file_name);
+                        let progress_cb = |downloaded: u64, total: u64| {
+                            if total > 0 && downloaded % (1024 * 1024) < 65536 {
+                                tracing::info!(
+                                    "Download progress: {}/{}",
+                                    mo2core::download::format_size(downloaded),
+                                    mo2core::download::format_size(total)
+                                );
+                            }
+                        };
+
+                        if let Err(e) = mo2core::nxm::download_file(&urls[0], &dest, &progress_cb) {
+                            tracing::error!("Download failed: {e}");
+                            return;
+                        }
+
+                        // Write .meta file
+                        let _ = mo2core::nxm::write_meta_file(&dest, &link, &file_info);
+
+                        tracing::info!("Download complete: {}", file_info.file_name);
+
+                        // Refresh downloads list on UI thread
+                        let _ = slint::invoke_from_event_loop(move || {
+                            let Some(ui) = ui_weak.upgrade() else {
+                                return;
+                            };
+                            // Trigger a refresh of the downloads tab
+                            ui.invoke_refresh();
+                        });
+                    });
+                }
+            },
+        );
+        timer
+    });
+
+    // Load launch wrapper and API key from settings into UI
+    {
+        let st = state.borrow();
+        if let Some(wrapper) = st.global_settings.launch_wrapper() {
+            ui.set_launch_wrapper_command(SharedString::from(wrapper));
+        }
+        ui.set_use_umu_launcher(st.global_settings.use_umu_launcher());
+        if let Some(key) = st.global_settings.nexus_api_key() {
+            ui.set_nexus_api_key(SharedString::from(key));
+        }
+    }
+
     ui.run().unwrap();
 }
 
@@ -2683,6 +3755,97 @@ fn build_launch_config_vfs(exe: &Executable, state: &AppState) -> LaunchConfig {
         }
     }
 
+    // Apply launch wrapper from global settings (e.g. "mangohud gamescope -f --").
+    // Also support inline environment assignments in the wrapper string
+    // (e.g. "PROTON_ENABLE_WAYLAND=1 mangohud").
+    if let Some(wrapper_str) = state.global_settings.launch_wrapper() {
+        if let Ok(parts) = shell_words::split(wrapper_str) {
+            if !parts.is_empty() {
+                let mut wrapper_cmd = Vec::new();
+                for part in parts {
+                    if let Some((key, value)) = parse_env_assignment(&part) {
+                        config = config.with_env(key, value);
+                    } else {
+                        wrapper_cmd.push(part);
+                    }
+                }
+                if !wrapper_cmd.is_empty() {
+                    config = config.with_wrapper(wrapper_cmd);
+                }
+            }
+        }
+    }
+
+    // Default launcher backend is UMU (disable in settings to use direct proton run).
+    config = config.with_umu(state.global_settings.use_umu_launcher());
+
+    config
+}
+
+/// Parse `KEY=VALUE` tokens used for environment variables.
+fn parse_env_assignment(token: &str) -> Option<(String, String)> {
+    let (key, value) = token.split_once('=')?;
+    if key.is_empty() {
+        return None;
+    }
+    let mut chars = key.chars();
+    let first = chars.next()?;
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return None;
+    }
+    if !chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    Some((key.to_string(), value.to_string()))
+}
+
+/// Build a launch config and ensure the chosen binary path exists.
+///
+/// If VFS translation points into the mount but the file is missing, we retry
+/// mount health/rebuild once and regenerate the config. If it is still missing,
+/// fall back to the original executable path from the tool config.
+fn build_launch_config_checked(exe: &Executable, state: &mut AppState) -> LaunchConfig {
+    let mut config = build_launch_config_vfs(exe, state);
+    let mount_point = state
+        .mount_manager
+        .as_ref()
+        .map(|mm| mm.mount_point().to_path_buf());
+
+    let is_translated_vfs_path = mount_point
+        .as_ref()
+        .is_some_and(|mp| config.binary.starts_with(mp));
+    let missing_binary = !config.binary.exists();
+
+    if is_translated_vfs_path && missing_binary {
+        tracing::warn!(
+            "Translated VFS executable is missing at {:?}; retrying mount/rebuild once",
+            config.binary
+        );
+
+        auto_mount_vfs(state);
+        config = build_launch_config_vfs(exe, state);
+
+        let mount_point = state
+            .mount_manager
+            .as_ref()
+            .map(|mm| mm.mount_point().to_path_buf());
+        let still_vfs_path = mount_point
+            .as_ref()
+            .is_some_and(|mp| config.binary.starts_with(mp));
+        let still_missing = !config.binary.exists();
+
+        if still_vfs_path && still_missing {
+            tracing::warn!(
+                "VFS executable still missing after retry; falling back to real executable '{}'",
+                exe.binary
+            );
+            config.binary = PathBuf::from(&exe.binary);
+            if !exe.working_directory.is_empty() {
+                config.working_dir = Some(PathBuf::from(&exe.working_directory));
+            }
+        }
+    }
+
     config
 }
 
@@ -2719,11 +3882,7 @@ fn load_instance(ui: &MainWindow, state: &mut AppState, path: &Path) -> Result<(
                 if fluorine.prefix_exists() {
                     ui.set_prefix_exists(true);
                     ui.set_prefix_status_text(SharedString::from(
-                        format!(
-                            "AppID: {} | Proton: {}",
-                            fluorine.app_id, fluorine.proton_name
-                        )
-                        .as_str(),
+                        format!("Proton: {}", fluorine.proton_name).as_str(),
                     ));
                     ui.set_wine_prefix_path(SharedString::from(fluorine.prefix_path.as_str()));
                     ui.set_steam_app_id(SharedString::from(fluorine.app_id.to_string().as_str()));
@@ -3236,9 +4395,9 @@ fn refresh_ui(ui: &MainWindow, state: &AppState) {
     sort_mod_entries(&mut mod_entries, column, ascending);
     apply_collapse_state(&mut mod_entries, &state.collapsed_separators);
     apply_selection_state_to_mod_entries(ui, &mut mod_entries);
-    tracing::info!("Mod list: {} entries in model", mod_entries.len(),);
+    tracing::debug!("Mod list: {} entries in model", mod_entries.len(),);
     for entry in &mod_entries {
-        tracing::info!(
+        tracing::debug!(
             "  mod: '{}' (enabled={}, priority={})",
             entry.name,
             entry.enabled,
@@ -3310,6 +4469,7 @@ fn refresh_ui(ui: &MainWindow, state: &AppState) {
             let installed = installed_files.contains(&d.filename.to_lowercase());
             DownloadEntry {
                 filename: SharedString::from(d.filename.as_str()),
+                mod_name: SharedString::from(d.mod_name.as_deref().unwrap_or("")),
                 size_text: SharedString::from(download::format_size(d.size).as_str()),
                 nexus_id: d.nexus_id.unwrap_or(0) as i32,
                 version: SharedString::from(d.version.as_deref().unwrap_or("")),
@@ -3986,11 +5146,6 @@ fn build_mod_list(instance: &Instance, conflicts: &HashMap<String, ModConflicts>
         .collect()
 }
 
-/// Check if a process is still running by inspecting /proc/<pid>.
-fn is_process_alive(pid: u32) -> bool {
-    Path::new(&format!("/proc/{pid}")).exists()
-}
-
 /// Info needed to sync INI files back to the profile after a launched process exits.
 #[derive(Clone)]
 struct IniSyncInfo {
@@ -4072,28 +5227,93 @@ fn build_save_sync_info(state: &AppState) -> Option<SaveSyncInfo> {
 }
 
 /// Start a timer that polls every 2 seconds to check if the launched process has exited.
-/// When the process exits, unlocks the app state and optionally syncs INI files back.
+/// Uses two-stage detection: first waits for the child PID to exit, then waits for
+/// wineserver to exit for the matching WINEPREFIX (if a prefix path is provided).
+/// When both stages complete, unlocks the app state and optionally syncs INI files back.
 fn start_process_monitor(
     timer: &Rc<Timer>,
     ui_handle: &slint::Weak<MainWindow>,
     state: &Rc<RefCell<AppState>>,
-    pid: u32,
+    child: std::process::Child,
+    prefix_path: Option<PathBuf>,
     ini_sync: Option<IniSyncInfo>,
     save_sync: Option<SaveSyncInfo>,
 ) {
     let ui_handle = ui_handle.clone();
     let state = state.clone();
     let timer_clone = timer.clone();
+    let pid = child.id();
+    // Wrap child so the closure can call try_wait() (takes &mut self) and reap zombies
+    let child = Rc::new(RefCell::new(Some(child)));
+    // Track whether the child PID has exited (stage 1 → stage 2)
+    let pid_exited = Rc::new(std::cell::Cell::new(false));
     timer.start(
         TimerMode::Repeated,
         std::time::Duration::from_secs(2),
         move || {
-            if is_process_alive(pid) {
-                return; // still running
+            // Stage 1: wait for child process to exit (try_wait reaps zombie)
+            if !pid_exited.get() {
+                let exited = if let Some(ref mut ch) = *child.borrow_mut() {
+                    match ch.try_wait() {
+                        Ok(Some(status)) => {
+                            #[cfg(unix)]
+                            {
+                                use std::os::unix::process::ExitStatusExt;
+                                if let Some(sig) = status.signal() {
+                                    tracing::warn!(
+                                        "Child process (pid {pid}) exited by signal {sig} (status: {status:?})"
+                                    );
+                                } else {
+                                    tracing::info!(
+                                        "Child process (pid {pid}) exited with status: {status:?}"
+                                    );
+                                }
+                            }
+                            #[cfg(not(unix))]
+                            {
+                                tracing::info!(
+                                    "Child process (pid {pid}) exited with status: {status:?}"
+                                );
+                            }
+                            true
+                        }
+                        Ok(None) => false,
+                        Err(e) => {
+                            tracing::warn!("Error checking child process (pid {pid}): {e}");
+                            true
+                        }
+                    }
+                } else {
+                    true
+                };
+
+                if !exited {
+                    return; // PID still running
+                }
+                tracing::info!("Child process (pid {pid}) exited");
+                // Drop child handle to fully reap
+                child.borrow_mut().take();
+                pid_exited.set(true);
+                // If no prefix path, skip stage 2
+                if prefix_path.is_none() {
+                    tracing::info!("No prefix path — unlocking immediately");
+                } else {
+                    tracing::info!("Waiting for wineserver to exit...");
+                    return; // Continue to stage 2 on next tick
+                }
             }
-            // Process exited — unlock and stop polling
+
+            // Stage 2: wait for wineserver to exit for this prefix
+            if let Some(ref prefix) = prefix_path {
+                if mo2core::launcher::process::is_wineserver_running(prefix) {
+                    return; // wineserver still running
+                }
+                tracing::info!("Wineserver exited for prefix: {}", prefix.display());
+            }
+
+            // Both stages complete — unlock
             timer_clone.stop();
-            tracing::info!("Launched process (pid {pid}) exited — unlocking");
+            tracing::info!("Launched process fully exited — unlocking");
 
             // Sync INI files back to profile if LocalSettings was enabled
             if let Some(ref sync) = ini_sync {
@@ -4128,6 +5348,7 @@ fn start_process_monitor(
 
             let mut st = state.borrow_mut();
             st.locked_pid = None;
+            st.locked_prefix = None;
             let ui = ui_handle.unwrap();
             ui.set_locked(false);
             ui.set_locked_tool_name(SharedString::default());
@@ -4222,17 +5443,50 @@ fn build_data_entries(
 
 /// Build Save tab entries.
 fn build_save_entries(instance: &Instance) -> Vec<SaveEntry> {
-    // Determine save directory
+    // Determine save directory.
+    // When profile-local saves are enabled, the authoritative location is
+    // `<profile>/saves/`.  Saves get deployed into the prefix before launch
+    // and synced back afterward.  We also sync here on refresh so the saves
+    // tab always reflects the latest state (e.g. mid-session or after a crash).
     let save_dir = if let Some(ref profile) = instance.active_profile {
         if profile.local_saves() {
+            // Sync any new saves from prefix → profile before listing
+            if let Some(game_def) = GameDef::from_instance(
+                instance.game_name(),
+                instance.config.game_directory().as_deref(),
+            ) {
+                if let Some(ref my_games) = game_def.my_games_folder {
+                    let prefix_path = mo2core::fluorine::FluorineConfig::load()
+                        .filter(|c| c.prefix_exists())
+                        .map(|c| PathBuf::from(&c.prefix_path))
+                        .or_else(|| instance.config.wine_prefix_path().map(|p| p.to_path_buf()));
+                    if let Some(ref pp) = prefix_path {
+                        if let Ok(prefix) = mo2core::launcher::wine_prefix::WinePrefix::load(pp) {
+                            let save_subdir =
+                                mo2core::launcher::wine_prefix::resolve_profile_save_subdir(
+                                    &profile.path,
+                                    &game_def.ini_files,
+                                );
+                            let _ = mo2core::launcher::wine_prefix::sync_saves_back_to_profile(
+                                &prefix,
+                                my_games,
+                                &profile.path,
+                                &save_subdir,
+                            );
+                        }
+                    }
+                }
+            }
             Some(profile.path.join("saves"))
         } else {
             let game_dir = instance.config.game_directory();
+            let prefix = mo2core::fluorine::prefix_path();
             saves::resolve_save_dir(
                 &profile.path,
                 false,
                 instance.game_name(),
                 game_dir.as_deref(),
+                prefix.as_deref(),
             )
         }
     } else {
@@ -4587,18 +5841,30 @@ fn open_install_dialog_for_archive(
     // Build the install tree for the dialog
     let tree_entries = build_install_tree(staging.path(), &data_dir_name, &layout);
     let data_path = detect_data_root_path(staging.path(), &data_dir_name, &layout);
-    let valid = !data_path.is_empty()
-        && mo2core::install::looks_like_game_data(&staging.path().join(&data_path));
+    let check_dir = if data_path.is_empty() {
+        staging.path().to_path_buf()
+    } else {
+        staging.path().join(&data_path)
+    };
+    let valid = mo2core::install::looks_like_game_data(&check_dir);
 
     // Persist the staging dir by leaking it (cleaned up on cancel/confirm)
     let staging_path_str = staging.path().display().to_string();
     let _staging_dir = staging.keep();
+
+    // Store the original archive filename for meta.ini after install
+    let archive_name = archive_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
 
     ui.set_install_mod_name(SharedString::from(mod_name.as_str()));
     ui.set_install_tree(ModelRc::new(VecModel::from(tree_entries)));
     ui.set_install_data_valid(valid);
     ui.set_install_data_path(SharedString::from(data_path.as_str()));
     ui.set_install_staging_path(SharedString::from(staging_path_str.as_str()));
+    ui.set_install_archive_name(SharedString::from(archive_name.as_str()));
     ui.set_show_install_tree_menu(false);
     ui.set_show_install_dialog(true);
 }

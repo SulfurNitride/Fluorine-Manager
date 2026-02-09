@@ -36,6 +36,7 @@ use crate::overwrite::OverwriteManager;
 /// A long TTL is safe and eliminates repeated metadata round-trips.
 const TTL: Duration = Duration::from_secs(86400 * 365); // ~1 year
 const BLOCK_SIZE: u32 = 512;
+type OpenFileMap = HashMap<u64, (PathBuf, bool, String)>;
 
 /// Cached uid/gid to avoid repeated syscalls in attr helpers.
 struct UidGid {
@@ -64,7 +65,7 @@ pub struct Mo2Filesystem {
     /// Write manager (points to staging dir while mounted)
     overwrite: Arc<OverwriteManager>,
     /// Open file handles: fh -> (real_path, writable, relative_vfs_path)
-    open_files: Arc<Mutex<HashMap<u64, (PathBuf, bool, String)>>>,
+    open_files: Arc<Mutex<OpenFileMap>>,
     /// Next file handle (atomic — no mutex needed)
     next_fh: Arc<AtomicU64>,
     /// Origin label for files written through the VFS
@@ -127,7 +128,7 @@ impl Mo2Filesystem {
         FileAttr {
             ino,
             size,
-            blocks: (size + BLOCK_SIZE as u64 - 1) / BLOCK_SIZE as u64,
+            blocks: size.div_ceil(BLOCK_SIZE as u64),
             atime: mtime,
             mtime,
             ctime: mtime,
@@ -168,10 +169,8 @@ impl Mo2Filesystem {
             if components.len() == 1 {
                 children.remove(&normalized);
                 display_names.remove(&normalized);
-            } else {
-                if let Some(child) = children.get_mut(&normalized) {
-                    Self::remove_node(child, &components[1..]);
-                }
+            } else if let Some(child) = children.get_mut(&normalized) {
+                Self::remove_node(child, &components[1..]);
             }
         }
     }
@@ -393,19 +392,15 @@ impl Filesystem for Mo2Filesystem {
 
             let mut idx: i64 = 0;
 
-            if offset <= idx {
-                if reply.add(ino, idx + 1, ".", &TTL, &dot_attr, 0) {
-                    reply.ok();
-                    return;
-                }
+            if offset <= idx && reply.add(ino, idx + 1, ".", &TTL, &dot_attr, 0) {
+                reply.ok();
+                return;
             }
             idx += 1;
 
-            if offset <= idx {
-                if reply.add(1, idx + 1, "..", &TTL, &dotdot_attr, 0) {
-                    reply.ok();
-                    return;
-                }
+            if offset <= idx && reply.add(1, idx + 1, "..", &TTL, &dotdot_attr, 0) {
+                reply.ok();
+                return;
             }
             idx += 1;
 
@@ -586,6 +581,7 @@ impl Filesystem for Mo2Filesystem {
             match std::fs::OpenOptions::new()
                 .write(true)
                 .create(true)
+                .truncate(false)
                 .open(&real_path)
             {
                 Ok(mut file) => {

@@ -16,7 +16,8 @@ dirs.workspace = true
 regex.workspace = true
 tempfile.workspace = true
 quick-xml.workspace = true
-nak_rust = { git = "https://github.com/SulfurNitride/NaK", default-features = false, features = ["core"] }
+nak_rust = { git = "https://github.com/SulfurNitride/NaK", default-features = false, features = ["core", "installer"] }
+ureq = { version = "2.12", features = ["json"] }
 
 [dev-dependencies]
 tempfile.workspace = true

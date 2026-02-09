@@ -776,7 +776,7 @@ mod tests {
         // Check that the conditional file was included
         assert!(actions
             .iter()
-            .any(|a| a.source == PathBuf::from("bonus/lod.dds")));
+            .any(|a| a.source == std::path::Path::new("bonus/lod.dds")));
     }
 
     #[test]
@@ -791,7 +791,7 @@ mod tests {
         assert_eq!(actions.len(), 3);
         assert!(!actions
             .iter()
-            .any(|a| a.source == PathBuf::from("bonus/lod.dds")));
+            .any(|a| a.source == std::path::Path::new("bonus/lod.dds")));
     }
 
     #[test]
