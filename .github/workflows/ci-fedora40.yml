@@ -74,7 +74,8 @@ jobs:
           set -euo pipefail
 
           has_libloot=false
-          if [ -f "${LIBLOOT_PREFIX}/lib64/pkgconfig/libloot.pc" ] || [ -f "${LIBLOOT_PREFIX}/lib/pkgconfig/libloot.pc" ]; then
+          if { [ -f "${LIBLOOT_PREFIX}/lib64/pkgconfig/libloot.pc" ] && [ -f "${LIBLOOT_PREFIX}/lib64/libloot.so" ]; } || \
+             { [ -f "${LIBLOOT_PREFIX}/lib/pkgconfig/libloot.pc" ] && [ -f "${LIBLOOT_PREFIX}/lib/libloot.so" ]; }; then
             has_libloot=true
           fi
 
@@ -90,6 +91,28 @@ jobs:
               -DCMAKE_INSTALL_PREFIX="${LIBLOOT_PREFIX}"
             cmake --build /tmp/libloot/build --parallel
             cmake --install /tmp/libloot/build
+          fi
+
+          # Ensure pkg-config metadata exists (lootcli currently uses pkg_check_modules).
+          if [ -d "${LIBLOOT_PREFIX}/lib64" ]; then
+            LIBDIR="${LIBLOOT_PREFIX}/lib64"
+          else
+            LIBDIR="${LIBLOOT_PREFIX}/lib"
+          fi
+          mkdir -p "${LIBDIR}/pkgconfig"
+          if [ ! -f "${LIBDIR}/pkgconfig/libloot.pc" ]; then
+            cat > "${LIBDIR}/pkgconfig/libloot.pc" <<EOF
+prefix=${LIBLOOT_PREFIX}
+exec_prefix=\${prefix}
+libdir=${LIBDIR}
+includedir=\${prefix}/include
+
+Name: libloot
+Description: LOOT C++ API library
+Version: 0.29.0
+Libs: -L\${libdir} -lloot
+Cflags: -I\${includedir}
+EOF
           fi
 
       - name: Export libloot paths
