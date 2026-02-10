@@ -30,8 +30,9 @@ jobs:
             ccache \
             pkgconf-pkg-config \
             tomlplusplus-devel \
-            libloot-devel \
             boost-devel \
+            sqlite-devel \
+            tinyxml2-devel \
             spdlog-devel \
             fuse3-devel \
             lz4-devel zlib-devel libzstd-devel bzip2-devel xz-devel \
@@ -40,6 +41,22 @@ jobs:
             qt6-qtbase-devel \
             qt6-qtwebengine-devel \
             qt6-qtwebsockets-devel
+
+      - name: Build and install libloot
+        run: |
+          git clone --depth 1 https://github.com/loot/libloot.git /tmp/libloot
+          cmake -S /tmp/libloot -B /tmp/libloot/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DBUILD_TESTING=OFF
+          cmake --build /tmp/libloot/build --parallel
+          cmake --install /tmp/libloot/build
+
+          if [ -d /usr/local/lib64/pkgconfig ]; then
+            echo "PKG_CONFIG_PATH=/usr/local/lib64/pkgconfig:${PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+          else
+            echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+          fi
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
