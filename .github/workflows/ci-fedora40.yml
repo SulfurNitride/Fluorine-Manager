@@ -108,13 +108,17 @@ jobs:
           RUNDIR="$(dirname "${MODORG_BIN}")"
           STAGE_DIR="${GITHUB_WORKSPACE}/artifact"
           rm -rf "${STAGE_DIR}"
-          mkdir -p "${STAGE_DIR}"
+          mkdir -p "${STAGE_DIR}/plugins" "${STAGE_DIR}/dlls"
 
-          # Base runtime layout from the organizer output directory.
-          cp -a "${RUNDIR}/." "${STAGE_DIR}/"
-
-          # Ensure plugin folder exists.
-          mkdir -p "${STAGE_DIR}/plugins"
+          # Minimal portable payload (match local artifact style).
+          cp -f "${RUNDIR}/ModOrganizer" "${STAGE_DIR}/ModOrganizer"
+          if [ -f "${RUNDIR}/umu-run" ]; then
+            cp -f "${RUNDIR}/umu-run" "${STAGE_DIR}/umu-run"
+            chmod +x "${STAGE_DIR}/umu-run" || true
+          fi
+          if [ -f "${RUNDIR}/README-PORTABLE.txt" ]; then
+            cp -f "${RUNDIR}/README-PORTABLE.txt" "${STAGE_DIR}/README-PORTABLE.txt"
+          fi
 
           # Gather built plugin .so files (game plugins, tools, installers, previews, etc.).
           find build/libs -type f \( \
@@ -132,26 +136,56 @@ jobs:
             -name 'librunner.so' \
           \) -exec cp -f {} "${STAGE_DIR}/plugins/" \;
 
-          # Ensure umu-run and 7z runtime are present if produced outside the copied runtime dir.
-          if [ ! -f "${STAGE_DIR}/umu-run" ]; then
-            UMU_PATH="$(find build -type f -name umu-run | head -n1 || true)"
-            if [ -n "${UMU_PATH}" ]; then
-              cp -f "${UMU_PATH}" "${STAGE_DIR}/umu-run"
-              chmod +x "${STAGE_DIR}/umu-run" || true
-            fi
+          # Python plugin payload used by this port.
+          [ -f build/src/src/plugins/libplugin_python.so ] && \
+            cp -f build/src/src/plugins/libplugin_python.so "${STAGE_DIR}/plugins/" || true
+          [ -f build/src/src/plugins/lzokay.py ] && \
+            cp -f build/src/src/plugins/lzokay.py "${STAGE_DIR}/plugins/" || true
+          [ -f build/src/src/plugins/winreg.py ] && \
+            cp -f build/src/src/plugins/winreg.py "${STAGE_DIR}/plugins/" || true
+          [ -f build/src/src/plugins/pyCfg.py ] && \
+            cp -f build/src/src/plugins/pyCfg.py "${STAGE_DIR}/plugins/" || true
+          [ -f build/src/src/plugins/DDSPreview.py ] && \
+            cp -f build/src/src/plugins/DDSPreview.py "${STAGE_DIR}/plugins/" || true
+          [ -f build/src/src/plugins/FNISPatches.py ] && \
+            cp -f build/src/src/plugins/FNISPatches.py "${STAGE_DIR}/plugins/" || true
+          [ -f build/src/src/plugins/FNISTool.py ] && \
+            cp -f build/src/src/plugins/FNISTool.py "${STAGE_DIR}/plugins/" || true
+          [ -f build/src/src/plugins/FNISToolReset.py ] && \
+            cp -f build/src/src/plugins/FNISToolReset.py "${STAGE_DIR}/plugins/" || true
+          [ -f build/src/src/plugins/Form43Checker.py ] && \
+            cp -f build/src/src/plugins/Form43Checker.py "${STAGE_DIR}/plugins/" || true
+          [ -f build/src/src/plugins/ScriptExtenderPluginChecker.py ] && \
+            cp -f build/src/src/plugins/ScriptExtenderPluginChecker.py "${STAGE_DIR}/plugins/" || true
+          [ -d build/src/src/plugins/basic_games ] && \
+            cp -a build/src/src/plugins/basic_games "${STAGE_DIR}/plugins/" || true
+          [ -d build/src/src/plugins/data ] && \
+            cp -a build/src/src/plugins/data "${STAGE_DIR}/plugins/" || true
+          [ -d build/src/src/plugins/libs ] && \
+            cp -a build/src/src/plugins/libs "${STAGE_DIR}/plugins/" || true
+          [ -d build/src/src/plugins/dlls ] && \
+            cp -a build/src/src/plugins/dlls "${STAGE_DIR}/plugins/" || true
+
+          # 7z runtime.
+          if [ -f "${RUNDIR}/dlls/7z.so" ]; then
+            cp -f "${RUNDIR}/dlls/7z.so" "${STAGE_DIR}/dlls/7z.so"
+          else
+            SO7="$(find build -type f -name 7z.so | head -n1 || true)"
+            [ -n "${SO7}" ] && cp -f "${SO7}" "${STAGE_DIR}/dlls/7z.so" || true
+          fi
+          if [ -f "${STAGE_DIR}/dlls/7z.so" ]; then
+            cp -f "${STAGE_DIR}/dlls/7z.so" "${STAGE_DIR}/dlls/7zip.dll"
           fi
 
-          if [ ! -f "${STAGE_DIR}/dlls/7z.so" ]; then
-            mkdir -p "${STAGE_DIR}/dlls"
-            SO7="$(find build -type f -name 7z.so | head -n1 || true)"
-            if [ -n "${SO7}" ]; then
-              cp -f "${SO7}" "${STAGE_DIR}/dlls/7z.so"
-              cp -f "${SO7}" "${STAGE_DIR}/dlls/7zip.dll"
-            fi
-          fi
+          # Strip symbols to keep artifact size close to local portable builds.
+          strip --strip-unneeded "${STAGE_DIR}/ModOrganizer" || true
+          find "${STAGE_DIR}/plugins" -type f -name "*.so" -exec strip --strip-unneeded {} \; || true
+          find "${STAGE_DIR}/dlls" -type f -name "*.so" -exec strip --strip-unneeded {} \; || true
 
           echo "Artifact contents:"
           find "${STAGE_DIR}" -maxdepth 3 -type f | sort
+          echo "Artifact size:"
+          du -sh "${STAGE_DIR}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
