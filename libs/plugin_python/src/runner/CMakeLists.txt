@@ -23,8 +23,9 @@ target_link_libraries(runner PUBLIC mo2::uibase PRIVATE pybind11::embed pybind11
 target_include_directories(runner PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(runner PRIVATE RUNNER_BUILD)
 if(NOT WIN32 AND Python_SHARED_LIBRARY)
+  get_filename_component(_pylib_name "${Python_SHARED_LIBRARY}" NAME)
   target_compile_definitions(runner PRIVATE
-    MO2_PYTHON_SHARED_LIBRARY="${Python_SHARED_LIBRARY}")
+    MO2_PYTHON_SHARED_LIBRARY="${_pylib_name}")
 endif()
 
 # proxy will install runner

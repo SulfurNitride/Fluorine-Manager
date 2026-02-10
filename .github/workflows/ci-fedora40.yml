@@ -307,6 +307,78 @@ jobs:
                 "${STAGE_DIR}/plugins/FNISTool.py" \
                 "${STAGE_DIR}/plugins/FNISToolReset.py" || true
 
+          # ---- Portable Python runtime ----
+          # Bundle a self-contained Python so the artifact works on distros
+          # that ship a different Python version (or none at all).
+          PY="$(command -v python3.13 || command -v python3)"
+          PY_VER="$("${PY}" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+          PY_STDLIB="$("${PY}" -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')"
+          PY_DYNLOAD="$("${PY}" -c 'import sysconfig; print(sysconfig.get_path("platstdlib"))')/lib-dynload"
+
+          # 4a. Create pythoncore.zip (stdlib as .pyc, ~8-12 MB)
+          mkdir -p "${STAGE_DIR}/plugins/plugin_python/libs"
+          "${PY}" libs/plugin_python/src/proxy/build_pythoncore.py \
+              "${STAGE_DIR}/plugins/plugin_python/libs/pythoncore.zip" || true
+
+          # 4b. Bundle C extension modules (lib-dynload/*.so)
+          mkdir -p "${STAGE_DIR}/plugins/plugin_python/libs/lib-dynload"
+          if [ -d "${PY_DYNLOAD}" ]; then
+            cp -f "${PY_DYNLOAD}"/*.cpython-*.so \
+                "${STAGE_DIR}/plugins/plugin_python/libs/lib-dynload/" 2>/dev/null || true
+          fi
+
+          # 4c. Create portable Python home directory structure
+          mkdir -p "${STAGE_DIR}/python/lib/python${PY_VER}"
+          # Symlink pythoncore.zip so PYTHONHOME finds it
+          ln -sf "../../plugins/plugin_python/libs/pythoncore.zip" \
+              "${STAGE_DIR}/python/lib/python${PY_VER}/pythoncore.zip" 2>/dev/null || true
+          # Copy os.py (needed by Python init before zip import is configured)
+          cp -f "${PY_STDLIB}/os.py" "${STAGE_DIR}/python/lib/python${PY_VER}/" 2>/dev/null || true
+          # Copy _collections_abc.py and other bootstrap modules
+          for _mod in os.py _collections_abc.py abc.py io.py _sitebuiltins.py stat.py \
+                      posixpath.py genericpath.py _bootsubprocess.py site.py \
+                      codecs.py encodings/__init__.py encodings/aliases.py \
+                      encodings/utf_8.py encodings/ascii.py encodings/latin_1.py; do
+            _dir="$(dirname "${_mod}")"
+            mkdir -p "${STAGE_DIR}/python/lib/python${PY_VER}/${_dir}"
+            cp -f "${PY_STDLIB}/${_mod}" \
+                "${STAGE_DIR}/python/lib/python${PY_VER}/${_mod}" 2>/dev/null || true
+          done
+          # Also copy lib-dynload into the python home so Python can find them
+          ln -sf "../../../plugins/plugin_python/libs/lib-dynload" \
+              "${STAGE_DIR}/python/lib/python${PY_VER}/lib-dynload" 2>/dev/null || true
+
+          # 4d. Install PyQt6, sip, and third-party packages
+          mkdir -p "${STAGE_DIR}/python/site-packages"
+          "${PY}" -m pip install --target "${STAGE_DIR}/python/site-packages" \
+              PyQt6-sip PyQt6 psutil vdf pyyaml 2>/dev/null || true
+
+          # 4e. Ensure plugin_python directory structure is complete
+          # (proxy expects dlls/ and libs/ subdirs under plugin_python/)
+          mkdir -p "${STAGE_DIR}/plugins/plugin_python/dlls"
+          # Move librunner.so into the correct subdirectory
+          if [ -f "${STAGE_DIR}/plugins/librunner.so" ]; then
+            mv -f "${STAGE_DIR}/plugins/librunner.so" \
+                "${STAGE_DIR}/plugins/plugin_python/dlls/librunner.so"
+          fi
+          # Move mobase.so into libs/ if it was staged elsewhere
+          MOBASE_SO="$(find build -type f -name 'mobase*.so' | head -n1 || true)"
+          if [ -n "${MOBASE_SO}" ] && [ ! -f "${STAGE_DIR}/plugins/plugin_python/libs/mobase.so" ]; then
+            cp -f "${MOBASE_SO}" "${STAGE_DIR}/plugins/plugin_python/libs/"
+          fi
+
+          # 4f. patchelf bundled Python extensions for relocatability
+          find "${STAGE_DIR}/plugins/plugin_python" -name "*.so" \
+              -exec patchelf --set-rpath '$ORIGIN:$ORIGIN/../../lib:$ORIGIN/../../../lib' {} \; 2>/dev/null || true
+          find "${STAGE_DIR}/python/site-packages" -name "*.so" \
+              -exec patchelf --set-rpath '$ORIGIN:$ORIGIN/../../lib:$ORIGIN/../../../lib' {} \; 2>/dev/null || true
+
+          echo "=== Python bundle contents ==="
+          find "${STAGE_DIR}/plugins/plugin_python" -type f | sort || true
+          find "${STAGE_DIR}/python" -type f | head -50 || true
+          echo "=== Python bundle size ==="
+          du -sh "${STAGE_DIR}/plugins/plugin_python" "${STAGE_DIR}/python" 2>/dev/null || true
+
           # 7z runtime.
           if [ -f "${RUNDIR}/dlls/7z.so" ]; then
             cp -f "${RUNDIR}/dlls/7z.so" "${STAGE_DIR}/dlls/7z.so"

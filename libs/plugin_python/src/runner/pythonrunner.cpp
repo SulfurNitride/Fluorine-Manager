@@ -102,6 +102,14 @@ namespace mo2::python {
 #endif
 #endif
 
+            // For portable builds, set PYTHONHOME so the interpreter finds the
+            // bundled stdlib instead of looking at system paths.
+            auto appDir = QCoreApplication::applicationDirPath();
+            auto pythonHome = appDir + "/python";
+            if (QDir(pythonHome).exists()) {
+                setenv("PYTHONHOME", pythonHome.toUtf8().constData(), 1);
+            }
+
             // Paths we want to prepend/append for MO2 plugin loading.
             auto paths = pythonPaths;
 

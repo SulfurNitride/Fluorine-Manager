@@ -161,10 +161,12 @@ bool ProxyPython::init(IOrganizer* moInfo)
             std::filesystem::path{IOrganizer::getPluginDataPath().toStdWString()}};
         m_Runner->initialize(paths);
 #else
-        // On Linux, pass plugin paths directly to the runner so interpreter startup
-        // keeps Python's default stdlib paths intact (required for encodings, etc.).
+        // On Linux, pass plugin paths directly to the runner.  Include
+        // pythoncore.zip (zipped stdlib) like Windows so the bundled
+        // portable runtime can find standard-library modules.
         std::vector<fs::path> paths{
-            libpath, std::filesystem::path{IOrganizer::getPluginDataPath().toStdWString()}};
+            libpath / "pythoncore.zip", libpath,
+            std::filesystem::path{IOrganizer::getPluginDataPath().toStdWString()}};
 
         // Allow portable builds to ship Python packages (e.g. PyQt6) next to the app.
         const auto appDir = fs::path(QCoreApplication::applicationDirPath().toStdWString());
