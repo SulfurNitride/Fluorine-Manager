@@ -408,7 +408,8 @@ jobs:
 
           # Make the bundle relocatable (remove CI-only absolute RUNPATHs).
           patchelf --set-rpath '$ORIGIN:$ORIGIN/lib:$ORIGIN/plugins' "${STAGE_DIR}/ModOrganizer" || true
-          find "${STAGE_DIR}/plugins" -type f -name "*.so" -exec patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/..' {} \; || true
+          find "${STAGE_DIR}/plugins" -maxdepth 1 -type f -name "*.so" -exec patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/..:$ORIGIN/dlls:$ORIGIN/plugin_python/dlls' {} \; || true
+          find "${STAGE_DIR}/plugins/plugin_python" -type f -name "*.so" -exec patchelf --set-rpath '$ORIGIN:$ORIGIN/..:$ORIGIN/../../lib:$ORIGIN/../../../lib' {} \; 2>/dev/null || true
           find "${STAGE_DIR}/lib" -type f -name "*.so*" -exec patchelf --set-rpath '$ORIGIN' {} \; || true
           copy_relocs="$(readelf -r "${STAGE_DIR}/ModOrganizer" | grep "R_X86_64_COPY" || true)"
           if [ -n "${copy_relocs}" ]; then
