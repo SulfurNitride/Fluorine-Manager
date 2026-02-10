@@ -81,9 +81,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /__w/.ccache
-          key: ccache-fedora41-${{ github.ref_name }}-${{ github.sha }}
+          key: ccache-fedora41-${{ hashFiles('CMakeLists.txt', 'src/**/CMakeLists.txt', 'libs/**/CMakeLists.txt', '.github/workflows/ci-fedora40.yml') }}
           restore-keys: |
-            ccache-fedora41-${{ github.ref_name }}-
             ccache-fedora41-
 
       - name: Rust cache

@@ -102,6 +102,15 @@ target_compile_definitions(organizer PRIVATE
     FUSE_USE_VERSION=35)
 
 if(NOT WIN32)
+    # Enforce PIE for the main executable to avoid copy relocations against Qt
+    # symbols on newer glibc/toolchain combinations.
+    include(CheckPIESupported)
+    check_pie_supported()
+    set_target_properties(organizer PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_link_options(organizer PRIVATE -pie)
+endif()
+
+if(NOT WIN32)
     option(MO2_BUNDLE_7Z_RUNTIME "Copy a Linux 7z module into organizer/dlls" ON)
     option(MO2_STAGE_PYTHON_PLUGIN_PAYLOAD
         "Stage shipped Python plugin payload into build plugins/ for Linux runs" ON)
