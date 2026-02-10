@@ -51,6 +51,7 @@ jobs:
           cmake -S /tmp/libloot/cpp -B /tmp/libloot/build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=ON \
+            -DLIBLOOT_INSTALL_DOCS=OFF \
             -DBUILD_TESTING=OFF
           cmake --build /tmp/libloot/build --parallel
           cmake --install /tmp/libloot/build
