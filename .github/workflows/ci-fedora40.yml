@@ -88,7 +88,12 @@ jobs:
             -DBUILD_PLUGIN_PYTHON=OFF
 
       - name: Build
-        run: cmake --build build --parallel
+        run: |
+          cmake --build build --parallel --verbose || {
+            echo "Parallel build failed; retrying with -j1 for clearer error output..."
+            cmake --build build --verbose -- -j1
+            exit 1
+          }
 
       - name: ccache stats
         if: always()
