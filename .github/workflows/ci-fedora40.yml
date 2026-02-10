@@ -29,6 +29,7 @@ jobs:
             git which file binutils \
             ccache \
             pkgconf-pkg-config \
+            tomlplusplus-devel \
             boost-devel \
             spdlog-devel \
             fuse3-devel \
