@@ -67,10 +67,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /__w/.ccache
-          key: ccache-fedora40-${{ github.ref_name }}-${{ github.sha }}
+          key: ccache-fedora41-${{ github.ref_name }}-${{ github.sha }}
           restore-keys: |
-            ccache-fedora40-${{ github.ref_name }}-
-            ccache-fedora40-
+            ccache-fedora41-${{ github.ref_name }}-
+            ccache-fedora41-
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -94,6 +94,71 @@ jobs:
             cmake --build build --verbose -- -j1
             exit 1
           }
+
+      - name: Stage runtime artifact
+        run: |
+          set -euo pipefail
+
+          MODORG_BIN="$(find build -type f -name ModOrganizer | head -n1 || true)"
+          if [ -z "${MODORG_BIN}" ]; then
+            echo "ModOrganizer binary was not found under build/"
+            exit 1
+          fi
+
+          RUNDIR="$(dirname "${MODORG_BIN}")"
+          STAGE_DIR="${GITHUB_WORKSPACE}/artifact"
+          rm -rf "${STAGE_DIR}"
+          mkdir -p "${STAGE_DIR}"
+
+          # Base runtime layout from the organizer output directory.
+          rsync -a "${RUNDIR}/" "${STAGE_DIR}/"
+
+          # Ensure plugin folder exists.
+          mkdir -p "${STAGE_DIR}/plugins"
+
+          # Gather built plugin .so files (game plugins, tools, installers, previews, etc.).
+          find build/libs -type f \( \
+            -name 'libgame_*.so' -o \
+            -name 'libinstaller_*.so' -o \
+            -name 'libpreview_*.so' -o \
+            -name 'libdiagnose_*.so' -o \
+            -name 'libcheck_*.so' -o \
+            -name 'libtool_*.so' -o \
+            -name 'libinieditor.so' -o \
+            -name 'libinibakery.so' -o \
+            -name 'libbsa_extractor.so' -o \
+            -name 'libbsa_packer.so' -o \
+            -name 'libproxy.so' -o \
+            -name 'librunner.so' \
+          \) -exec cp -f {} "${STAGE_DIR}/plugins/" \;
+
+          # Ensure umu-run and 7z runtime are present if produced outside the copied runtime dir.
+          if [ ! -f "${STAGE_DIR}/umu-run" ]; then
+            UMU_PATH="$(find build -type f -name umu-run | head -n1 || true)"
+            if [ -n "${UMU_PATH}" ]; then
+              cp -f "${UMU_PATH}" "${STAGE_DIR}/umu-run"
+              chmod +x "${STAGE_DIR}/umu-run" || true
+            fi
+          fi
+
+          if [ ! -f "${STAGE_DIR}/dlls/7z.so" ]; then
+            mkdir -p "${STAGE_DIR}/dlls"
+            SO7="$(find build -type f -name 7z.so | head -n1 || true)"
+            if [ -n "${SO7}" ]; then
+              cp -f "${SO7}" "${STAGE_DIR}/dlls/7z.so"
+              cp -f "${SO7}" "${STAGE_DIR}/dlls/7zip.dll"
+            fi
+          fi
+
+          echo "Artifact contents:"
+          find "${STAGE_DIR}" -maxdepth 3 -type f | sort
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluorine-manager-fedora41-runtime
+          path: artifact/
+          if-no-files-found: error
 
       - name: ccache stats
         if: always()
