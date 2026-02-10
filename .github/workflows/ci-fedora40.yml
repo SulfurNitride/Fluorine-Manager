@@ -238,14 +238,23 @@ jobs:
           copy_if_found "$(find build -type f -name 'libarchive.so' | head -n1 || true)"
           copy_if_found "$(find build -type f -name 'liblibbsarch.so' | head -n1 || true)"
           copy_if_found "$(find libs/nak_ffi/target/release -type f -name 'libnak_ffi.so' | head -n1 || true)"
-          for so in libuibase.so libuibase.so.* libarchive.so libarchive.so.* liblibbsarch.so liblibbsarch.so.* libnak_ffi.so; do
+          copy_if_found "$(find libs/bsa_ffi/target/release -type f -name 'libbsa_ffi.so' | head -n1 || true)"
+          for so in libuibase.so libuibase.so.* libarchive.so libarchive.so.* liblibbsarch.so liblibbsarch.so.* libnak_ffi.so libbsa_ffi.so; do
             find build libs -type f -name "${so}" -exec cp -f {} "${STAGE_DIR}/lib/" \; 2>/dev/null || true
           done
 
           # Bundle distro libs with versioned SONAMEs that may be missing on target systems.
-          for needed in $(readelf -d "${RUNDIR}/ModOrganizer" | awk -F'[][]' '/NEEDED/ {print $2}'); do
+          # Scan both the main binary and plugin .so files for NEEDED entries.
+          _all_binaries="${RUNDIR}/ModOrganizer"
+          for _so in $(find build/libs -maxdepth 5 -name '*.so' -type f 2>/dev/null); do
+            _all_binaries="${_all_binaries} ${_so}"
+          done
+          _needed_libs="$(for _bin in ${_all_binaries}; do
+            readelf -d "${_bin}" 2>/dev/null | awk -F'[][]' '/NEEDED/ {print $2}'
+          done | sort -u)"
+          for needed in ${_needed_libs}; do
             case "${needed}" in
-              libboost_program_options.so*|libboost_thread.so*|libfmt.so*|libfuse3.so*)
+              libboost_program_options.so*|libboost_thread.so*|libfmt.so*|libfuse3.so*|libpython3*.so*)
                 src="$(ldconfig -p | awk -v so="${needed}" '$1 == so {print $NF; exit}' || true)"
                 if [ -z "${src}" ]; then
                   src="$(find /usr/lib64 /usr/lib -type f -name "${needed}" 2>/dev/null | head -n1 || true)"
