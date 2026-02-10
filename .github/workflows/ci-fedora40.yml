@@ -101,18 +101,18 @@ jobs:
           fi
           mkdir -p "${LIBDIR}/pkgconfig"
           if [ ! -f "${LIBDIR}/pkgconfig/libloot.pc" ]; then
-            cat > "${LIBDIR}/pkgconfig/libloot.pc" <<EOF
-prefix=${LIBLOOT_PREFIX}
-exec_prefix=\${prefix}
-libdir=${LIBDIR}
-includedir=\${prefix}/include
-
-Name: libloot
-Description: LOOT C++ API library
-Version: 0.29.0
-Libs: -L\${libdir} -lloot
-Cflags: -I\${includedir}
-EOF
+            printf '%s\n' \
+              "prefix=${LIBLOOT_PREFIX}" \
+              'exec_prefix=${prefix}' \
+              "libdir=${LIBDIR}" \
+              'includedir=${prefix}/include' \
+              '' \
+              'Name: libloot' \
+              'Description: LOOT C++ API library' \
+              'Version: 0.29.0' \
+              'Libs: -L${libdir} -lloot' \
+              'Cflags: -I${includedir}' \
+              > "${LIBDIR}/pkgconfig/libloot.pc"
           fi
 
       - name: Export libloot paths
