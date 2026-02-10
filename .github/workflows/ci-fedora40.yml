@@ -140,12 +140,14 @@ jobs:
           set -euo pipefail
           if [ -d "${LIBLOOT_PREFIX}/lib64/pkgconfig" ]; then
             echo "PKG_CONFIG_PATH=${LIBLOOT_PREFIX}/lib64/pkgconfig:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
-            echo "CMAKE_PREFIX_PATH=${LIBLOOT_PREFIX}/lib64/cmake:${CMAKE_PREFIX_PATH:-}" >> "$GITHUB_ENV"
+            echo "CMAKE_PREFIX_PATH=${LIBLOOT_PREFIX}:${CMAKE_PREFIX_PATH:-}" >> "$GITHUB_ENV"
             echo "LD_LIBRARY_PATH=${LIBLOOT_PREFIX}/lib64:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+            echo "LIBLOOT_CMAKE_DIR=${LIBLOOT_PREFIX}/lib64/cmake/libloot" >> "$GITHUB_ENV"
           else
             echo "PKG_CONFIG_PATH=${LIBLOOT_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
-            echo "CMAKE_PREFIX_PATH=${LIBLOOT_PREFIX}/lib/cmake:${CMAKE_PREFIX_PATH:-}" >> "$GITHUB_ENV"
+            echo "CMAKE_PREFIX_PATH=${LIBLOOT_PREFIX}:${CMAKE_PREFIX_PATH:-}" >> "$GITHUB_ENV"
             echo "LD_LIBRARY_PATH=${LIBLOOT_PREFIX}/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+            echo "LIBLOOT_CMAKE_DIR=${LIBLOOT_PREFIX}/lib/cmake/libloot" >> "$GITHUB_ENV"
           fi
 
       - name: Restore ccache
@@ -165,10 +167,16 @@ jobs:
 
       - name: Configure
         run: |
+          test -f "${LIBLOOT_CMAKE_DIR}/liblootConfig.cmake" || {
+            echo "libloot config missing at ${LIBLOOT_CMAKE_DIR}"
+            find "${LIBLOOT_PREFIX}" -maxdepth 5 -type f -name '*loot*cmake' -o -name 'libloot.pc' | sort || true
+          }
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_PREFIX_PATH="${LIBLOOT_PREFIX};${CMAKE_PREFIX_PATH:-}" \
+            -Dlibloot_DIR="${LIBLOOT_CMAKE_DIR}" \
             -DBUILD_PLUGIN_PYTHON=ON
 
       - name: Build
