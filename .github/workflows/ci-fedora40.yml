@@ -24,8 +24,28 @@ jobs:
 
       - name: Install system deps
         run: |
-          dnf -y update
-          dnf -y install \
+          set -euo pipefail
+
+          dnf_retry() {
+            local max=3
+            local n=1
+            while true; do
+              if "$@"; then
+                return 0
+              fi
+              if [ "$n" -ge "$max" ]; then
+                return 1
+              fi
+              n=$((n + 1))
+              echo "dnf command failed, cleaning metadata/cache and retrying (${n}/${max})..."
+              dnf -y clean all || true
+              rm -rf /var/cache/libdnf5/* || true
+              sleep 3
+            done
+          }
+
+          dnf_retry dnf -y --refresh update
+          dnf_retry dnf -y install \
             gcc gcc-c++ make \
             cmake ninja-build \
             git which file binutils patchelf \
