@@ -1,4 +1,4 @@
-# Fluorine Manager (C++ / Qt Core)
+# Fluorine Manager
 
 Fluorine Manager an attempt at porting MO2 to linux with FUSE as the VFS system.
 
