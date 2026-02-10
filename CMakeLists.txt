@@ -6,6 +6,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Prevent COPY relocations against protected Qt6 symbols on modern distros
+# (Fedora 41+, etc.) that set GNU_PROPERTY_1_NEEDED_INDIRECT_EXTERN_ACCESS.
+include(CheckCXXCompilerFlag)
+check_cxx_compiler_flag(-mno-direct-extern-access HAS_NO_DIRECT_EXTERN_ACCESS)
+if(HAS_NO_DIRECT_EXTERN_ACCESS)
+    add_compile_options(-mno-direct-extern-access)
+endif()
+
 option(BUILD_TESTING "Build tests" OFF)
 option(BUILD_NAK_FFI "Build NaK Rust FFI library" ON)
 option(BUILD_BSA_FFI "Build Rust BSA/BA2 FFI library" ON)
