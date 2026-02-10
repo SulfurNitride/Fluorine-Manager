@@ -15,6 +15,8 @@ jobs:
     env:
       CCACHE_DIR: /__w/.ccache
       CMAKE_BUILD_TYPE: RelWithDebInfo
+      LIBLOOT_PREFIX: /__w/.cache/libloot
+      LIBLOOT_REF: main
 
     steps:
       - name: Checkout
@@ -60,21 +62,39 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Restore libloot cache
+        id: libloot-cache
+        uses: actions/cache@v4
+        with:
+          path: /__w/.cache/libloot
+          key: libloot-fedora41-${{ env.LIBLOOT_REF }}
+
       - name: Build and install libloot
+        if: steps.libloot-cache.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 https://github.com/loot/libloot.git /tmp/libloot
+          rm -rf "${LIBLOOT_PREFIX}"
+          mkdir -p "${LIBLOOT_PREFIX}"
+          git clone --depth 1 --branch "${LIBLOOT_REF}" https://github.com/loot/libloot.git /tmp/libloot
           cmake -S /tmp/libloot/cpp -B /tmp/libloot/build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=ON \
             -DLIBLOOT_INSTALL_DOCS=OFF \
-            -DBUILD_TESTING=OFF
+            -DBUILD_TESTING=OFF \
+            -DCMAKE_INSTALL_PREFIX="${LIBLOOT_PREFIX}"
           cmake --build /tmp/libloot/build --parallel
           cmake --install /tmp/libloot/build
 
-          if [ -d /usr/local/lib64/pkgconfig ]; then
-            echo "PKG_CONFIG_PATH=/usr/local/lib64/pkgconfig:${PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+      - name: Export libloot paths
+        run: |
+          set -euo pipefail
+          if [ -d "${LIBLOOT_PREFIX}/lib64/pkgconfig" ]; then
+            echo "PKG_CONFIG_PATH=${LIBLOOT_PREFIX}/lib64/pkgconfig:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
+            echo "CMAKE_PREFIX_PATH=${LIBLOOT_PREFIX}/lib64/cmake:${CMAKE_PREFIX_PATH:-}" >> "$GITHUB_ENV"
+            echo "LD_LIBRARY_PATH=${LIBLOOT_PREFIX}/lib64:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
           else
-            echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+            echo "PKG_CONFIG_PATH=${LIBLOOT_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
+            echo "CMAKE_PREFIX_PATH=${LIBLOOT_PREFIX}/lib/cmake:${CMAKE_PREFIX_PATH:-}" >> "$GITHUB_ENV"
+            echo "LD_LIBRARY_PATH=${LIBLOOT_PREFIX}/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
           fi
 
       - name: Restore ccache
