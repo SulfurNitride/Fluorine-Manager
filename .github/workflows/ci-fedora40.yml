@@ -160,10 +160,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /__w/.ccache
-          key: ccache-fedora41-v2-${{ github.ref_name }}
+          key: ccache-fedora41-v3-${{ github.ref_name }}-${{ github.sha }}
           restore-keys: |
-            ccache-fedora41-v2-
-            ccache-fedora41-
+            ccache-fedora41-v3-${{ github.ref_name }}-
+            ccache-fedora41-v3-
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
