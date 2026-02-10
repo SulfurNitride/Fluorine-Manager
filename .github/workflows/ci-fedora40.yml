@@ -42,6 +42,9 @@ jobs:
             qt6-qtwebengine-devel \
             qt6-qtwebsockets-devel
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Build and install libloot
         run: |
           git clone --depth 1 https://github.com/loot/libloot.git /tmp/libloot
@@ -57,9 +60,6 @@ jobs:
           else
             echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
           fi
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
 
       - name: Restore ccache
         uses: actions/cache@v4
