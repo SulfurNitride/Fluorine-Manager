@@ -6,6 +6,8 @@ See [`docs/FAQ.md`](https://github.com/SulfurNitride/Fluorine-Manager/blob/main/
 
 If you would like to help you can join the discord for the prereleases. [NaK Discord](https://discord.gg/9JWQzSeUWt) 
 
+If you want to support the things I put out, I do have a [Ko-Fi](https://ko-fi.com/sulfurnitride) I will never charge money for any of my content.
+
 ## Status
 
 Currently, FUSE VFS is working, Root Building is working as well. NaK for prefix generation and deps install. Conflicts system. NXM handling. 
