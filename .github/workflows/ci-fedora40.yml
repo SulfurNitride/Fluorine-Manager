@@ -30,6 +30,7 @@ jobs:
             ccache \
             pkgconf-pkg-config \
             tomlplusplus-devel \
+            libloot-devel \
             boost-devel \
             spdlog-devel \
             fuse3-devel \
