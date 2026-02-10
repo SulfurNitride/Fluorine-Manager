@@ -310,15 +310,15 @@ jobs:
           done
 
           # linuxdeploy uses desktop metadata for launcher/AppImage generation.
-          cat > "${APPDIR}/ModOrganizer.desktop" <<'EOF'
-[Desktop Entry]
-Type=Application
-Name=ModOrganizer
-Exec=ModOrganizer
-Icon=modorganizer
-Categories=Game;
-Terminal=false
-EOF
+          printf '%s\n' \
+            '[Desktop Entry]' \
+            'Type=Application' \
+            'Name=ModOrganizer' \
+            'Exec=ModOrganizer' \
+            'Icon=modorganizer' \
+            'Categories=Game;' \
+            'Terminal=false' \
+            > "${APPDIR}/ModOrganizer.desktop"
           cp -f src/src/resources/mo_icon.png "${APPDIR}/modorganizer.png"
 
           export PATH="${GITHUB_WORKSPACE}/tools:${PATH}"
