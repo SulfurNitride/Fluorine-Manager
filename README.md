@@ -47,6 +47,5 @@ cmake --build build -j"$(nproc)"
 ```text
 libs/      MO2 sub-libraries
 src/       Main organizer source
-patches/   Linux-specific patches
 docs/      Notes and tracking
 ```
