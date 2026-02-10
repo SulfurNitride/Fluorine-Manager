@@ -173,6 +173,34 @@ jobs:
             libs/nak_ffi
             libs/bsa_ffi
 
+      - name: Preflight AppImage tooling
+        run: |
+          set -euo pipefail
+          mkdir -p "${GITHUB_WORKSPACE}/tools"
+          if [ ! -f "${GITHUB_WORKSPACE}/tools/linuxdeploy-x86_64.AppImage" ]; then
+            curl -L --retry 3 --retry-all-errors \
+              -o "${GITHUB_WORKSPACE}/tools/linuxdeploy-x86_64.AppImage" \
+              https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          fi
+          if [ ! -f "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt-x86_64.AppImage" ]; then
+            curl -L --retry 3 --retry-all-errors \
+              -o "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt-x86_64.AppImage" \
+              https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          fi
+          chmod +x "${GITHUB_WORKSPACE}/tools/linuxdeploy-x86_64.AppImage" \
+                   "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt-x86_64.AppImage"
+          rm -rf "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt.AppDir" "${GITHUB_WORKSPACE}/tools/squashfs-root"
+          (cd "${GITHUB_WORKSPACE}/tools" && ./linuxdeploy-plugin-qt-x86_64.AppImage --appimage-extract >/dev/null)
+          mv "${GITHUB_WORKSPACE}/tools/squashfs-root" "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt.AppDir"
+          chmod +x "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt.AppDir/AppRun"
+          ln -sf "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt.AppDir/AppRun" \
+                 "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt"
+          # Prevent linuxdeploy from auto-discovering and executing the raw plugin AppImage.
+          chmod -x "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt-x86_64.AppImage"
+
+          # Fast failure if plugin runtime is broken in this container image.
+          "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt.AppDir/AppRun" --plugin-api-version
+
       - name: Configure
         run: |
           test -f "${LIBLOOT_CMAKE_DIR}/liblootConfig.cmake" || {
@@ -208,12 +236,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "${GITHUB_WORKSPACE}/tools"
-          curl -L --retry 3 --retry-all-errors \
-            -o "${GITHUB_WORKSPACE}/tools/linuxdeploy-x86_64.AppImage" \
-            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          curl -L --retry 3 --retry-all-errors \
-            -o "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt-x86_64.AppImage" \
-            https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          if [ ! -f "${GITHUB_WORKSPACE}/tools/linuxdeploy-x86_64.AppImage" ]; then
+            curl -L --retry 3 --retry-all-errors \
+              -o "${GITHUB_WORKSPACE}/tools/linuxdeploy-x86_64.AppImage" \
+              https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          fi
+          if [ ! -f "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt-x86_64.AppImage" ]; then
+            curl -L --retry 3 --retry-all-errors \
+              -o "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt-x86_64.AppImage" \
+              https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          fi
           chmod +x "${GITHUB_WORKSPACE}/tools/linuxdeploy-x86_64.AppImage" \
                    "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt-x86_64.AppImage"
           # In container CI, executing plugin AppImages directly can fail (exit 127).
@@ -224,6 +256,7 @@ jobs:
           chmod +x "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt.AppDir/AppRun"
           ln -sf "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt.AppDir/AppRun" \
                  "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt"
+          chmod -x "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt-x86_64.AppImage"
 
       - name: Build AppImage
         run: |
