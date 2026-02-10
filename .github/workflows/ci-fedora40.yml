@@ -45,7 +45,7 @@ jobs:
       - name: Build and install libloot
         run: |
           git clone --depth 1 https://github.com/loot/libloot.git /tmp/libloot
-          cmake -S /tmp/libloot -B /tmp/libloot/build -G Ninja \
+          cmake -S /tmp/libloot/cpp -B /tmp/libloot/build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=ON \
             -DBUILD_TESTING=OFF
