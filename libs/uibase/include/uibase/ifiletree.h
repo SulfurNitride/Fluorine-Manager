@@ -413,7 +413,11 @@ public:  // Iterators:
     using difference_type   = typename V::difference_type;
     using value_type        = U;
     using pointer           = U;
-    using iterator_category = typename V::iterator_category;
+    // This wrapper only implements forward-iterator operations.
+    using iterator_category = std::forward_iterator_tag;
+#if __cplusplus > 201703L
+    using iterator_concept  = std::forward_iterator_tag;
+#endif
 
     friend bool operator==(convert_iterator a, convert_iterator b)
     {
