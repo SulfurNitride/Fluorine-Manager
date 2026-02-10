@@ -26,7 +26,7 @@ jobs:
           dnf -y install \
             gcc gcc-c++ make \
             cmake ninja-build \
-            git which file binutils \
+            git which file binutils patchelf \
             ccache \
             pkgconf-pkg-config \
             tomlplusplus-devel \
@@ -38,7 +38,7 @@ jobs:
             fuse3-devel \
             lz4-devel zlib-devel libzstd-devel bzip2-devel xz-devel \
             openssl-devel libcurl-devel \
-            python3 python3-pip \
+            python3 python3-devel python3-pip pybind11-devel \
             qt6-qtbase-devel \
             qt6-qtwebengine-devel \
             qt6-qtwebsockets-devel
@@ -85,7 +85,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DBUILD_PLUGIN_PYTHON=OFF
+            -DBUILD_PLUGIN_PYTHON=ON
 
       - name: Build
         run: |
@@ -108,7 +108,7 @@ jobs:
           RUNDIR="$(dirname "${MODORG_BIN}")"
           STAGE_DIR="${GITHUB_WORKSPACE}/artifact"
           rm -rf "${STAGE_DIR}"
-          mkdir -p "${STAGE_DIR}/plugins" "${STAGE_DIR}/dlls"
+          mkdir -p "${STAGE_DIR}/plugins" "${STAGE_DIR}/dlls" "${STAGE_DIR}/lib"
 
           # Minimal portable payload (match local artifact style).
           cp -f "${RUNDIR}/ModOrganizer" "${STAGE_DIR}/ModOrganizer"
@@ -119,6 +119,29 @@ jobs:
           if [ -f "${RUNDIR}/README-PORTABLE.txt" ]; then
             cp -f "${RUNDIR}/README-PORTABLE.txt" "${STAGE_DIR}/README-PORTABLE.txt"
           fi
+
+          # Bundle non-system runtime shared libraries needed at startup.
+          copy_if_found() {
+            local src="$1"
+            [ -n "${src}" ] && [ -f "${src}" ] && cp -f "${src}" "${STAGE_DIR}/lib/" || true
+          }
+
+          copy_if_found "$(find build -type f -name 'libuibase.so' | head -n1 || true)"
+          copy_if_found "$(find build -type f -name 'liblibbsarch.so' | head -n1 || true)"
+          copy_if_found "$(find libs/nak_ffi/target/release -type f -name 'libnak_ffi.so' | head -n1 || true)"
+
+          # Bundle distro libs with versioned SONAMEs that may be missing on target systems.
+          for needed in $(readelf -d "${RUNDIR}/ModOrganizer" | awk -F'[][]' '/NEEDED/ {print $2}'); do
+            case "${needed}" in
+              libboost_program_options.so*|libboost_thread.so*|libfmt.so*|libfuse3.so*)
+                src="$(ldconfig -p | awk -v so="${needed}" '$1 == so {print $NF; exit}')"
+                if [ -z "${src}" ]; then
+                  src="$(find /usr/lib64 /usr/lib -type f -name "${needed}" 2>/dev/null | head -n1 || true)"
+                fi
+                copy_if_found "${src}"
+                ;;
+            esac
+          done
 
           # Gather built plugin .so files (game plugins, tools, installers, previews, etc.).
           find build/libs -type f \( \
@@ -170,6 +193,11 @@ jobs:
           if [ -f "${STAGE_DIR}/dlls/7z.so" ]; then
             cp -f "${STAGE_DIR}/dlls/7z.so" "${STAGE_DIR}/dlls/7zip.dll"
           fi
+
+          # Make the bundle relocatable (remove CI-only absolute RUNPATHs).
+          patchelf --set-rpath '$ORIGIN:$ORIGIN/lib:$ORIGIN/plugins' "${STAGE_DIR}/ModOrganizer" || true
+          find "${STAGE_DIR}/plugins" -type f -name "*.so" -exec patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/..' {} \; || true
+          find "${STAGE_DIR}/lib" -type f -name "*.so*" -exec patchelf --set-rpath '$ORIGIN' {} \; || true
 
           # Strip symbols to keep artifact size close to local portable builds.
           strip --strip-unneeded "${STAGE_DIR}/ModOrganizer" || true
