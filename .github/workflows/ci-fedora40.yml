@@ -1,4 +1,4 @@
-name: ci-fedora40
+name: ci-fedora41
 
 on:
   push:
@@ -10,7 +10,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      image: fedora:40
+      image: fedora:41
 
     env:
       CCACHE_DIR: /__w/.ccache
