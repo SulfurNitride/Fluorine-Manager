@@ -43,6 +43,20 @@ jobs:
             qt6-qtwebengine-devel \
             qt6-qtwebsockets-devel
 
+      - name: Ensure Python SIP tooling
+        run: |
+          set -euo pipefail
+          # Prefer distro packages when available.
+          dnf -y install python3-sip python3-pyqt6-sip || true
+
+          # Fallback to pip for images where sipbuild is not packaged.
+          if ! python3 -c "import sipbuild.tools.module" >/dev/null 2>&1; then
+            python3 -m pip install --upgrade pip
+            python3 -m pip install sip
+          fi
+
+          python3 -c "import sipbuild.tools.module; print('sipbuild OK')"
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
