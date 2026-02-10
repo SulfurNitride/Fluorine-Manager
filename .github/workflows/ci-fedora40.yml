@@ -33,6 +33,7 @@ jobs:
             boost-devel \
             sqlite-devel \
             tinyxml2-devel \
+            fontconfig-devel \
             spdlog-devel \
             fuse3-devel \
             lz4-devel zlib-devel libzstd-devel bzip2-devel xz-devel \
