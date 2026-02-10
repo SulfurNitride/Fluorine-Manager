@@ -16,6 +16,8 @@ jobs:
       CCACHE_DIR: /__w/.ccache
       CCACHE_BASEDIR: /__w/Fluorine-Manager/Fluorine-Manager
       CCACHE_COMPILERCHECK: content
+      CCACHE_NOHASHDIR: "1"
+      CCACHE_SLOPPINESS: time_macros
       CCACHE_MAXSIZE: 2G
       CMAKE_BUILD_TYPE: RelWithDebInfo
       LIBLOOT_PREFIX: /__w/.cache/libloot
@@ -161,10 +163,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /__w/.ccache
-          key: ccache-fedora41-v3-${{ github.ref_name }}-${{ github.sha }}
+          key: ccache-fedora41-v4-${{ github.ref_name }}-${{ hashFiles('CMakeLists.txt', '**/CMakeLists.txt', '**/*.cmake', '.github/workflows/ci-fedora40.yml') }}
           restore-keys: |
-            ccache-fedora41-v3-${{ github.ref_name }}-
-            ccache-fedora41-v3-
+            ccache-fedora41-v4-${{ github.ref_name }}-
+            ccache-fedora41-v4-
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -363,6 +365,8 @@ jobs:
           export PATH="${GITHUB_WORKSPACE}/tools:${PATH}"
           export LINUXDEPLOY_PLUGIN_QT="${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt.AppDir/AppRun"
           export QMAKE=/usr/bin/qmake6
+          # Fedora 41+ ships RELR-enabled ELF libs; linuxdeploy's bundled strip is too old.
+          export NO_STRIP=1
           export EXTRA_QT_PLUGINS="waylandcompositor;wayland-decoration-client;wayland-graphics-integration-client;wayland-shell-integration"
 
           "${GITHUB_WORKSPACE}/tools/linuxdeploy-x86_64.AppImage" --appimage-extract-and-run \
