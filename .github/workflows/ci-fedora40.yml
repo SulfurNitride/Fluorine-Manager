@@ -71,13 +71,17 @@ jobs:
           # Prefer distro packages when available.
           dnf -y install python3-sip python3-pyqt6-sip || true
 
-          # Fallback to pip for images where sipbuild is not packaged.
-          if ! python3 -c "import sipbuild.tools.module" >/dev/null 2>&1; then
-            python3 -m pip install --upgrade pip
-            python3 -m pip install sip
-          fi
-
-          python3 -c "import sipbuild.tools.module; print('sipbuild OK')"
+          # Ensure sipbuild exists for whichever interpreter CMake may choose.
+          for py in python3 python3.13 python3.12; do
+            if command -v "${py}" >/dev/null 2>&1; then
+              if ! "${py}" -c "import sipbuild.tools.module" >/dev/null 2>&1; then
+                "${py}" -m ensurepip --upgrade || true
+                "${py}" -m pip install --upgrade pip
+                "${py}" -m pip install sip
+              fi
+              "${py}" -c "import sipbuild.tools.module; print('${py}: sipbuild OK')"
+            fi
+          done
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -140,12 +144,12 @@ jobs:
           set -euo pipefail
           if [ -d "${LIBLOOT_PREFIX}/lib64/pkgconfig" ]; then
             echo "PKG_CONFIG_PATH=${LIBLOOT_PREFIX}/lib64/pkgconfig:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
-            echo "CMAKE_PREFIX_PATH=${LIBLOOT_PREFIX}:${CMAKE_PREFIX_PATH:-}" >> "$GITHUB_ENV"
+            echo "CMAKE_PREFIX_PATH=${LIBLOOT_PREFIX}" >> "$GITHUB_ENV"
             echo "LD_LIBRARY_PATH=${LIBLOOT_PREFIX}/lib64:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
             echo "LIBLOOT_CMAKE_DIR=${LIBLOOT_PREFIX}/lib64/cmake/libloot" >> "$GITHUB_ENV"
           else
             echo "PKG_CONFIG_PATH=${LIBLOOT_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
-            echo "CMAKE_PREFIX_PATH=${LIBLOOT_PREFIX}:${CMAKE_PREFIX_PATH:-}" >> "$GITHUB_ENV"
+            echo "CMAKE_PREFIX_PATH=${LIBLOOT_PREFIX}" >> "$GITHUB_ENV"
             echo "LD_LIBRARY_PATH=${LIBLOOT_PREFIX}/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
             echo "LIBLOOT_CMAKE_DIR=${LIBLOOT_PREFIX}/lib/cmake/libloot" >> "$GITHUB_ENV"
           fi
@@ -171,12 +175,21 @@ jobs:
             echo "libloot config missing at ${LIBLOOT_CMAKE_DIR}"
             find "${LIBLOOT_PREFIX}" -maxdepth 5 -type f -name '*loot*cmake' -o -name 'libloot.pc' | sort || true
           }
+          pkg-config --exists libloot || {
+            echo "pkg-config cannot find libloot"
+            echo "PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-}"
+            find "${LIBLOOT_PREFIX}" -maxdepth 6 -type f -name 'libloot.pc' | sort || true
+            exit 1
+          }
+
+          PY_FOR_CMAKE="$(command -v python3.13 || command -v python3)"
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_PREFIX_PATH="${LIBLOOT_PREFIX};${CMAKE_PREFIX_PATH:-}" \
+            -DCMAKE_PREFIX_PATH="${LIBLOOT_PREFIX}" \
             -Dlibloot_DIR="${LIBLOOT_CMAKE_DIR}" \
+            -DPython3_EXECUTABLE="${PY_FOR_CMAKE}" \
             -DBUILD_PLUGIN_PYTHON=ON
 
       - name: Build
@@ -221,6 +234,9 @@ jobs:
           copy_if_found "$(find build -type f -name 'libuibase.so' | head -n1 || true)"
           copy_if_found "$(find build -type f -name 'liblibbsarch.so' | head -n1 || true)"
           copy_if_found "$(find libs/nak_ffi/target/release -type f -name 'libnak_ffi.so' | head -n1 || true)"
+          for so in libuibase.so libuibase.so.* liblibbsarch.so liblibbsarch.so.* libnak_ffi.so; do
+            find build libs -type f -name "${so}" -exec cp -f {} "${STAGE_DIR}/lib/" \; 2>/dev/null || true
+          done
 
           # Bundle distro libs with versioned SONAMEs that may be missing on target systems.
           for needed in $(readelf -d "${RUNDIR}/ModOrganizer" | awk -F'[][]' '/NEEDED/ {print $2}'); do
@@ -274,6 +290,9 @@ jobs:
             cp -a build/src/src/plugins/libs "${STAGE_DIR}/plugins/" || true
           [ -d build/src/src/plugins/dlls ] && \
             cp -a build/src/src/plugins/dlls "${STAGE_DIR}/plugins/" || true
+          rm -f "${STAGE_DIR}/plugins/FNISPatches.py" \
+                "${STAGE_DIR}/plugins/FNISTool.py" \
+                "${STAGE_DIR}/plugins/FNISToolReset.py" || true
 
           # 7z runtime.
           if [ -f "${RUNDIR}/dlls/7z.so" ]; then
@@ -290,6 +309,11 @@ jobs:
           patchelf --set-rpath '$ORIGIN:$ORIGIN/lib:$ORIGIN/plugins' "${STAGE_DIR}/ModOrganizer" || true
           find "${STAGE_DIR}/plugins" -type f -name "*.so" -exec patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/..' {} \; || true
           find "${STAGE_DIR}/lib" -type f -name "*.so*" -exec patchelf --set-rpath '$ORIGIN' {} \; || true
+          if readelf -r "${STAGE_DIR}/ModOrganizer" | grep -q "R_X86_64_COPY"; then
+            echo "ERROR: ModOrganizer contains COPY relocations (will fail on modern glibc)."
+            readelf -r "${STAGE_DIR}/ModOrganizer" | grep "R_X86_64_COPY" || true
+            exit 1
+          fi
 
           # Strip symbols to keep artifact size close to local portable builds.
           strip --strip-unneeded "${STAGE_DIR}/ModOrganizer" || true
