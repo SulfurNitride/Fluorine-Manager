@@ -32,7 +32,7 @@ jobs:
             boost-devel \
             spdlog-devel \
             fuse3-devel \
-            lz4-devel zlib-devel zstd-devel bzip2-devel xz-devel \
+            lz4-devel zlib-devel libzstd-devel bzip2-devel xz-devel \
             openssl-devel libcurl-devel \
             python3 python3-pip \
             qt6-qtbase-devel \
