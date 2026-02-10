@@ -10,6 +10,9 @@
 #include "thread_utils.h"
 #include <log.h>
 #include <report.h>
+#include <QDir>
+#include <QFileInfo>
+#include <QLibraryInfo>
 #include <QString>
 
 #ifdef _WIN32
@@ -29,6 +32,64 @@ thread_local std::terminate_handler g_prevTerminateHandler      = nullptr;
 
 int run(int argc, char* argv[]);
 
+namespace
+{
+void configureQtPluginPathsEarly(const char* argv0)
+{
+#ifdef _WIN32
+  Q_UNUSED(argv0);
+#else
+  QString appDir;
+  if (argv0 != nullptr && *argv0 != '\0') {
+    QFileInfo fi(QString::fromLocal8Bit(argv0));
+    if (fi.isRelative()) {
+      fi.setFile(QDir::current().absoluteFilePath(fi.filePath()));
+    }
+    appDir = fi.absolutePath();
+  }
+
+  QStringList pluginCandidates;
+  const QString envPluginPath = qEnvironmentVariable("QT_PLUGIN_PATH");
+  if (!envPluginPath.isEmpty()) {
+    for (const auto& path : envPluginPath.split(':', Qt::SkipEmptyParts)) {
+      pluginCandidates.append(QDir::cleanPath(path));
+    }
+  }
+
+  if (!appDir.isEmpty()) {
+    pluginCandidates << QDir::cleanPath(appDir + "/plugins");
+    pluginCandidates << QDir::cleanPath(appDir + "/qt6/plugins");
+  }
+
+  pluginCandidates << QLibraryInfo::path(QLibraryInfo::PluginsPath);
+  pluginCandidates << "/usr/lib/qt6/plugins";
+  pluginCandidates << "/usr/lib64/qt6/plugins";
+
+  QStringList existingPluginPaths;
+  for (const auto& candidate : pluginCandidates) {
+    if (!candidate.isEmpty() && QDir(candidate).exists() &&
+        !existingPluginPaths.contains(candidate)) {
+      existingPluginPaths.append(candidate);
+    }
+  }
+
+  if (!existingPluginPaths.isEmpty() && !qEnvironmentVariableIsSet("QT_PLUGIN_PATH")) {
+    qputenv("QT_PLUGIN_PATH", existingPluginPaths.join(':').toUtf8());
+  }
+
+  if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM_PLUGIN_PATH")) {
+    for (const auto& pluginPath : existingPluginPaths) {
+      const QString platformsPath = QDir(pluginPath).filePath("platforms");
+      if (QDir(platformsPath).exists()) {
+        qputenv("QT_QPA_PLATFORM_PLUGIN_PATH", platformsPath.toUtf8());
+        break;
+      }
+    }
+  }
+#endif
+}
+}  // namespace
+
 int main(int argc, char* argv[])
 {
   const int r = run(argc, argv);
@@ -38,6 +99,8 @@ int main(int argc, char* argv[])
 
 int run(int argc, char* argv[])
 {
+  configureQtPluginPathsEarly((argc > 0) ? argv[0] : nullptr);
+
 #ifndef _WIN32
   if (argc >= 3 && QString(argv[1]) == "nxm-handle") {
     QString nxmUrl = QString::fromLocal8Bit(argv[2]);

@@ -620,12 +620,33 @@ DWORD spawn(const SpawnParameters& sp, HANDLE& processHandle)
 #else
 int spawn(const SpawnParameters& sp, pid_t& processId)
 {
-  const QString bin = MOBase::normalizePathForHost(sp.binary.absoluteFilePath());
+  QString bin = MOBase::normalizePathForHost(sp.binary.absoluteFilePath());
   QString cwd       = MOBase::normalizePathForHost(sp.currentDirectory.absolutePath());
 
   QStringList argList;
   if (!sp.arguments.isEmpty()) {
     argList = QProcess::splitCommand(sp.arguments);
+  }
+
+  // Recover from accidental path splitting where an unquoted binary path with
+  // spaces was split into "binary + leading arguments".
+  if (!bin.isEmpty() && !QFileInfo::exists(bin) && !argList.isEmpty()) {
+    QString recovered = bin;
+    QStringList rest  = argList;
+
+    while (!rest.isEmpty()) {
+      recovered += " " + rest.front();
+      rest.pop_front();
+      if (QFileInfo::exists(recovered)) {
+        MOBase::log::warn(
+            "recovered split executable path '{}' from binary '{}' and argument "
+            "tokens",
+            recovered, bin);
+        bin     = recovered;
+        argList = rest;
+        break;
+      }
+    }
   }
 
   if (cwd.isEmpty()) {

@@ -105,6 +105,8 @@ if(NOT WIN32)
     option(MO2_BUNDLE_7Z_RUNTIME "Copy a Linux 7z module into organizer/dlls" ON)
     option(MO2_STAGE_PYTHON_PLUGIN_PAYLOAD
         "Stage shipped Python plugin payload into build plugins/ for Linux runs" ON)
+    option(MO2_BUNDLE_PYQT6_RUNTIME
+        "Bundle PyQt6 into organizer/python/site-packages for portable Python plugins" ON)
     option(MO2_STAGE_INSTALLER_WIZARD
         "Stage installer_wizard python plugin payload (requires additional wizard package)" OFF)
     set(MO2_7Z_SO_PATH "" CACHE FILEPATH
@@ -112,6 +114,24 @@ if(NOT WIN32)
     set(MO2_UPSTREAM_PLUGIN_PAYLOAD_DIR
         "$ENV{HOME}/Downloads/Mod.Organizer-2.5.2/plugins"
         CACHE PATH "Optional path to upstream MO2 plugins folder for pyCfg.py/data payload")
+    set(MO2_BUNDLED_PYTHON_SITEPACKAGES_SUBDIR
+        "python/site-packages"
+        CACHE STRING "Relative subdirectory under organizer for bundled Python site-packages")
+
+    set(MO2_PYQT6_IMPORT_OK 1)
+    set(MO2_PYTHON_PURELIB_DIR_RUNTIME "")
+    if(Python_EXECUTABLE)
+        execute_process(
+            COMMAND "${Python_EXECUTABLE}" -c "import sysconfig; print(sysconfig.get_paths().get('purelib', ''))"
+            OUTPUT_VARIABLE MO2_PYTHON_PURELIB_DIR_RUNTIME
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET)
+        execute_process(
+            COMMAND "${Python_EXECUTABLE}" -c "import importlib.util; raise SystemExit(0 if importlib.util.find_spec('PyQt6.QtCore') else 1)"
+            RESULT_VARIABLE MO2_PYQT6_IMPORT_OK
+            OUTPUT_QUIET
+            ERROR_QUIET)
+    endif()
 
     if(MO2_BUNDLE_7Z_RUNTIME)
         if(TARGET 7z)
@@ -131,7 +151,7 @@ if(NOT WIN32)
         endif()
     endif()
 
-    if(MO2_STAGE_PYTHON_PLUGIN_PAYLOAD)
+    if(MO2_STAGE_PYTHON_PLUGIN_PAYLOAD AND MO2_PYQT6_IMPORT_OK EQUAL 0)
         add_custom_command(TARGET organizer POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:organizer>/plugins/basic_games"
             COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:organizer>/plugins/data"
@@ -140,9 +160,6 @@ if(NOT WIN32)
                 "$<TARGET_FILE_DIR:organizer>/plugins/basic_games"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${CMAKE_SOURCE_DIR}/libs/preview_dds/src/DDSPreview.py"
-                "${CMAKE_SOURCE_DIR}/libs/fnistool/src/FNISPatches.py"
-                "${CMAKE_SOURCE_DIR}/libs/fnistool/src/FNISTool.py"
-                "${CMAKE_SOURCE_DIR}/libs/fnistool/src/FNISToolReset.py"
                 "${CMAKE_SOURCE_DIR}/libs/form43_checker/src/Form43Checker.py"
                 "${CMAKE_SOURCE_DIR}/libs/script_extender_plugin_checker/src/ScriptExtenderPluginChecker.py"
                 "${CMAKE_SOURCE_DIR}/libs/winreg.py"
@@ -184,6 +201,32 @@ if(NOT WIN32)
                     "${MO2_UPSTREAM_PLUGIN_PAYLOAD_DIR}/data"
                     "$<TARGET_FILE_DIR:organizer>/plugins/data")
         endif()
+    elseif(MO2_STAGE_PYTHON_PLUGIN_PAYLOAD)
+        message(STATUS "[MO2] Skipping Python plugin payload: PyQt6.QtCore is not importable")
+        add_custom_command(TARGET organizer POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E rm -f
+                "$<TARGET_FILE_DIR:organizer>/plugins/pyCfg.py"
+                "$<TARGET_FILE_DIR:organizer>/plugins/DDSPreview.py"
+                "$<TARGET_FILE_DIR:organizer>/plugins/FNISPatches.py"
+                "$<TARGET_FILE_DIR:organizer>/plugins/FNISTool.py"
+                "$<TARGET_FILE_DIR:organizer>/plugins/FNISToolReset.py"
+                "$<TARGET_FILE_DIR:organizer>/plugins/Form43Checker.py"
+                "$<TARGET_FILE_DIR:organizer>/plugins/ScriptExtenderPluginChecker.py")
+        add_custom_command(TARGET organizer POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E rm -rf
+                "$<TARGET_FILE_DIR:organizer>/plugins/basic_games"
+                "$<TARGET_FILE_DIR:organizer>/plugins/data")
+    endif()
+
+    if(MO2_BUNDLE_PYQT6_RUNTIME AND MO2_PYQT6_IMPORT_OK EQUAL 0 AND
+       EXISTS "${MO2_PYTHON_PURELIB_DIR_RUNTIME}/PyQt6")
+        add_custom_command(TARGET organizer POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:organizer>/${MO2_BUNDLED_PYTHON_SITEPACKAGES_SUBDIR}"
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${MO2_PYTHON_PURELIB_DIR_RUNTIME}/PyQt6"
+                "$<TARGET_FILE_DIR:organizer>/${MO2_BUNDLED_PYTHON_SITEPACKAGES_SUBDIR}/PyQt6")
+        message(STATUS "[MO2] Will bundle PyQt6 runtime from ${MO2_PYTHON_PURELIB_DIR_RUNTIME}")
     endif()
 
     # ---------- Bundle umu-run (Python zipapp) ----------

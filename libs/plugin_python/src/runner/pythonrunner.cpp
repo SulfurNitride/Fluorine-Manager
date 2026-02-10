@@ -174,11 +174,20 @@ namespace mo2::python {
         py::module_ sys  = py::module_::import("sys");
         py::list sysPath = sys.attr("path");
 
-        // Converting to QStringList for Qt::CaseInsensitive and because .index()
-        // raise an exception:
-        const QStringList currentPath = sysPath.cast<QStringList>();
-        if (!currentPath.contains(folder, Qt::CaseInsensitive)) {
-            sysPath.insert(0, folder);
+        const QString normalizedFolder = QDir::cleanPath(folder);
+        bool present                   = false;
+        for (const py::handle& item : sysPath) {
+            const QString current =
+                QDir::cleanPath(QString::fromStdString(py::str(item).cast<std::string>()));
+            if (QString::compare(current, normalizedFolder, Qt::CaseInsensitive) == 0) {
+                present = true;
+                break;
+            }
+        }
+
+        if (!present) {
+            sysPath.insert(0, py::str(normalizedFolder.toStdString()));
+            MOBase::log::debug("python: prepended '{}' to sys.path", normalizedFolder);
         }
     }
 
@@ -211,15 +220,21 @@ namespace mo2::python {
             py::dict moduleDict;
 
             if (identifier.endsWith(".py")) {
-                py::object mainModule = py::module_::import("__main__");
+                // Load single-file plugins as proper modules so sibling imports
+                // (e.g. FNISPatches -> FNISTool) resolve consistently.
+                ensureFolderInPath(idInfo.absolutePath());
 
-                // make a copy, otherwise we might end up calling the createPlugin() or
-                // createPlugins() function multiple time
-                py::dict moduleNamespace = mainModule.attr("__dict__").attr("copy")();
-
-                std::string temp = ToString(identifier);
-                py::eval_file(temp, moduleNamespace).is_none();
-                moduleDict = moduleNamespace;
+                const std::string moduleName = ToString(idInfo.completeBaseName());
+                py::dict modules             = py::module_::import("sys").attr("modules");
+                if (modules.contains(moduleName)) {
+                    py::module_ prev = modules[py::str(moduleName)];
+                    py::module_(prev).reload();
+                    moduleDict = prev.attr("__dict__");
+                }
+                else {
+                    moduleDict =
+                        py::module_::import(moduleName.c_str()).attr("__dict__");
+                }
             }
             else {
                 // Retrieve the module name:

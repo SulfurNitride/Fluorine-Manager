@@ -147,12 +147,6 @@ jobs:
             cp -f build/src/src/plugins/pyCfg.py "${STAGE_DIR}/plugins/" || true
           [ -f build/src/src/plugins/DDSPreview.py ] && \
             cp -f build/src/src/plugins/DDSPreview.py "${STAGE_DIR}/plugins/" || true
-          [ -f build/src/src/plugins/FNISPatches.py ] && \
-            cp -f build/src/src/plugins/FNISPatches.py "${STAGE_DIR}/plugins/" || true
-          [ -f build/src/src/plugins/FNISTool.py ] && \
-            cp -f build/src/src/plugins/FNISTool.py "${STAGE_DIR}/plugins/" || true
-          [ -f build/src/src/plugins/FNISToolReset.py ] && \
-            cp -f build/src/src/plugins/FNISToolReset.py "${STAGE_DIR}/plugins/" || true
           [ -f build/src/src/plugins/Form43Checker.py ] && \
             cp -f build/src/src/plugins/Form43Checker.py "${STAGE_DIR}/plugins/" || true
           [ -f build/src/src/plugins/ScriptExtenderPluginChecker.py ] && \

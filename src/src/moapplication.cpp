@@ -34,7 +34,9 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "thread_utils.h"
 #include "tutorialmanager.h"
 #include <QDebug>
+#include <QDir>
 #include <QFile>
+#include <QLibraryInfo>
 #include <QPainter>
 #include <QProxyStyle>
 #include <QSslSocket>
@@ -147,6 +149,58 @@ void addDllsToPath()
 }
 
 #ifndef _WIN32
+void configureQtPluginPaths()
+{
+  QStringList pluginCandidates;
+
+  // Keep existing explicit user overrides first.
+  const QString envPluginPath = qEnvironmentVariable("QT_PLUGIN_PATH");
+  if (!envPluginPath.isEmpty()) {
+    for (const auto& path : envPluginPath.split(':', Qt::SkipEmptyParts)) {
+      pluginCandidates.append(QDir::cleanPath(path));
+    }
+  }
+
+  const QString appDir = QCoreApplication::applicationDirPath();
+  pluginCandidates << QDir::cleanPath(appDir + "/plugins");
+  pluginCandidates << QDir::cleanPath(appDir + "/qt6/plugins");
+  pluginCandidates << QLibraryInfo::path(QLibraryInfo::PluginsPath);
+  pluginCandidates << "/usr/lib/qt6/plugins";
+  pluginCandidates << "/usr/lib64/qt6/plugins";
+
+  QStringList existingPluginPaths;
+  for (const auto& candidate : pluginCandidates) {
+    if (!candidate.isEmpty() && QDir(candidate).exists() &&
+        !existingPluginPaths.contains(candidate)) {
+      existingPluginPaths.append(candidate);
+    }
+  }
+
+  if (!existingPluginPaths.isEmpty()) {
+    QCoreApplication::setLibraryPaths(existingPluginPaths +
+                                      QCoreApplication::libraryPaths());
+
+    if (!qEnvironmentVariableIsSet("QT_PLUGIN_PATH")) {
+      qputenv("QT_PLUGIN_PATH", existingPluginPaths.join(':').toUtf8());
+    }
+  }
+
+  if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM_PLUGIN_PATH")) {
+    for (const auto& pluginPath : existingPluginPaths) {
+      const QString platformsPath = QDir(pluginPath).filePath("platforms");
+      if (QDir(platformsPath).exists()) {
+        qputenv("QT_QPA_PLATFORM_PLUGIN_PATH", platformsPath.toUtf8());
+        break;
+      }
+    }
+  }
+
+  if (!qEnvironmentVariable("QT_QPA_PLATFORM_PLUGIN_PATH").isEmpty()) {
+    log::debug("Qt platform plugins path: '{}'",
+               qEnvironmentVariable("QT_QPA_PLATFORM_PLUGIN_PATH"));
+  }
+}
+
 void configureQtWebEngineProcessPath()
 {
   if (qEnvironmentVariableIsSet("QTWEBENGINEPROCESS_PATH")) {
@@ -232,6 +286,7 @@ MOApplication::MOApplication(int& argc, char** argv) : QApplication(argc, argv)
   setStyleFile("");
   addDllsToPath();
 #ifndef _WIN32
+  configureQtPluginPaths();
   configureQtWebEngineProcessPath();
 #endif
 }

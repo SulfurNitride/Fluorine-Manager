@@ -165,6 +165,12 @@ bool ProxyPython::init(IOrganizer* moInfo)
         // keeps Python's default stdlib paths intact (required for encodings, etc.).
         std::vector<fs::path> paths{
             libpath, std::filesystem::path{IOrganizer::getPluginDataPath().toStdWString()}};
+
+        // Allow portable builds to ship Python packages (e.g. PyQt6) next to the app.
+        const auto appDir = fs::path(QCoreApplication::applicationDirPath().toStdWString());
+        paths.emplace_back(appDir / "python" / "site-packages");
+        paths.emplace_back(appDir / "python");
+
 #ifdef MO2_PYTHON_PURELIB_DIR
         if (std::strlen(MO2_PYTHON_PURELIB_DIR) > 0) {
             paths.emplace_back(MO2_PYTHON_PURELIB_DIR);
@@ -244,8 +250,11 @@ QStringList ProxyPython::pluginList(const QDir& pluginPath) const
         const QString baseName = info.fileName();
 
         if (info.isFile() && name.endsWith(".py")) {
-            // Compatibility shims staged on Linux; they are not MO2 plugins.
-            if (baseName == "winreg.py" || baseName == "lzokay.py") {
+            // Compatibility shims and disabled plugins staged on Linux; they are not
+            // loaded as MO2 plugins.
+            if (baseName == "winreg.py" || baseName == "lzokay.py" ||
+                baseName == "FNISPatches.py" || baseName == "FNISTool.py" ||
+                baseName == "FNISToolReset.py") {
                 continue;
             }
             result.append(name);
