@@ -216,7 +216,13 @@ jobs:
             https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
           chmod +x "${GITHUB_WORKSPACE}/tools/linuxdeploy-x86_64.AppImage" \
                    "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt-x86_64.AppImage"
-          ln -sf "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt-x86_64.AppImage" \
+          # In container CI, executing plugin AppImages directly can fail (exit 127).
+          # Extract once and expose AppRun as linuxdeploy-plugin-qt.
+          rm -rf "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt.AppDir" "${GITHUB_WORKSPACE}/tools/squashfs-root"
+          (cd "${GITHUB_WORKSPACE}/tools" && ./linuxdeploy-plugin-qt-x86_64.AppImage --appimage-extract >/dev/null)
+          mv "${GITHUB_WORKSPACE}/tools/squashfs-root" "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt.AppDir"
+          chmod +x "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt.AppDir/AppRun"
+          ln -sf "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt.AppDir/AppRun" \
                  "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt"
 
       - name: Build AppImage
@@ -322,7 +328,7 @@ jobs:
           cp -f src/src/resources/mo_icon.png "${APPDIR}/modorganizer.png"
 
           export PATH="${GITHUB_WORKSPACE}/tools:${PATH}"
-          export LINUXDEPLOY_PLUGIN_QT_APPIMAGE="${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt-x86_64.AppImage"
+          export LINUXDEPLOY_PLUGIN_QT="${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt.AppDir/AppRun"
           export QMAKE=/usr/bin/qmake6
           export EXTRA_QT_PLUGINS="waylandcompositor;wayland-decoration-client;wayland-graphics-integration-client;wayland-shell-integration"
 
