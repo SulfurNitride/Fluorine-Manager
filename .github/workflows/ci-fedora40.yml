@@ -1,0 +1,74 @@
+name: ci-fedora40
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:40
+
+    env:
+      CCACHE_DIR: /__w/.ccache
+      CMAKE_BUILD_TYPE: RelWithDebInfo
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          dnf -y update
+          dnf -y install \
+            gcc gcc-c++ make \
+            cmake ninja-build \
+            git which file binutils \
+            ccache \
+            pkgconf-pkg-config \
+            boost-devel \
+            spdlog-devel \
+            fuse3-devel \
+            lz4-devel zlib-devel zstd-devel bzip2-devel xz-devel \
+            openssl-devel libcurl-devel \
+            python3 python3-pip \
+            qt6-qtbase-devel \
+            qt6-qtwebengine-devel \
+            qt6-qtwebsockets-devel
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: /__w/.ccache
+          key: ccache-fedora40-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            ccache-fedora40-${{ github.ref_name }}-
+            ccache-fedora40-
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            libs/nak_ffi
+            libs/bsa_ffi
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DBUILD_PLUGIN_PYTHON=OFF
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: ccache stats
+        if: always()
+        run: ccache -sv || true
