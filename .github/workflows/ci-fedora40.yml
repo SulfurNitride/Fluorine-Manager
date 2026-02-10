@@ -69,20 +69,28 @@ jobs:
           path: /__w/.cache/libloot
           key: libloot-fedora41-${{ env.LIBLOOT_REF }}
 
-      - name: Build and install libloot
-        if: steps.libloot-cache.outputs.cache-hit != 'true'
+      - name: Ensure libloot is installed
         run: |
-          rm -rf "${LIBLOOT_PREFIX}"
-          mkdir -p "${LIBLOOT_PREFIX}"
-          git clone --depth 1 --branch "${LIBLOOT_REF}" https://github.com/loot/libloot.git /tmp/libloot
-          cmake -S /tmp/libloot/cpp -B /tmp/libloot/build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED_LIBS=ON \
-            -DLIBLOOT_INSTALL_DOCS=OFF \
-            -DBUILD_TESTING=OFF \
-            -DCMAKE_INSTALL_PREFIX="${LIBLOOT_PREFIX}"
-          cmake --build /tmp/libloot/build --parallel
-          cmake --install /tmp/libloot/build
+          set -euo pipefail
+
+          has_libloot=false
+          if [ -f "${LIBLOOT_PREFIX}/lib64/pkgconfig/libloot.pc" ] || [ -f "${LIBLOOT_PREFIX}/lib/pkgconfig/libloot.pc" ]; then
+            has_libloot=true
+          fi
+
+          if [ "${has_libloot}" != "true" ]; then
+            rm -rf "${LIBLOOT_PREFIX}" /tmp/libloot
+            mkdir -p "${LIBLOOT_PREFIX}"
+            git clone --depth 1 --branch "${LIBLOOT_REF}" https://github.com/loot/libloot.git /tmp/libloot
+            cmake -S /tmp/libloot/cpp -B /tmp/libloot/build -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DBUILD_SHARED_LIBS=ON \
+              -DLIBLOOT_INSTALL_DOCS=OFF \
+              -DBUILD_TESTING=OFF \
+              -DCMAKE_INSTALL_PREFIX="${LIBLOOT_PREFIX}"
+            cmake --build /tmp/libloot/build --parallel
+            cmake --install /tmp/libloot/build
+          fi
 
       - name: Export libloot paths
         run: |
