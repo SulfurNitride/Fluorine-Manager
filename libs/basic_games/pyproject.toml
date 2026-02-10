@@ -1,0 +1,59 @@
+# note: this file is for local development, currently the file is not used to build
+# the plugin
+[project]
+name = "basic-games"
+version = "0.1.0"
+description = ""
+authors = []
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.12,<4.0"
+dynamic = ["dependencies"]
+
+[tool.poetry]
+package-mode = false
+
+[tool.poetry.dependencies]
+psutil = "^5.8.0"
+vdf = "3.4"
+lzokay = "1.1.5"
+pyqt6 = "6.7.0"
+pyyaml = "^6.0.2"
+
+[tool.poetry.group.dev.dependencies]
+mobase-stubs = "^2.5.2"
+pyqt6 = "^6.7.0"
+pyright = "^1.1.402"
+ruff = "^0.12.2"
+types-psutil = "<6"
+poethepoet = "^0.36.0"
+
+[build-system]
+requires = ["poetry-core (>=2.0)"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poe.tasks]
+format-imports = "ruff check --select I . --fix"
+format-ruff = "ruff format ."
+format.sequence = ["format-imports", "format-ruff"]
+lint-ruff = "ruff check ."
+lint-ruff-format = "ruff format --check ."
+lint-pyright = "pyright ."
+lint.sequence = ["lint-ruff", "lint-ruff-format", "lint-pyright"]
+lint.ignore_fail = "return_non_zero"
+
+[tool.ruff.lint]
+extend-select = ["B", "Q", "I"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["PyQt6.QtCore.QModelIndex"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["mobase"]
+
+[tool.pyright]
+exclude = ["lib", "**/.*", "venv"]
+typeCheckingMode = "strict"
+reportMissingTypeStubs = true
+reportMissingModuleSource = false
+pythonPlatform = "Windows"

@@ -1,0 +1,17 @@
+{
+  "configurePresets": [
+    {
+      "binaryDir": "${sourceDir}/vsbuild",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "generator": "Visual Studio 17 2022",
+      "name": "vs2022-windows"
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "vs2022-windows",
+      "configurePreset": "vs2022-windows"
+    }
+  ],
+  "version": 4
+}

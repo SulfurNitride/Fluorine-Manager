@@ -1,0 +1,5 @@
+edit
+*.user
+/msbuild.log
+/*std*.log
+/*build

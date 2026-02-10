@@ -1,0 +1,79 @@
+name: Build UIBase
+
+on:
+  push:
+    branches: [master]
+    tags:
+      - "*"
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+env:
+  VCPKG_BINARY_SOURCES: ${{ vars.AZ_BLOB_VCPKG_URL != '' && format('clear;x-azblob,{0},{1},readwrite', vars.AZ_BLOB_VCPKG_URL, secrets.AZ_BLOB_SAS) || '' }}
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - name: Configure UIBase
+        id: configure-uibase
+        uses: ModOrganizer2/build-with-mob-action@master
+        with:
+          # skip build because we are going to build both Debug and RelWithDebInfo here
+          mo2-skip-build: true
+
+      # build both Debug and RelWithDebInfo for package
+      - name: Build UI Base
+        working-directory: ${{ steps.configure-uibase.outputs.working-directory }}
+        run: |
+          cmake --build vsbuild --config Debug --target uibase-tests --verbose
+          cmake --build vsbuild --config RelWithDebInfo --target uibase-tests --verbose
+
+      - name: Test UI Base
+        working-directory: ${{ steps.configure-uibase.outputs.working-directory }}
+        run: |
+          ctest --test-dir vsbuild -C Debug --output-on-failure
+          ctest --test-dir vsbuild -C RelWithDebInfo --output-on-failure
+
+      - name: Install UI Base
+        working-directory: ${{ steps.configure-uibase.outputs.working-directory }}
+        run: |
+          cmake --install vsbuild --config Debug
+          cmake --install vsbuild --config RelWithDebInfo
+
+      # this tests that UI Base can be properly used as a CMake package
+      - name: Test UI Base package
+        run: |
+          cmake -B build . "-DCMAKE_PREFIX_PATH=${env:QT_ROOT_DIR}\msvc2022_64;${{ github.workspace }}\install\lib\cmake\"
+          cmake --build build --config Debug
+          cmake --build build --config Release
+          cmake --build build --config RelWithDebInfo
+        working-directory: ${{ steps.configure-uibase.outputs.working-directory }}/tests/cmake
+
+      - name: Upload UI Base artifact
+        uses: actions/upload-artifact@master
+        with:
+          name: uibase
+          path: ./install
+
+  publish:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: windows-2022
+    permissions:
+      contents: write
+    steps:
+      - name: Download Artifact
+        uses: actions/download-artifact@master
+        with:
+          name: uibase
+          path: ./install
+
+      - name: Create UI Base archive
+        run: 7z a uibase_${{ github.ref_name }}.7z ./install/*
+
+      - name: Publish Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create --draft=false --notes="${{ github.ref_name }}" "${{ github.ref_name }}" ./uibase_${{ github.ref_name }}.7z

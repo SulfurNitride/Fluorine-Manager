@@ -1,0 +1,20 @@
+name: Build Preview BSA
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+env:
+  VCPKG_BINARY_SOURCES: clear;x-azblob,${{ vars.AZ_BLOB_VCPKG_URL }},${{ secrets.AZ_BLOB_SAS }},readwrite
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - name: Build Preview BSA
+        id: build-preview-bsa
+        uses: ModOrganizer2/build-with-mob-action@master
+        with:
+          mo2-dependencies: uibase bsatk

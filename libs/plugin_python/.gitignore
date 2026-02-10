@@ -1,0 +1,12 @@
+# build
+edit
+CMakeLists.txt.user
+/msbuild.log
+/*std*.log
+/*build
+
+# python
+tests/**/__pycache__
+
+# IDE
+.vscode

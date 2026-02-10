@@ -1,0 +1,9 @@
+edit
+.vscode
+CMakeLists.txt.user
+/msbuild.log
+/*std*.log
+/*build
+/src/uibasetests_en.ts
+/install
+/tests/cmake/build

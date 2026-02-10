@@ -1,0 +1,24 @@
+{
+  "dependencies": [
+    "asmjit",
+    "spdlog",
+    "libudis86",
+    "boost-algorithm",
+    "boost-any",
+    "boost-dll",
+    "boost-filesystem",
+    "boost-format",
+    "boost-interprocess",
+    "boost-headers",
+    "boost-locale",
+    "boost-multi-index",
+    "boost-thread",
+    "boost-predef"
+  ],
+  "features": {
+    "testing": {
+      "description": "Build USVFS tests.",
+      "dependencies": ["gtest"]
+    }
+  }
+}

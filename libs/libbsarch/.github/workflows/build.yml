@@ -1,0 +1,64 @@
+name: Build libbsarch
+
+on:
+  push:
+    branches: [master]
+    tags:
+      - "*"
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+env:
+  VCPKG_BINARY_SOURCES: clear;x-azblob,${{ vars.AZ_BLOB_VCPKG_URL }},${{ secrets.AZ_BLOB_SAS }},readwrite
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - name: "Set environmental variables"
+        shell: bash
+        run: |
+          echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> $GITHUB_ENV
+
+      - uses: actions/checkout@v4
+
+      - run: cmake --preset vs2022-windows "-DCMAKE_INSTALL_PREFIX=install"
+
+      # build both Debug and Release for package
+      - name: Build libbsarch
+        run: |
+          cmake --build vsbuild --config Debug --verbose
+          cmake --build vsbuild --config Release --verbose
+
+      - name: Install libbsarch
+        run: |
+          cmake --install vsbuild --config Debug
+          cmake --install vsbuild --config Release
+
+      - name: Upload libbsarch artifact
+        uses: actions/upload-artifact@master
+        with:
+          name: libbsarch
+          path: ./install
+
+  publish:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: windows-2022
+    permissions:
+      contents: write
+    steps:
+      - name: Download Artifact
+        uses: actions/download-artifact@master
+        with:
+          name: libbsarch
+          path: ./install
+
+      - name: Create libbsarch archive
+        run: 7z a libbsarch_${{ github.ref_name }}.7z ./install/*
+
+      - name: Publish Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create --draft=false --notes="${{ github.ref_name }}" "${{ github.ref_name }}" ./libbsarch_${{ github.ref_name }}.7z

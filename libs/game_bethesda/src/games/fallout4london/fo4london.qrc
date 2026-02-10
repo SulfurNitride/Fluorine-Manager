@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/Fallout4London">
+        <file alias="splash">splash.png</file>
+    </qresource>
+</RCC>

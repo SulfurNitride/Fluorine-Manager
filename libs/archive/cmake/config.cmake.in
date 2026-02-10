@@ -1,0 +1,7 @@
+@PACKAGE_INIT@
+
+if(WIN32)
+  find_package(7zip CONFIG REQUIRED)
+endif()
+
+include ( "${CMAKE_CURRENT_LIST_DIR}/mo2-archive-targets.cmake" )

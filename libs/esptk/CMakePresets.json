@@ -1,0 +1,36 @@
+{
+  "configurePresets": [
+    {
+      "errors": {
+        "deprecated": true
+      },
+      "hidden": true,
+      "name": "cmake-dev",
+      "warnings": {
+        "deprecated": true,
+        "dev": true
+      }
+    },
+    {
+      "binaryDir": "${sourceDir}/vsbuild",
+      "architecture": {
+        "strategy": "set",
+        "value": "x64"
+      },
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS": "/EHsc /MP /W4"
+      },
+      "generator": "Visual Studio 17 2022",
+      "inherits": ["cmake-dev"],
+      "name": "vs2022-windows",
+      "toolset": "v143"
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "vs2022-windows",
+      "configurePreset": "vs2022-windows"
+    }
+  ],
+  "version": 4
+}

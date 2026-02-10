@@ -1,0 +1,14 @@
+/home/luke/Documents/MO2 Linux/MO2 Linux Port With C/libs/nak_ffi/target/debug/deps/thiserror-4284543605e99e75.d: /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /home/luke/Documents/MO2\ Linux/MO2\ Linux\ Port\ With\ C/libs/nak_ffi/target/debug/build/thiserror-3193fb56318479ee/out/private.rs
+
+/home/luke/Documents/MO2 Linux/MO2 Linux Port With C/libs/nak_ffi/target/debug/deps/libthiserror-4284543605e99e75.rlib: /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /home/luke/Documents/MO2\ Linux/MO2\ Linux\ Port\ With\ C/libs/nak_ffi/target/debug/build/thiserror-3193fb56318479ee/out/private.rs
+
+/home/luke/Documents/MO2 Linux/MO2 Linux Port With C/libs/nak_ffi/target/debug/deps/libthiserror-4284543605e99e75.rmeta: /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /home/luke/Documents/MO2\ Linux/MO2\ Linux\ Port\ With\ C/libs/nak_ffi/target/debug/build/thiserror-3193fb56318479ee/out/private.rs
+
+/home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs:
+/home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs:
+/home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs:
+/home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs:
+/home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs:
+/home/luke/Documents/MO2\ Linux/MO2\ Linux\ Port\ With\ C/libs/nak_ffi/target/debug/build/thiserror-3193fb56318479ee/out/private.rs:
+
+# env-dep:OUT_DIR=/home/luke/Documents/MO2 Linux/MO2 Linux Port With C/libs/nak_ffi/target/debug/build/thiserror-3193fb56318479ee/out

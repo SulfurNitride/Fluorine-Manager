@@ -1,0 +1,417 @@
+usvfs_test_x?? basic started with test_file_operations_x??.exe
+
+Updating VFS mappings:
+  mapdir: source:mod1 => mount:.
+  mapdir: source:mod2 => mount:.
+  mapdir: source:mod3 => mount:.
+  mapdir: source:mod4 => mount:.
+  mapdircreate: source:overwrite => mount:.
+  mapfile: source:root1.txt => mount:root1.txt
+  mapfile: source:root1w.txt => mount:root1w.txt
+  mapfile: source:root2.txt => mount:root2.txt
+  mapfile: source:root2w.txt => mount:root2w.txt
+
+running scenario basic:
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -r -listcontents mount:.
+>> Listing directory {.}:
+[.] DIR (attributes 0x10)
+[..] DIR (attributes 0x10)
+[rfolder] DIR (attributes 0x10)
+[root0.txt] FILE (attributes 0x20, 21 bytes)
+== root0 original file
+[root0w.txt] FILE (attributes 0x20, 22 bytes)
+== root0w original file
+[root2w.txt] FILE (attributes 0x20, 18 bytes)
+== root2w source file
+[root2.txt] FILE (attributes 0x20, 17 bytes)
+== root2 source file
+[root1w.txt] FILE (attributes 0x20, 18 bytes)
+== root1w source file
+[root1.txt] FILE (attributes 0x20, 17 bytes)
+== root1 source file
+[mod3.txt] FILE (attributes 0x20, 12 bytes)
+== hello mod3
+[mod2.txt] FILE (attributes 0x20, 12 bytes)
+== hello mod2
+[mod1w.txt] FILE (attributes 0x20, 13 bytes)
+== hello mod1w
+[mod1.txt] FILE (attributes 0x20, 12 bytes)
+== hello mod1
+[mfolder4] DIR (attributes 0x10)
+[mfolder3] DIR (attributes 0x10)
+[mfolder2] DIR (attributes 0x10)
+[mfolder1] DIR (attributes 0x10)
+[.empty] FILE (attributes 0x20, 0 bytes)
+>> Listing directory {rfolder}:
+[.] DIR (attributes 0x10)
+[..] DIR (attributes 0x10)
+[rcopyme4.txt] FILE (attributes 0x20, 40 bytes)
+== rfolder\rcopyme4.txt original contents
+[rfile0.txt] FILE (attributes 0x20, 34 bytes)
+== rfolder\rfile0.txt original file
+[rfiledelete.txt] FILE (attributes 0x20, 39 bytes)
+== rfolder\rfiledelete.txt original file
+[rfiledeletewrite.txt] FILE (attributes 0x20, 43 bytes)
+== rfolder\rfiledeletewrite.txt orignal file
+[rfileoldname.txt] FILE (attributes 0x20, 40 bytes)
+== rfolder\rfileoldname.txt original file
+[rfilerewrite.txt] FILE (attributes 0x20, 40 bytes)
+== rfolder\rfilerewrite.txt original file
+>> Listing directory {mfolder4}:
+[.] DIR (attributes 0x10)
+[..] DIR (attributes 0x10)
+[mfilerewrite.txt] FILE (attributes 0x20, 35 bytes)
+== mfolder4\mfilerewrite.txt by mod4
+[mfileoverwrite.txt] FILE (attributes 0x20, 37 bytes)
+== mfolder4\mfileoverwrite.txt by mod4
+[mfilemoveover.txt] FILE (attributes 0x20, 36 bytes)
+== mfolder4/mfilemoveover.txt by mod4
+[mfiledeletewrite2p.txt] FILE (attributes 0x20, 41 bytes)
+== mfolder4/mfiledeletewrite2p.txt by mod4
+[mfiledeletewrite.txt] FILE (attributes 0x20, 39 bytes)
+== mfolder4/mfiledeletewrite.txt by mod4
+[mfiledeletemove2p.txt] FILE (attributes 0x20, 40 bytes)
+== mfolder4/mfiledeletemove2p.txt by mod4
+[mfiledeletemove.txt] FILE (attributes 0x20, 38 bytes)
+== mfolder4/mfiledeletemove.txt by mod4
+[mfile.txt] FILE (attributes 0x20, 28 bytes)
+== mfolder4\mfile.txt by mod4
+>> Listing directory {mfolder3}:
+[.] DIR (attributes 0x10)
+[..] DIR (attributes 0x10)
+[mdeep3] DIR (attributes 0x10)
+>> Listing directory {mfolder3\mdeep3}:
+[.] DIR (attributes 0x10)
+[..] DIR (attributes 0x10)
+[mfile.txt] FILE (attributes 0x20, 35 bytes)
+== mfolder3\mdeep3\mfile.txt by mod3
+>> Listing directory {mfolder2}:
+[.] DIR (attributes 0x10)
+[..] DIR (attributes 0x10)
+[mfile.txt] FILE (attributes 0x20, 28 bytes)
+== mfolder2\mfile.txt by mod2
+>> Listing directory {mfolder1}:
+[.] DIR (attributes 0x10)
+[..] DIR (attributes 0x10)
+[mfilew.txt] FILE (attributes 0x20, 29 bytes)
+== mfolder1\mfilew.txt by mod1
+[mfile.txt] FILE (attributes 0x20, 28 bytes)
+== mfolder1\mfile.txt by mod1
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -overwrite mount:mfolder1\fail\epic\fail\newfile1.txt "newfile1.txt nonrecursive overwrite should fail"
+ERROR: CreateFile() failed : lastError=3
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -overwrite mount:mfolder1\fail\newfile1.txt "newfile1.txt nonrecursive overwrite should fail"
+ERROR: CreateFile() failed : lastError=3
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -overwrite mount:mfolder1\newfile1.txt "newfile1.txt nonrecursive overwrite"
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:mfolder1\newfile1.txt
+== newfile1.txt nonrecursive overwrite
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -overwrite mount:mfolder1\fail\newfile1.txt "newfile1.txt nonrecursive overwrite should fail"
+ERROR: CreateFile() failed : lastError=3
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -r -overwrite mount:mfolder2\newfile2.txt "newfile2.txt recursive overwrite"
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:mfolder2\newfile2.txt
+== newfile2.txt recursive overwrite
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -r -overwrite mount:mfolder2\newfile2.txt\fail "newfile2.txt is a file so folder creation should fail"
+ERROR: Failed to create_path [mfolder2\newfile2.txt] : path exists but not a directory
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -r -overwrite mount:mfolder2\mfile.txt\fail "mfile.txt is a file so folder creation should fail"
+ERROR: Failed to create_path [mfolder2\mfile.txt] : path exists but not a directory
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -r -overwrite mount:mfolder3\newfolder3\newfile3.txt "newfile3.txt recursive overwrite"
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:mfolder3\newfolder3\newfile3.txt
+== newfile3.txt recursive overwrite
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -r -overwrite mount:mfolder3\newfolder3\newfile3e.txt "newfile3e.txt recursive overwrite"
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:mfolder3\newfolder3\newfile3e.txt
+== newfile3e.txt recursive overwrite
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -r -overwrite mount:mfolder4\newfolder4\d\e\e\p\newfile4.txt "newfile4.txt recursive overwrite"
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:mfolder4\newfolder4\d\e\e\p\newfile4.txt
+== newfile4.txt recursive overwrite
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -r -overwrite mount:mfolder4\newfolder4\d\e\e\p\newfile4e.txt "newfile4e.txt recursive overwrite"
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:mfolder4\newfolder4\d\e\e\p\newfile4e.txt
+== newfile4e.txt recursive overwrite
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -overwrite mount:mfolder4\newfolder4\d\e\e\p\newfile4enr.txt "newfile4enr.txt nonrecursive overwrite"
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:mfolder4\newfolder4\d\e\e\p\newfile4enr.txt
+== newfile4enr.txt nonrecursive overwrite
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -r -overwrite mount:mfolder4\newfolder4\d\e\epnewfile4r.txt "epnewfile4r.txt recursive overwrite"
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:mfolder4\newfolder4\d\e\epnewfile4r.txt
+== epnewfile4r.txt recursive overwrite
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -overwrite mount:mfolder4\newfolder4\d\e\epnewfile4.txt "epnewfile4.txt nonrecursive overwrite"
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:mfolder4\newfolder4\d\e\epnewfile4.txt
+== epnewfile4.txt nonrecursive overwrite
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -copyover mount:rfolder\rcopyme4.txt mount:mfolder4\fail\rcopyme4.txt
+ERROR: CopyFileW() failed : lastError=3
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -copyover mount:rfolder\rcopyme4.txt mount:mfolder4\mfile.txt\fail
+ERROR: CopyFileW() failed : lastError=3
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -copy mount:rfolder\rcopyme4.txt mount:mfolder4\rcopyme4.txt
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -r -overwrite mount:mfolder4\newfolder4\d\e\e\p\newfile4e.txt "newfile4e.txt recursive overwrite"
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:mfolder4\newfolder4\d\e\e\p\newfile4e.txt
+== newfile4e.txt recursive overwrite
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -overwrite mount:mfolder4\newfolder4\d\e\e\p\newfile4enr.txt "newfile4enr.txt nonrecursive overwrite"
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:mfolder4\newfolder4\d\e\e\p\newfile4enr.txt
+== newfile4enr.txt nonrecursive overwrite
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -r -overwrite mount:mfolder4\newfolder4\d\e\epnewfile4r.txt "epnewfile4r.txt recursive overwrite"
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:mfolder4\newfolder4\d\e\epnewfile4r.txt
+== epnewfile4r.txt recursive overwrite
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -overwrite mount:mfolder4\newfolder4\d\e\epnewfile4.txt "epnewfile4.txt nonrecursive overwrite"
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:mfolder4\newfolder4\d\e\epnewfile4.txt
+== epnewfile4.txt nonrecursive overwrite
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -touch mount:root0.txt
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -touch mount:root1.txt
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -touch mount:root2.txt
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -touch mount:mod1.txt
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -touch mount:mfolder1\mfile.txt
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -touchw mount:root0w.txt
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -touchw mount:root1w.txt
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -touchw mount:root2w.txt
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -touchw mount:mod1w.txt
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -touchw mount:mfolder1\mfilew.txt
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -overwrite mount:mfolder4\mfileoverwrite.txt "mfolder4\mfileoverwrite.txt overwrite"
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:mfolder4\mfileoverwrite.txt
+== mfolder4\mfileoverwrite.txt overwrite
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -rewrite mount:mfolder4\mfilerewrite.txt "mfolder4\mfilerewrite.txt rewrite"
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:mfolder4\mfilerewrite.txt
+== mfolder4\mfilerewrite.txt rewrite
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -overwrite mount:mfolder4\temp_mfilemoveover.txt "mfolder4\mfilemoveover.txt overwrite"
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -renameover mount:mfolder4\temp_mfilemoveover.txt mount:mfolder4\mfilemoveover.txt
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:mfolder4\mfilemoveover.txt
+== mfolder4\mfilemoveover.txt overwrite
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -deleteoverwrite mount:mfolder4\mfiledeletewrite.txt "mfolder4\mfiledeletewrite.txt overwrite"
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:mfolder4\mfiledeletewrite.txt
+== mfolder4\mfiledeletewrite.txt overwrite
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -delete mount:mfolder4\mfiledeletewrite2p.txt
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -overwrite mount:mfolder4\mfiledeletewrite2p.txt "mfolder4\mfiledeletewrite2p.txt overwrite"
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:mfolder4\mfiledeletewrite2p.txt
+== mfolder4\mfiledeletewrite2p.txt overwrite
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -overwrite mount:mfolder4\temp_mfiledeletemove.txt "mfolder4\mfiledeletemove.txt overwrite"
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -deleterename mount:mfolder4\temp_mfiledeletemove.txt mount:mfolder4\mfiledeletemove.txt
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:mfolder4\mfiledeletemove.txt
+== mfolder4\mfiledeletemove.txt overwrite
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -delete mount:mfolder4\mfiledeletemove2p.txt
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -overwrite mount:mfolder4\temp_mfiledeletemove2p.txt "mfolder4\mfiledeletemove2p.txt overwrite"
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -rename mount:mfolder4\temp_mfiledeletemove2p.txt mount:mfolder4\mfiledeletemove2p.txt
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:mfolder4\mfiledeletemove2p.txt
+== mfolder4\mfiledeletemove2p.txt overwrite
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -rewrite mount:rfolder\rfilerewrite.txt "rfolder\rfilerewrite.txt rewrite"
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:rfolder\rfilerewrite.txt
+== rfolder\rfilerewrite.txt rewrite
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -r -overwrite mount:rfolder\rfilerewrite.txt\fail "rfilerewrite.txt is a file so folder creation should fail"
+ERROR: Failed to create_path [rfolder\rfilerewrite.txt] : path exists but not a directory
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -r -overwrite mount:rfolder\rfile0.txt\fail "rfile0.txt is a file so folder creation should fail"
+ERROR: Failed to create_path [rfolder\rfile0.txt] : path exists but not a directory
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -deleteoverwrite mount:rfolder\rfiledeletewrite.txt "rfolder\rfiledeletewrite.txt overwrite"
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:rfolder\rfiledeletewrite.txt
+== rfolder\rfiledeletewrite.txt overwrite
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -delete mount:rfolder\rfiledelete.txt
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:rfolder\rfiledelete.txt
+ERROR: CreateFileW() failed : lastError=2
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -rename mount:rfolder\rfileoldname.txt mount:rfolder\rfilenewname.txt
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:rfolder\rfileoldname.txt
+ERROR: CreateFileW() failed : lastError=2
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -read mount:rfolder\rfilenewname.txt
+== rfolder\rfileoldname.txt original file
+
+Spawning: test_file_operations_x??.exe -basedir mount -cout+ ? -r -listcontents mount:.
+>> Listing directory {.}:
+[.] DIR (attributes 0x10)
+[..] DIR (attributes 0x10)
+[root0.txt] FILE (attributes 0x20, 21 bytes)
+== root0 original file
+[root0w.txt] FILE (attributes 0x20, 22 bytes)
+== root0w original file
+[root2w.txt] FILE (attributes 0x20, 18 bytes)
+== root2w source file
+[root2.txt] FILE (attributes 0x20, 17 bytes)
+== root2 source file
+[root1w.txt] FILE (attributes 0x20, 18 bytes)
+== root1w source file
+[root1.txt] FILE (attributes 0x20, 17 bytes)
+== root1 source file
+[rfolder] DIR (attributes 0x10)
+[mod3.txt] FILE (attributes 0x20, 12 bytes)
+== hello mod3
+[mod2.txt] FILE (attributes 0x20, 12 bytes)
+== hello mod2
+[mod1w.txt] FILE (attributes 0x20, 13 bytes)
+== hello mod1w
+[mod1.txt] FILE (attributes 0x20, 12 bytes)
+== hello mod1
+[mfolder4] DIR (attributes 0x10)
+[mfolder3] DIR (attributes 0x10)
+[mfolder2] DIR (attributes 0x10)
+[mfolder1] DIR (attributes 0x10)
+[.empty] FILE (attributes 0x20, 0 bytes)
+>> Listing directory {rfolder}:
+[.] DIR (attributes 0x10)
+[..] DIR (attributes 0x10)
+[rcopyme4.txt] FILE (attributes 0x20, 40 bytes)
+== rfolder\rcopyme4.txt original contents
+[rfile0.txt] FILE (attributes 0x20, 34 bytes)
+== rfolder\rfile0.txt original file
+[rfilerewrite.txt] FILE (attributes 0x20, 34 bytes)
+== rfolder\rfilerewrite.txt rewrite
+[rfilenewname.txt] FILE (attributes 0x20, 40 bytes)
+== rfolder\rfileoldname.txt original file
+[rfiledeletewrite.txt] FILE (attributes 0x20, 40 bytes)
+== rfolder\rfiledeletewrite.txt overwrite
+>> Listing directory {mfolder4}:
+[.] DIR (attributes 0x10)
+[..] DIR (attributes 0x10)
+[rcopyme4.txt] FILE (attributes 0x20, 40 bytes)
+== rfolder\rcopyme4.txt original contents
+[newfolder4] DIR (attributes 0x10)
+[mfilerewrite.txt] FILE (attributes 0x20, 35 bytes)
+== mfolder4\mfilerewrite.txt rewrite
+[mfileoverwrite.txt] FILE (attributes 0x20, 39 bytes)
+== mfolder4\mfileoverwrite.txt overwrite
+[mfilemoveover.txt] FILE (attributes 0x20, 38 bytes)
+== mfolder4\mfilemoveover.txt overwrite
+[mfiledeletewrite2p.txt] FILE (attributes 0x20, 43 bytes)
+== mfolder4\mfiledeletewrite2p.txt overwrite
+[mfiledeletewrite.txt] FILE (attributes 0x20, 41 bytes)
+== mfolder4\mfiledeletewrite.txt overwrite
+[mfiledeletemove2p.txt] FILE (attributes 0x20, 42 bytes)
+== mfolder4\mfiledeletemove2p.txt overwrite
+[mfiledeletemove.txt] FILE (attributes 0x20, 40 bytes)
+== mfolder4\mfiledeletemove.txt overwrite
+[mfile.txt] FILE (attributes 0x20, 28 bytes)
+== mfolder4\mfile.txt by mod4
+>> Listing directory {mfolder4\newfolder4}:
+[.] DIR (attributes 0x10)
+[..] DIR (attributes 0x10)
+[d] DIR (attributes 0x10)
+>> Listing directory {mfolder4\newfolder4\d}:
+[.] DIR (attributes 0x10)
+[..] DIR (attributes 0x10)
+[e] DIR (attributes 0x10)
+>> Listing directory {mfolder4\newfolder4\d\e}:
+[.] DIR (attributes 0x10)
+[..] DIR (attributes 0x10)
+[epnewfile4r.txt] FILE (attributes 0x20, 37 bytes)
+== epnewfile4r.txt recursive overwrite
+[epnewfile4.txt] FILE (attributes 0x20, 39 bytes)
+== epnewfile4.txt nonrecursive overwrite
+[e] DIR (attributes 0x10)
+>> Listing directory {mfolder4\newfolder4\d\e\e}:
+[.] DIR (attributes 0x10)
+[..] DIR (attributes 0x10)
+[p] DIR (attributes 0x10)
+>> Listing directory {mfolder4\newfolder4\d\e\e\p}:
+[.] DIR (attributes 0x10)
+[..] DIR (attributes 0x10)
+[newfile4enr.txt] FILE (attributes 0x20, 40 bytes)
+== newfile4enr.txt nonrecursive overwrite
+[newfile4e.txt] FILE (attributes 0x20, 35 bytes)
+== newfile4e.txt recursive overwrite
+[newfile4.txt] FILE (attributes 0x20, 34 bytes)
+== newfile4.txt recursive overwrite
+>> Listing directory {mfolder3}:
+[.] DIR (attributes 0x10)
+[..] DIR (attributes 0x10)
+[newfolder3] DIR (attributes 0x10)
+[mdeep3] DIR (attributes 0x10)
+>> Listing directory {mfolder3\newfolder3}:
+[.] DIR (attributes 0x10)
+[..] DIR (attributes 0x10)
+[newfile3e.txt] FILE (attributes 0x20, 35 bytes)
+== newfile3e.txt recursive overwrite
+[newfile3.txt] FILE (attributes 0x20, 34 bytes)
+== newfile3.txt recursive overwrite
+>> Listing directory {mfolder3\mdeep3}:
+[.] DIR (attributes 0x10)
+[..] DIR (attributes 0x10)
+[mfile.txt] FILE (attributes 0x20, 35 bytes)
+== mfolder3\mdeep3\mfile.txt by mod3
+>> Listing directory {mfolder2}:
+[.] DIR (attributes 0x10)
+[..] DIR (attributes 0x10)
+[newfile2.txt] FILE (attributes 0x20, 34 bytes)
+== newfile2.txt recursive overwrite
+[mfile.txt] FILE (attributes 0x20, 28 bytes)
+== mfolder2\mfile.txt by mod2
+>> Listing directory {mfolder1}:
+[.] DIR (attributes 0x10)
+[..] DIR (attributes 0x10)
+[newfile1.txt] FILE (attributes 0x20, 37 bytes)
+== newfile1.txt nonrecursive overwrite
+[mfilew.txt] FILE (attributes 0x20, 29 bytes)
+== mfolder1\mfilew.txt by mod1
+[mfile.txt] FILE (attributes 0x20, 28 bytes)
+== mfolder1\mfile.txt by mod1
+
+
+scenario ended successfully!
+
+postmortem check of mount against golden mount.postmortem...
+postmortem check of source against golden source.postmortem...
+postmortem check successfull.

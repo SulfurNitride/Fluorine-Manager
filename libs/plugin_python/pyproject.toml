@@ -1,0 +1,53 @@
+[tool.poetry]
+name = "modorganizer-plugin_python"
+version = "3.0.0"
+description = ""
+authors = ["Mikaël Capelle <capelle.mikael@gmail.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+
+[tool.poetry.group.dev.dependencies]
+pyright = "^1.1.369"
+ruff = "^0.2.1"
+poethepoet = "^0.23.0"
+mobase-stubs = { version = "^2.5.1a0", allow-prereleases = true }
+pyqt6 = "^6.7.0"
+pytest = "^8.2.2"
+pybind11-stubgen = "^2.5.1"
+
+[tool.poe.tasks]
+format-imports = "ruff check --select I tests typings --fix"
+format-ruff = "ruff format tests typings"
+format.sequence = ["format-imports", "format-ruff"]
+lint-ruff = "ruff check tests typings"
+lint-ruff-format = "ruff format --check tests typings"
+lint.sequence = ["lint-ruff", "lint-ruff-format"]
+lint.ignore_fail = "return_non_zero"
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+extend-select = ["B", "Q", "I"]
+
+[tool.ruff.lint.isort.sections]
+mobase = ["mobase"]
+mobase_tests = ["mobase_tests"]
+
+[tool.ruff.lint.isort]
+section-order = [
+    "future",
+    "standard-library",
+    "third-party",
+    "first-party",
+    "mobase",
+    "mobase_tests",
+    "local-folder",
+]
+
+[tool.pyright]
+typeCheckingMode = "strict"
+reportMissingTypeStubs = true
+reportMissingModuleSource = false
+pythonPlatform = "Windows"

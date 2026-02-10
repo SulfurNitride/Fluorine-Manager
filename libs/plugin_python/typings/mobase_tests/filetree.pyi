@@ -1,0 +1,9 @@
+from __future__ import annotations
+
+import mobase
+
+__all__ = ["is_directory", "is_file", "value"]
+
+def is_directory(arg0: mobase.IFileTree.FileTypes) -> bool: ...
+def is_file(arg0: mobase.IFileTree.FileTypes) -> bool: ...
+def value(arg0: mobase.IFileTree.FileTypes) -> int: ...

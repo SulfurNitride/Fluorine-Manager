@@ -1,0 +1,102 @@
+{
+  "configurePresets": [
+    {
+      "cacheVariables": {
+        "BUILD_TESTING": {
+          "type": "BOOL",
+          "value": "ON"
+        }
+      },
+      "errors": {
+        "deprecated": true
+      },
+      "hidden": true,
+      "name": "cmake-dev",
+      "warnings": {
+        "deprecated": true,
+        "dev": true
+      }
+    },
+    {
+      "cacheVariables": {
+        "VCPKG_MANIFEST_NO_DEFAULT_FEATURES": {
+          "type": "BOOL",
+          "value": "ON"
+        }
+      },
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "hidden": true,
+      "name": "vcpkg"
+    },
+    {
+      "cacheVariables": {
+        "VCPKG_MANIFEST_FEATURES": {
+          "type": "STRING",
+          "value": "testing"
+        }
+      },
+      "hidden": true,
+      "inherits": ["vcpkg"],
+      "name": "vcpkg-dev"
+    },
+    {
+      "binaryDir": "${sourceDir}/vsbuild64",
+      "architecture": {
+        "strategy": "set",
+        "value": "x64"
+      },
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": {
+          "type": "STRING",
+          "value": "x64-windows-static-md"
+        }
+      },
+      "hidden": true,
+      "name": "windows-x64"
+    },
+    {
+      "binaryDir": "${sourceDir}/vsbuild32",
+      "architecture": {
+        "strategy": "set",
+        "value": "Win32"
+      },
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": {
+          "type": "STRING",
+          "value": "x86-windows-static-md"
+        }
+      },
+      "hidden": true,
+      "name": "windows-x86"
+    },
+    {
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS": "/EHsc /MP /W4"
+      },
+      "generator": "Visual Studio 17 2022",
+      "inherits": ["cmake-dev", "vcpkg-dev"],
+      "hidden": true,
+      "name": "vs2022-windows",
+      "toolset": "v143"
+    },
+    {
+      "inherits": ["vs2022-windows", "windows-x64"],
+      "name": "vs2022-windows-x64"
+    },
+    {
+      "inherits": ["vs2022-windows", "windows-x86"],
+      "name": "vs2022-windows-x86"
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "vs2022-windows-x64",
+      "configurePreset": "vs2022-windows-x64"
+    },
+    {
+      "name": "vs2022-windows-x86",
+      "configurePreset": "vs2022-windows-x86"
+    }
+  ],
+  "version": 3
+}

@@ -1,0 +1,1 @@
+rfolder\rfile0.txt original file

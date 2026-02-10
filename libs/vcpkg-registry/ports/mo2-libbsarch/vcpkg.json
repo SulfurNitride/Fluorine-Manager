@@ -1,0 +1,19 @@
+{
+  "name": "mo2-libbsarch",
+  "version": "0.1.2",
+  "description": "BSArchive Dynamic Link Library and C++ bindings.",
+  "homepage": "https://github.com/ModOrganizer2/libbsarch/",
+  "license": "MIT",
+  "supports": "!uwp",
+  "dependencies": [
+    "mo2-dds-header",
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    }
+  ]
+}

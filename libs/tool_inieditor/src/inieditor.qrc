@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/inieditor">
+        <file alias="icon_document">resources/document-properties.png</file>
+    </qresource>
+</RCC>

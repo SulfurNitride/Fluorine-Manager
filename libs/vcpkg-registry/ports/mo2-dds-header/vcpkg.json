@@ -1,0 +1,14 @@
+{
+  "name": "mo2-dds-header",
+  "version-string": "jun2024",
+  "description": "DDS.h header from DirectXTex",
+  "homepage": "https://github.com/microsoft/DirectXTex",
+  "license": "MIT",
+  "supports": "!uwp",
+  "dependencies": [
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    }
+  ]
+}

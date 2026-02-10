@@ -1,0 +1,32 @@
+name: linters
+
+on: [push, pull_request]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 4
+      matrix:
+        python-version: [3.12]
+
+    steps:
+      - uses: actions/checkout@v1
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v1
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: abatilo/actions-poetry@v2
+      - name: Install package
+        run: poetry install
+
+      # generate UI file for linting
+      - name: Generate UI files
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse -File -Include "*.ui" | ForEach-Object {
+            poetry run pyuic6 $_ -o ([io.path]::ChangeExtension($_.FullName, "py"))
+          }
+
+      - name: Lint
+        run: poetry run poe lint

@@ -1,0 +1,26 @@
+# mapdir <optional relative path under mount>
+#   <relative path under source to mount>
+#   ...
+mapdir
+  mod1
+  mod2
+  mod3
+  mod4
+
+# mapdircreate <optional relative path under mount>
+#   <relative path under source to mount>
+#   ...
+mapdircreate
+  overwrite
+
+# mapfile <optional relative path under mount>
+#   <relative path under source to mount>
+#   ...
+mapfile root1.txt
+  root1.txt
+mapfile root1w.txt
+  root1w.txt
+mapfile root2.txt
+  root2.txt
+mapfile root2w.txt
+  root2w.txt

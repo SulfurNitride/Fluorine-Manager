@@ -1,0 +1,40 @@
+name: Build BSATK
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+env:
+  VCPKG_BINARY_SOURCES: ${{ vars.AZ_BLOB_VCPKG_URL != '' && format('clear;x-azblob,{0},{1},readwrite', vars.AZ_BLOB_VCPKG_URL, secrets.AZ_BLOB_SAS) || '' }}
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      # set VCPKG Root
+      - name: "Set environmental variables"
+        shell: bash
+        run: |
+          echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> $GITHUB_ENV
+
+      # checkout
+      - uses: actions/checkout@v4
+
+      - name: Configure BSATK build
+        shell: pwsh
+        run: |
+          cmake --preset vs2022-windows "-DCMAKE_INSTALL_PREFIX=install"
+
+      - name: Build BSATK
+        run: cmake --build vsbuild --config RelWithDebInfo
+
+      - name: Install BSATK
+        run: cmake --install vsbuild --config RelWithDebInfo
+
+      - name: Upload BSATK artifact
+        uses: actions/upload-artifact@master
+        with:
+          name: BSATK
+          path: ./install

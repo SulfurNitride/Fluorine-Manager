@@ -1,0 +1,20 @@
+# Generated UI files - The __init__.py is also exclude but it has
+# been added so should be fine:
+src/ui/*.py
+
+# IDE / Tools files:
+**/__pycache__
+**/.mypy_cache
+.tox
+.vscode
+venv
+
+# MO2 build files:
+vsbuild
+mob.log
+
+# Generated files:
+lib
+src/lib
+installer_wizard
+installer_wizard-*.zip

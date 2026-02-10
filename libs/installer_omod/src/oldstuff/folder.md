@@ -1,0 +1,1 @@
+This is stuff I'm just lifting from my original attempt at an OMOD installer. It's probably terrible and I'm barely going to fix it. I expect and want other MO2 devs to rework/replace it with something better.

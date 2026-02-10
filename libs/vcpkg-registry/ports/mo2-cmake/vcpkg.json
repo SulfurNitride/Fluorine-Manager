@@ -1,0 +1,8 @@
+{
+  "name": "mo2-cmake",
+  "version": "2.5.3-beta.2",
+  "description": "CMake utilities for building MO2 and its plugins.",
+  "homepage": "https://github.com/ModOrganizer2/cmake_common/",
+  "license": "GPL-3.0",
+  "supports": "!uwp"
+}

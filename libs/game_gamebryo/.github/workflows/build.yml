@@ -1,0 +1,17 @@
+name: Build GameBryo Library
+
+on:
+  push:
+    branches: master
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - name: Build GameBryo Library
+        uses: ModOrganizer2/build-with-mob-action@master
+        with:
+          mo2-third-parties: lz4 zlib
+          mo2-dependencies: cmake_common uibase

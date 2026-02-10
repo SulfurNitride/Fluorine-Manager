@@ -1,0 +1,6 @@
+CMakeLists.txt.user
+edit
+*.bak
+/msbuild.log
+/*std*.log
+/*build

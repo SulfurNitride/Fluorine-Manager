@@ -1,0 +1,59 @@
+{
+  "configurePresets": [
+    {
+      "errors": {
+        "deprecated": true
+      },
+      "hidden": true,
+      "name": "cmake-dev",
+      "warnings": {
+        "deprecated": true,
+        "dev": true
+      }
+    },
+    {
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "hidden": true,
+      "name": "vcpkg"
+    },
+    {
+      "binaryDir": "${sourceDir}/vsbuild",
+      "architecture": {
+        "strategy": "set",
+        "value": "x64"
+      },
+      "cacheVariables": {
+        "CMAKE_VS_NUGET_PACKAGE_RESTORE": {
+          "type": "BOOL",
+          "value": "ON"
+        },
+        "INSTALL_REQUIRES_VS_PACKAGE_RESTORE": {
+          "type": "BOOL",
+          "value": "ON"
+        }
+      },
+      "generator": "Visual Studio 17 2022",
+      "inherits": ["cmake-dev", "vcpkg"],
+      "name": "vs2022-windows",
+      "toolset": "v143"
+    },
+    {
+      "cacheVariables": {
+        "VCPKG_MANIFEST_FEATURES": {
+          "type": "STRING",
+          "value": "standalone"
+        }
+      },
+      "inherits": "vs2022-windows",
+      "name": "vs2022-windows-standalone"
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "vs2022-windows",
+      "resolvePackageReferences": "on",
+      "configurePreset": "vs2022-windows"
+    }
+  ],
+  "version": 4
+}

@@ -1,0 +1,34 @@
+# build outputs:
+/bin
+/lib
+/test/bin
+/build*
+/install
+
+# local overides
+/vsbuild/external_dependencies_local.props
+
+# build intermediates:
+/vsbuild/Release
+/vsbuild/ReleaseTest
+/vsbuild/Debug
+/vsbuild/DebugTest
+/vsbuild32
+/vsbuild64
+CMakeUserPresets.json
+
+# test "side effects"
+/test/temp
+
+# VS generated files:
+.vs
+*.aps
+*.vcxproj.user
+msbuild.log
+
+/stderr.log
+/stderr_32.log
+/stdout.log
+/stdout_32.log
+
+.vscode

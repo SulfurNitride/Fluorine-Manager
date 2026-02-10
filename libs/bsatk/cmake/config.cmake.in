@@ -1,0 +1,10 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+find_dependency(Boost CONFIG COMPONENTS thread interprocess)
+find_dependency(ZLIB)
+find_dependency(lz4 CONFIG)
+find_dependency(mo2-dds-header CONFIG)
+
+include ( "${CMAKE_CURRENT_LIST_DIR}/mo2-bsatk-targets.cmake" )

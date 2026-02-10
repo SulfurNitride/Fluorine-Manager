@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="dlls" version="1.0.0.0" processorArchitecture="x86" />
+  <file name="7zip.dll" />
+  <file name="d3dcompiler_47.dll" />
+  <file name="dxcompiler.dll" />
+  <file name="dxil.dll" />
+  <file name="libbsarch.dll" />
+  <file name="libcrypto-3-x64.dll" />
+  <file name="liblz4.dll" />
+  <file name="libssl-3-x64.dll" />
+  <file name="opengl32sw.dll" />
+  <file name="Qt6Concurrent.dll" />
+  <file name="Qt6Core.dll" />
+  <file name="Qt6Gui.dll" />
+  <file name="Qt6Network.dll" />
+  <file name="Qt6OpenGL.dll" />
+  <file name="Qt6OpenGLWidgets.dll" />
+  <file name="Qt6Positioning.dll" />
+  <file name="Qt6PrintSupport.dll" />
+  <file name="Qt6Qml.dll" />
+  <file name="Qt6QmlMeta.dll" />
+  <file name="Qt6QmlModels.dll" />
+  <file name="Qt6QmlWorkerScript.dll" />
+  <file name="Qt6Quick.dll" />
+  <file name="Qt6QuickWidgets.dll" />
+  <file name="Qt6SerialPort.dll" />
+  <file name="Qt6Svg.dll" />
+  <file name="Qt6WebChannel.dll" />
+  <file name="Qt6WebEngineCore.dll" />
+  <file name="Qt6WebEngineWidgets.dll" />
+  <file name="Qt6WebSockets.dll" />
+  <file name="Qt6Widgets.dll" />
+</assembly>

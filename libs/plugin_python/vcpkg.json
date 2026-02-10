@@ -1,0 +1,34 @@
+{
+  "dependencies": ["pybind11"],
+  "features": {
+    "testing": {
+      "description": "Build Plugin Python tests.",
+      "dependencies": ["gtest"]
+    },
+    "standalone": {
+      "description": "Build Standalone.",
+      "dependencies": ["mo2-cmake", "mo2-uibase"]
+    }
+  },
+  "vcpkg-configuration": {
+    "default-registry": {
+      "kind": "git",
+      "repository": "https://github.com/Microsoft/vcpkg",
+      "baseline": "294f76666c3000630d828703e675814c05a4fd43"
+    },
+    "registries": [
+      {
+        "kind": "git",
+        "repository": "https://github.com/Microsoft/vcpkg",
+        "baseline": "294f76666c3000630d828703e675814c05a4fd43",
+        "packages": ["boost*", "boost-*"]
+      },
+      {
+        "kind": "git",
+        "repository": "https://github.com/ModOrganizer2/vcpkg-registry",
+        "baseline": "228cda39fe9d1eeed789c0ef64fd1235dab3b11e",
+        "packages": ["mo2-*", "pybind11", "spdlog"]
+      }
+    ]
+  }
+}

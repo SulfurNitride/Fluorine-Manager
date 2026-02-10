@@ -1,0 +1,4 @@
+build
+std*.log
+CMakeLists.txt.user
+vsbuild

@@ -1,0 +1,39 @@
+name: Build Installer Wizard Plugin
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set environmental variables
+        shell: bash
+        run: |
+          echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> $GITHUB_ENV
+
+      - uses: actions/checkout@v4
+
+      - name: Configure Installer Wizard Plugin build
+        shell: pwsh
+        run: |
+          cmake --preset vs2022-windows "-DCMAKE_INSTALL_PREFIX=install" "-DVCPKG_MANIFEST_FEATURES=standalone"
+
+      - name: Build Installer Wizard Plugin
+        run: cmake --build vsbuild --config RelWithDebInfo
+
+      - name: Install Installer Wizard Plugin
+        run: cmake --install vsbuild --config RelWithDebInfo
+
+      - name: Upload Installer Wizard Plugin artifact
+        uses: actions/upload-artifact@master
+        with:
+          name: installer_wizard
+          path: ./install/bin/plugins

@@ -1,0 +1,173 @@
+name: Build USVFS
+
+on:
+  push:
+    branches: [master, dev/cmake]
+    tags:
+      - "*"
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+env:
+  VCPKG_BINARY_SOURCES: clear;x-azblob,${{ vars.AZ_BLOB_VCPKG_URL }},${{ secrets.AZ_BLOB_SAS }},readwrite
+
+jobs:
+  build:
+    name: Build USVFS
+    strategy:
+      matrix:
+        arch: [x86, x64]
+        config: [Debug, Release]
+    runs-on: windows-2022
+    steps:
+      # set VCPKG Root
+      - name: "Set environmental variables"
+        shell: bash
+        run: |
+          echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> $GITHUB_ENV
+
+      # checkout USVFS and vcpkg
+      - uses: actions/checkout@v4
+
+      # configure
+      - run: cmake --preset vs2022-windows-${{ matrix.arch }} -B build_${{ matrix.arch }} "-DCMAKE_INSTALL_PREFIX=install/${{ matrix.config }}"
+
+      # build
+      - run: cmake --build build_${{ matrix.arch }} --config ${{ matrix.config }} --target INSTALL
+
+      # package install
+      - uses: actions/upload-artifact@master
+        with:
+          name: usvfs_${{ matrix.config }}_${{ matrix.arch }}
+          path: ./install/${{ matrix.config }}
+
+      # package test/dlls/etc. for tests
+
+      - uses: actions/upload-artifact@master
+        with:
+          name: usvfs-libs_${{ matrix.config }}_${{ matrix.arch }}
+          path: ./lib
+      - uses: actions/upload-artifact@master
+        with:
+          name: usvfs-bins_${{ matrix.config }}_${{ matrix.arch }}
+          path: ./bin
+      - uses: actions/upload-artifact@master
+        with:
+          name: usvfs-tests_${{ matrix.config }}_${{ matrix.arch }}
+          path: ./test/bin
+
+  # merge x86 / x64 artifacts for tests (root bin/lib and test folder)
+  merge-artifacts-for-tests:
+    runs-on: ubuntu-latest
+    name: Merge Test Artifacts
+    needs: build
+    strategy:
+      matrix:
+        config: [Debug, Release]
+    steps:
+      - name: Merge USVFS libs
+        uses: actions/upload-artifact/merge@v4
+        with:
+          name: usvfs-libs_${{ matrix.config }}
+          pattern: usvfs-libs_${{ matrix.config }}_*
+      - name: Merge USVFS bins
+        uses: actions/upload-artifact/merge@v4
+        with:
+          name: usvfs-bins_${{ matrix.config }}
+          pattern: usvfs-bins_${{ matrix.config }}_*
+      - name: Merge USVFS tests
+        uses: actions/upload-artifact/merge@v4
+        with:
+          name: usvfs-tests_${{ matrix.config }}
+          pattern: usvfs-tests_${{ matrix.config }}_*
+
+  # merge x86 / x64 artifacts (install folder)
+  merge-artifacts-for-release:
+    runs-on: ubuntu-latest
+    name: Merge Install Artifacts
+    needs: build
+    strategy:
+      matrix:
+        config: [Debug, Release]
+    steps:
+      - name: Merge USVFS install
+        uses: actions/upload-artifact/merge@v4
+        with:
+          name: usvfs_${{ matrix.config }}
+          pattern: usvfs_${{ matrix.config }}_*
+
+  test:
+    name: Test USVFS
+    needs: merge-artifacts-for-tests
+    runs-on: windows-2022
+    strategy:
+      matrix:
+        config: [Debug, Release]
+        arch: [x86, x64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@master
+        with:
+          name: usvfs-libs_${{ matrix.config }}
+          path: ./lib
+      - uses: actions/download-artifact@master
+        with:
+          name: usvfs-bins_${{ matrix.config }}
+          path: ./bin
+      - uses: actions/download-artifact@master
+        with:
+          name: usvfs-tests_${{ matrix.config }}
+          path: ./test/bin
+      - run: ./test/bin/shared_test_${{ matrix.arch }}.exe
+        if: always()
+      - run: ./test/bin/testinject_bin_${{ matrix.arch }}.exe
+        if: always()
+      - run: ./test/bin/thooklib_test_${{ matrix.arch }}.exe
+        if: always()
+      - run: ./test/bin/tinjectlib_test_${{ matrix.arch }}.exe
+        if: always()
+      - run: ./test/bin/tvfs_test_${{ matrix.arch }}.exe
+        if: always()
+      - run: ./test/bin/usvfs_test_runner_${{ matrix.arch }}.exe
+        if: always()
+      - run: ./test/bin/usvfs_global_test_runner_${{ matrix.arch }}.exe
+        if: always()
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tests-outputs_${{ matrix.config }}_${{ matrix.arch }}
+          path: ./test/temp
+          if-no-files-found: ignore
+          retention-days: 7
+          overwrite: true
+
+  publish:
+    if: github.ref_type == 'tag'
+    needs: [merge-artifacts-for-release, test]
+    runs-on: windows-2022
+    permissions:
+      contents: write
+    steps:
+      # USVFS does not use different names for debug and release so we are going to
+      # retrieve both install artifacts and put them under install/ and install/debug/
+
+      - name: Download Release Artifact
+        uses: actions/download-artifact@master
+        with:
+          name: usvfs_Release
+          path: ./install
+
+      - name: Download Debug Artifact
+        uses: actions/download-artifact@master
+        with:
+          name: usvfs_Debug
+          path: ./install/debug
+
+      - name: Create USVFS Base archive
+        run: 7z a usvfs_${{ github.ref_name }}.7z ./install/*
+
+      - name: Publish Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create --draft=false --notes="Release ${{ github.ref_name }}" "${{ github.ref_name }}" ./usvfs_${{ github.ref_name }}.7z

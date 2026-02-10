@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/Fallout76">
+        <file alias="splash">splash.png</file>
+    </qresource>
+</RCC>

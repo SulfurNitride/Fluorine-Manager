@@ -1,0 +1,14 @@
+{
+  "name": "mo2-uibase",
+  "version": "2.5.3-beta.2.1",
+  "description": "C++ API for ModOrganizer2.",
+  "homepage": "https://github.com/ModOrganizer2/modorganizer-uibase",
+  "license": "GPL-3.0",
+  "supports": "!uwp",
+  "dependencies": [
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    }
+  ]
+}

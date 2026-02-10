@@ -1,0 +1,12 @@
+.mypy_cache
+__pycache__
+.venv
+venv
+.tox
+.vscode
+.idea
+
+# Mob / Umbrella
+mob.log
+vsbuild
+lib

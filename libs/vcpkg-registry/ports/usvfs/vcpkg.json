@@ -1,0 +1,14 @@
+{
+  "name": "usvfs",
+  "version": "0.5.7.1",
+  "description": "Library using api hooking to implement process-local filesystem-independent file links.",
+  "homepage": "https://github.com/ModOrganizer2/usvfs",
+  "license": "GPL-3.0",
+  "supports": "!uwp",
+  "dependencies": [
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    }
+  ]
+}

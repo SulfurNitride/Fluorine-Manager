@@ -1,0 +1,7 @@
+<RCC>
+    <qresource prefix="/MO/gui">
+        <file>resources/CloseButtonIcon.png</file>
+        <file>resources/LeftButtonIcon.png</file>
+        <file>resources/RightButtonIcon.png</file>
+    </qresource>
+</RCC>

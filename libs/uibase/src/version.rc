@@ -1,0 +1,37 @@
+#include "Winver.h"
+
+// If VS_FF_PRERELEASE is not set, MO labels the build as a release and uses VER_FILEVERSION to determine version number.
+// Otherwise, if letters are used in VER_FILEVERSION_STR, uses the full MOBase::VersionInfo parser
+// Otherwise, uses the numbers from VER_FILEVERSION and sets the release type as pre-alpha
+#define VER_FILEVERSION     2.5.3
+#define VER_FILEVERSION_STR "2.5.3\0"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     VER_FILEVERSION
+PRODUCTVERSION  VER_FILEVERSION
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       (0)
+FILEOS          VOS__WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     (0)
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+      BLOCK "040904B0"
+      BEGIN
+        VALUE "FileVersion", VER_FILEVERSION_STR
+        VALUE "CompanyName", "Mod Organizer 2 Team\0"
+        VALUE "FileDescription",  "MO2 Base UI plugin API library\0"
+        VALUE "OriginalFilename", "uibase.dll\0"
+        VALUE "InternalName", "uibase\0"
+        VALUE "LegalCopyright", "Copyright 2011-2016 Sebastian Herbord\r\nCopyright 2016-2026 Mod Organizer 2 contributors\0"
+        VALUE "ProductName",      "Mod Organizer 2 UI Base\0"
+        VALUE "ProductVersion", VER_FILEVERSION_STR
+      END
+    END
+
+    BLOCK "VarFileInfo"
+    BEGIN
+      VALUE "Translation", 0x0409, 1200
+    END
+END

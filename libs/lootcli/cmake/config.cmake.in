@@ -1,0 +1,3 @@
+@PACKAGE_INIT@
+
+include ( "${CMAKE_CURRENT_LIST_DIR}/mo2-lootcli-header-targets.cmake" )

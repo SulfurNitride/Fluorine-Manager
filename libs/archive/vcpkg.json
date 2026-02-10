@@ -1,0 +1,10 @@
+{
+  "dependencies": ["7zip"],
+  "vcpkg-configuration": {
+    "default-registry": {
+      "kind": "git",
+      "repository": "https://github.com/Microsoft/vcpkg",
+      "baseline": "294f76666c3000630d828703e675814c05a4fd43"
+    }
+  }
+}

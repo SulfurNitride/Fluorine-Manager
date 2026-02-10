@@ -1,0 +1,65 @@
+[project]
+name = "installer-wizard"
+version = "1.0.3"
+description = ""
+authors = [{ name = "Mikaël Capelle", email = "capelle.mikael@gmail.com" }]
+license = "MIT"
+readme = "README.md"
+dynamic = ["dependencies"]
+
+[tool.poetry]
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.12"
+pyqt6 = "6.7.1"
+bain-wizard-interpreter = "1.0.4"
+
+[tool.poetry.group.dev.dependencies]
+pyright = "^1.1.401"
+ruff = "^0.11.11"
+poethepoet = "^0.34.0"
+mobase-stubs = {version = "2.5.2", allow-prereleases = true}
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poe.tasks]
+format-imports = "ruff check --select I . --fix"
+format-ruff = "ruff format ."
+format.sequence = ["format-imports", "format-ruff"]
+lint-ruff = "ruff check ."
+lint-ruff-format = "ruff format --check ."
+lint-pyright = "pyright ."
+lint.sequence = ["lint-ruff", "lint-ruff-format", "lint-pyright"]
+lint.ignore_fail = "return_non_zero"
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+extend-select = ["B", "Q", "I"]
+
+[tool.ruff.lint.isort.sections]
+mobase = ["mobase"]
+wizard = ["wizard"]
+
+[tool.ruff.lint.isort]
+required-imports = ["from __future__ import annotations"]
+section-order = [
+    "future",
+    "standard-library",
+    "third-party",
+    "first-party",
+    "wizard",
+    "mobase",
+    "local-folder",
+]
+
+[tool.pyright]
+exclude = ["lib", "venv", "src/ui"]
+typeCheckingMode = "strict"
+reportMissingTypeStubs = true
+reportMissingModuleSource = false
+pythonPlatform = "Windows"

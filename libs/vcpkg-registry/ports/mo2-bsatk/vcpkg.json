@@ -1,0 +1,23 @@
+{
+  "name": "mo2-bsatk",
+  "version": "1.4.1",
+  "description": "MO2 library to handle BSA files.",
+  "homepage": "https://github.com/ModOrganizer2/modorganizer-bsatk",
+  "license": "GPL-3.0",
+  "supports": "!uwp",
+  "dependencies": [
+    "boost-interprocess",
+    "boost-thread",
+    "lz4",
+    "mo2-dds-header",
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    },
+    "zlib"
+  ]
+}

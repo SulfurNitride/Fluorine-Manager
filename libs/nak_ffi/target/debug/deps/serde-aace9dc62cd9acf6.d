@@ -1,0 +1,14 @@
+/home/luke/Documents/MO2 Linux/MO2 Linux Port With C/libs/nak_ffi/target/debug/deps/serde-aace9dc62cd9acf6.d: /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/luke/Documents/MO2\ Linux/MO2\ Linux\ Port\ With\ C/libs/nak_ffi/target/debug/build/serde-05e5443d6447e384/out/private.rs
+
+/home/luke/Documents/MO2 Linux/MO2 Linux Port With C/libs/nak_ffi/target/debug/deps/libserde-aace9dc62cd9acf6.rlib: /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/luke/Documents/MO2\ Linux/MO2\ Linux\ Port\ With\ C/libs/nak_ffi/target/debug/build/serde-05e5443d6447e384/out/private.rs
+
+/home/luke/Documents/MO2 Linux/MO2 Linux Port With C/libs/nak_ffi/target/debug/deps/libserde-aace9dc62cd9acf6.rmeta: /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/luke/Documents/MO2\ Linux/MO2\ Linux\ Port\ With\ C/libs/nak_ffi/target/debug/build/serde-05e5443d6447e384/out/private.rs
+
+/home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/home/luke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/home/luke/Documents/MO2\ Linux/MO2\ Linux\ Port\ With\ C/libs/nak_ffi/target/debug/build/serde-05e5443d6447e384/out/private.rs:
+
+# env-dep:OUT_DIR=/home/luke/Documents/MO2 Linux/MO2 Linux Port With C/libs/nak_ffi/target/debug/build/serde-05e5443d6447e384/out

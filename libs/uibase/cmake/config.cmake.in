@@ -1,0 +1,13 @@
+@PACKAGE_INIT@
+
+set(_UIBASE_PREFIX_DIR ${PACKAGE_PREFIX_DIR})
+
+find_package(Qt6 CONFIG REQUIRED COMPONENTS Network QuickWidgets Widgets)
+
+include ( "${CMAKE_CURRENT_LIST_DIR}/mo2-uibase-targets.cmake" )
+
+
+if (MO2_CMAKE_DEPRECATED_UIBASE_INCLUDE)
+    target_include_directories(mo2::uibase INTERFACE
+        ${_UIBASE_PREFIX_DIR}/include/uibase ${_UIBASE_PREFIX_DIR}/include/uibase/game_features)
+endif()

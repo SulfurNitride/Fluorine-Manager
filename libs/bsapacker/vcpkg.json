@@ -1,0 +1,34 @@
+{
+  "dependencies": ["mo2-libbsarch", "mo2-dds-header", "directxtex", "bext-di"],
+  "features": {
+    "standalone": {
+      "description": "Build Standalone.",
+      "dependencies": ["mo2-cmake"]
+    },
+    "testing": {
+      "description": "Build BSA Packer tests.",
+      "dependencies": ["gtest"]
+    }
+  },
+  "vcpkg-configuration": {
+    "default-registry": {
+      "kind": "git",
+      "repository": "https://github.com/Microsoft/vcpkg",
+      "baseline": "294f76666c3000630d828703e675814c05a4fd43"
+    },
+    "registries": [
+      {
+        "kind": "git",
+        "repository": "https://github.com/Microsoft/vcpkg",
+        "baseline": "294f76666c3000630d828703e675814c05a4fd43",
+        "packages": ["boost*", "boost-*", "bext-*"]
+      },
+      {
+        "kind": "git",
+        "repository": "https://github.com/ModOrganizer2/vcpkg-registry",
+        "baseline": "9936967e7c0ba1968e54a2fa6e6ad27b4f992b9b",
+        "packages": ["mo2-*"]
+      }
+    ]
+  }
+}

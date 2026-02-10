@@ -1,0 +1,2054 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1009</width>
+    <height>710</height>
+   </rect>
+  </property>
+  <property name="acceptDrops">
+   <bool>true</bool>
+  </property>
+  <property name="windowTitle">
+   <string notr="true">Mod Organizer</string>
+  </property>
+  <property name="windowIcon">
+   <iconset>
+    <normaloff>mo_icon.ico</normaloff>mo_icon.ico</iconset>
+  </property>
+  <property name="documentMode">
+   <bool>false</bool>
+  </property>
+  <widget class="QWidget" name="centralWidget">
+   <property name="sizePolicy">
+    <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+     <horstretch>0</horstretch>
+     <verstretch>0</verstretch>
+    </sizepolicy>
+   </property>
+   <property name="contextMenuPolicy">
+    <enum>Qt::CustomContextMenu</enum>
+   </property>
+   <layout class="QVBoxLayout" name="verticalLayout_8">
+    <item>
+     <widget class="QSplitter" name="categoriesSplitter">
+      <property name="orientation">
+       <enum>Qt::Horizontal</enum>
+      </property>
+      <property name="childrenCollapsible">
+       <bool>false</bool>
+      </property>
+      <widget class="QGroupBox" name="categoriesGroup">
+       <property name="maximumSize">
+        <size>
+         <width>500</width>
+         <height>16777215</height>
+        </size>
+       </property>
+       <property name="title">
+        <string>Filters</string>
+       </property>
+       <layout class="QVBoxLayout" name="verticalLayout_10" stretch="6,0,0">
+        <property name="spacing">
+         <number>0</number>
+        </property>
+        <property name="leftMargin">
+         <number>3</number>
+        </property>
+        <property name="topMargin">
+         <number>15</number>
+        </property>
+        <property name="rightMargin">
+         <number>3</number>
+        </property>
+        <property name="bottomMargin">
+         <number>0</number>
+        </property>
+        <item>
+         <widget class="QTreeWidget" name="filters">
+          <property name="minimumSize">
+           <size>
+            <width>120</width>
+            <height>0</height>
+           </size>
+          </property>
+          <property name="contextMenuPolicy">
+           <enum>Qt::NoContextMenu</enum>
+          </property>
+          <property name="alternatingRowColors">
+           <bool>true</bool>
+          </property>
+          <property name="selectionMode">
+           <enum>QAbstractItemView::NoSelection</enum>
+          </property>
+          <property name="indentation">
+           <number>0</number>
+          </property>
+          <property name="rootIsDecorated">
+           <bool>false</bool>
+          </property>
+          <property name="uniformRowHeights">
+           <bool>true</bool>
+          </property>
+          <property name="allColumnsShowFocus">
+           <bool>true</bool>
+          </property>
+          <attribute name="headerCascadingSectionResizes">
+           <bool>false</bool>
+          </attribute>
+          <column>
+           <property name="text">
+            <string/>
+           </property>
+           <property name="toolTip">
+            <string>State of the filter, can either be Disabled, Enabled or Inverted.</string>
+           </property>
+          </column>
+          <column>
+           <property name="text">
+            <string notr="true">Filter</string>
+           </property>
+           <property name="toolTip">
+            <string>Filter to apply to the modlist.</string>
+           </property>
+          </column>
+         </widget>
+        </item>
+        <item>
+         <widget class="QWidget" name="widget_2" native="true">
+          <layout class="QHBoxLayout" name="horizontalLayout_8">
+           <property name="leftMargin">
+            <number>0</number>
+           </property>
+           <property name="topMargin">
+            <number>2</number>
+           </property>
+           <property name="rightMargin">
+            <number>0</number>
+           </property>
+           <property name="bottomMargin">
+            <number>0</number>
+           </property>
+           <item>
+            <widget class="QPushButton" name="filtersClear">
+             <property name="text">
+              <string>Clear</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="filtersEdit">
+             <property name="text">
+              <string>Edit...</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QWidget" name="widget" native="true">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
+          </property>
+          <layout class="QHBoxLayout" name="horizontalLayout_11" stretch="1,1,2">
+           <property name="leftMargin">
+            <number>1</number>
+           </property>
+           <property name="topMargin">
+            <number>2</number>
+           </property>
+           <property name="rightMargin">
+            <number>1</number>
+           </property>
+           <property name="bottomMargin">
+            <number>2</number>
+           </property>
+           <item>
+            <widget class="QRadioButton" name="filtersAnd">
+             <property name="toolTip">
+              <string>Display mods that match all selected categories.</string>
+             </property>
+             <property name="text">
+              <string>And</string>
+             </property>
+             <property name="checked">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QRadioButton" name="filtersOr">
+             <property name="toolTip">
+              <string>Display mods that match at least one of the selected categories</string>
+             </property>
+             <property name="text">
+              <string>Or</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QComboBox" name="filtersSeparators">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="toolTip">
+              <string>
+                              Filter: only show the separators that match the current filters
+                              Show: always show separators
+                              Hide: never show separators
+                            </string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QSplitter" name="splitter">
+       <property name="sizePolicy">
+        <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+         <horstretch>0</horstretch>
+         <verstretch>0</verstretch>
+        </sizepolicy>
+       </property>
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <widget class="QWidget" name="layoutWidget">
+        <layout class="QVBoxLayout" name="verticalLayout">
+         <property name="spacing">
+          <number>2</number>
+         </property>
+         <item>
+          <layout class="QHBoxLayout" name="horizontalLayout_6" stretch="0,1,0,0,0,0,0,0,0">
+           <item>
+            <widget class="QLabel" name="label_3">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Fixed" vsizetype="Preferred">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="text">
+              <string>Profile</string>
+             </property>
+             <property name="buddy">
+              <cstring>profileBox</cstring>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QComboBox" name="profileBox">
+             <property name="toolTip">
+              <string>Pick a module collection</string>
+             </property>
+             <property name="whatsThis">
+              <string>
+                              &lt;!DOCTYPE HTML PUBLIC &quot;-//W3C//DTD HTML 4.0//EN&quot; &quot;http://www.w3.org/TR/REC-html40/strict.dtd&quot;&gt;
+                              &lt;html&gt;&lt;head&gt;&lt;meta name=&quot;qrichtext&quot; content=&quot;1&quot; /&gt;&lt;style type=&quot;text/css&quot;&gt;
+                              p, li { white-space: pre-wrap; }
+                              &lt;/style&gt;&lt;/head&gt;&lt;body style=&quot; font-family:'MS Shell Dlg 2'; font-size:8.25pt; font-weight:400; font-style:normal;&quot;&gt;
+                              &lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:8pt;&quot;&gt;Create profiles here. Each profile contains its own list of active mods and esps. This way you can quickly switch between setups for different playthroughs.&lt;/span&gt;&lt;/p&gt;
+                              &lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:8pt;&quot;&gt;Please note that right now your esp load order is not kept separate for different profiles.&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;
+                            </string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <spacer name="horizontalSpacer">
+             <property name="orientation">
+              <enum>Qt::Horizontal</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>40</width>
+               <height>20</height>
+              </size>
+             </property>
+            </spacer>
+           </item>
+           <item>
+            <widget class="QPushButton" name="listOptionsBtn">
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
+               <height>16777215</height>
+              </size>
+             </property>
+             <property name="toolTip">
+              <string>Open list options...</string>
+             </property>
+             <property name="whatsThis">
+              <string>Refresh list. This is usually not necessary unless you modified data outside the program.</string>
+             </property>
+             <property name="text">
+              <string/>
+             </property>
+             <property name="icon">
+              <iconset resource="resources.qrc">
+               <normaloff>:/MO/gui/settings</normaloff>:/MO/gui/settings</iconset>
+             </property>
+             <property name="iconSize">
+              <size>
+               <width>16</width>
+               <height>16</height>
+              </size>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="openFolderMenu">
+             <property name="toolTip">
+              <string>Show Open Folders menu...</string>
+             </property>
+             <property name="text">
+              <string/>
+             </property>
+             <property name="icon">
+              <iconset resource="resources.qrc">
+               <normaloff>:/MO/gui/open_folder</normaloff>:/MO/gui/open_folder</iconset>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="restoreModsButton">
+             <property name="toolTip">
+              <string>Restore Backup...</string>
+             </property>
+             <property name="text">
+              <string notr="true"/>
+             </property>
+             <property name="icon">
+              <iconset resource="resources.qrc">
+               <normaloff>:/MO/gui/restore</normaloff>:/MO/gui/restore</iconset>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="saveModsButton">
+             <property name="toolTip">
+              <string>Create Backup</string>
+             </property>
+             <property name="text">
+              <string notr="true"/>
+             </property>
+             <property name="icon">
+              <iconset resource="resources.qrc">
+               <normaloff>:/MO/gui/backup</normaloff>:/MO/gui/backup</iconset>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="activeModslabel">
+             <property name="text">
+              <string>Active:</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="LCDNumber" name="activeModsCounter">
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>26</height>
+              </size>
+             </property>
+             <property name="whatsThis">
+              <string>This provides statistics about the mod list.  The total number of active mod is normally displayed.  Other statistics may be accessed with the tooltip of this counter.</string>
+             </property>
+             <property name="frameShadow">
+              <enum>QFrame::Sunken</enum>
+             </property>
+             <property name="digitCount">
+              <number>5</number>
+             </property>
+             <property name="segmentStyle">
+              <enum>QLCDNumber::Flat</enum>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </item>
+         <item>
+          <widget class="ModListView" name="modList">
+           <property name="minimumSize">
+            <size>
+             <width>330</width>
+             <height>400</height>
+            </size>
+           </property>
+           <property name="contextMenuPolicy">
+            <enum>Qt::CustomContextMenu</enum>
+           </property>
+           <property name="whatsThis">
+            <string>This is a list of installed mods. Use the checkboxes to activate/deactivate mods and drag &amp; drop mods to change their &quot;installation&quot; orders.</string>
+           </property>
+           <property name="styleSheet">
+            <string notr="true"/>
+           </property>
+           <property name="editTriggers">
+            <set>QAbstractItemView::EditKeyPressed|QAbstractItemView::SelectedClicked</set>
+           </property>
+           <property name="showDropIndicator" stdset="0">
+            <bool>true</bool>
+           </property>
+           <property name="dragEnabled">
+            <bool>true</bool>
+           </property>
+           <property name="dragDropMode">
+            <enum>QAbstractItemView::DragDrop</enum>
+           </property>
+           <property name="defaultDropAction">
+            <enum>Qt::MoveAction</enum>
+           </property>
+           <property name="alternatingRowColors">
+            <bool>true</bool>
+           </property>
+           <property name="selectionMode">
+            <enum>QAbstractItemView::ExtendedSelection</enum>
+           </property>
+           <property name="selectionBehavior">
+            <enum>QAbstractItemView::SelectRows</enum>
+           </property>
+           <property name="indentation">
+            <number>20</number>
+           </property>
+           <property name="uniformRowHeights">
+            <bool>true</bool>
+           </property>
+           <property name="itemsExpandable">
+            <bool>true</bool>
+           </property>
+           <property name="sortingEnabled">
+            <bool>true</bool>
+           </property>
+           <property name="expandsOnDoubleClick">
+            <bool>false</bool>
+           </property>
+           <attribute name="headerDefaultSectionSize">
+            <number>39</number>
+           </attribute>
+           <attribute name="headerShowSortIndicator" stdset="0">
+            <bool>true</bool>
+           </attribute>
+           <attribute name="headerStretchLastSection">
+            <bool>false</bool>
+           </attribute>
+          </widget>
+         </item>
+         <item>
+          <layout class="QHBoxLayout" name="horizontalLayout_4" stretch="0,0,1,1,0,1,1">
+           <item>
+            <widget class="QPushButton" name="displayCategoriesBtn">
+             <property name="maximumSize">
+              <size>
+               <width>20</width>
+               <height>16777215</height>
+              </size>
+             </property>
+             <property name="text">
+              <string notr="true">x</string>
+             </property>
+             <property name="iconSize">
+              <size>
+               <width>20</width>
+               <height>20</height>
+              </size>
+             </property>
+             <property name="checkable">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="label_2">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Minimum" vsizetype="Preferred">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="text">
+              <string>Filter</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="currentCategoryLabel"/>
+           </item>
+           <item>
+            <spacer name="horizontalSpacer_5">
+             <property name="orientation">
+              <enum>Qt::Horizontal</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>40</width>
+               <height>20</height>
+              </size>
+             </property>
+            </spacer>
+           </item>
+           <item alignment="Qt::AlignLeft">
+            <widget class="QPushButton" name="clearFiltersButton">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Preferred" vsizetype="Maximum">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>22</height>
+              </size>
+             </property>
+             <property name="baseSize">
+              <size>
+               <width>95</width>
+               <height>0</height>
+              </size>
+             </property>
+             <property name="visible">
+              <bool>false</bool>
+             </property>
+             <property name="layoutDirection">
+              <enum>Qt::RightToLeft</enum>
+             </property>
+             <property name="styleSheet">
+              <string notr="true">border:1px solid #ff0000;</string>
+             </property>
+             <property name="text">
+              <string>Clear all Filters</string>
+             </property>
+             <property name="icon">
+              <iconset resource="resources.qrc">
+               <normaloff>:/MO/gui/edit_clear</normaloff>:/MO/gui/edit_clear</iconset>
+             </property>
+             <property name="iconSize">
+              <size>
+               <width>12</width>
+               <height>12</height>
+              </size>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QComboBox" name="groupCombo">
+             <property name="baseSize">
+              <size>
+               <width>220</width>
+               <height>0</height>
+              </size>
+             </property>
+             <property name="focusPolicy">
+              <enum>Qt::ClickFocus</enum>
+             </property>
+             <item>
+              <property name="text">
+               <string>No groups</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>Categories</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>Nexus IDs</string>
+              </property>
+             </item>
+            </widget>
+           </item>
+           <item>
+            <widget class="MOBase::LineEditClear" name="modFilterEdit">
+             <property name="baseSize">
+              <size>
+               <width>220</width>
+               <height>0</height>
+              </size>
+             </property>
+             <property name="placeholderText">
+              <string>Filter</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </item>
+        </layout>
+       </widget>
+       <widget class="QWidget" name="layoutWidget_2">
+        <layout class="QVBoxLayout" name="verticalLayout_2">
+         <property name="spacing">
+          <number>2</number>
+         </property>
+         <item>
+          <widget class="QFrame" name="startGroup">
+           <layout class="QHBoxLayout" name="horizontalLayout_5" stretch="1,0">
+            <property name="bottomMargin">
+             <number>4</number>
+            </property>
+            <item>
+             <widget class="QComboBox" name="executablesListBox">
+              <property name="sizePolicy">
+               <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+                <horstretch>0</horstretch>
+                <verstretch>0</verstretch>
+               </sizepolicy>
+              </property>
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>40</height>
+               </size>
+              </property>
+              <property name="font">
+               <font>
+                <pointsize>9</pointsize>
+                <bold>true</bold>
+               </font>
+              </property>
+              <property name="toolTip">
+               <string>Pick a program to run.</string>
+              </property>
+              <property name="whatsThis">
+               <string>
+                                &lt;!DOCTYPE HTML PUBLIC &quot;-//W3C//DTD HTML 4.0//EN&quot; &quot;http://www.w3.org/TR/REC-html40/strict.dtd&quot;&gt;
+                                &lt;html&gt;&lt;head&gt;&lt;meta name=&quot;qrichtext&quot; content=&quot;1&quot; /&gt;&lt;style type=&quot;text/css&quot;&gt;
+                                p, li { white-space: pre-wrap; }
+                                &lt;/style&gt;&lt;/head&gt;&lt;body style=&quot; font-family:'MS Shell Dlg 2'; font-size:8.25pt; font-weight:400; font-style:normal;&quot;&gt;
+                                &lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:8pt;&quot;&gt;Choose the program to run. Once you start using ModOrganizer, you should always run your game and tools from here or through shortcuts created here, otherwise mods installed through MO will not be visible.&lt;/span&gt;&lt;/p&gt;
+                                &lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:8pt;&quot;&gt;You can add new Tools to this list, but I can't promise tools I haven't tested will work.&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;
+                              </string>
+              </property>
+              <property name="iconSize">
+               <size>
+                <width>32</width>
+                <height>32</height>
+               </size>
+              </property>
+              <property name="frame">
+               <bool>false</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <layout class="QVBoxLayout" name="verticalLayout_12" stretch="0,0">
+              <item>
+               <widget class="QPushButton" name="startButton">
+                <property name="sizePolicy">
+                 <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+                  <horstretch>0</horstretch>
+                  <verstretch>0</verstretch>
+                 </sizepolicy>
+                </property>
+                <property name="minimumSize">
+                 <size>
+                  <width>120</width>
+                  <height>0</height>
+                 </size>
+                </property>
+                <property name="maximumSize">
+                 <size>
+                  <width>16777215</width>
+                  <height>16777215</height>
+                 </size>
+                </property>
+                <property name="font">
+                 <font>
+                  <pointsize>10</pointsize>
+                  <bold>true</bold>
+                 </font>
+                </property>
+                <property name="toolTip">
+                 <string>Run program</string>
+                </property>
+                <property name="whatsThis">
+                 <string>
+                                    &lt;!DOCTYPE HTML PUBLIC &quot;-//W3C//DTD HTML 4.0//EN&quot; &quot;http://www.w3.org/TR/REC-html40/strict.dtd&quot;&gt;
+                                    &lt;html&gt;&lt;head&gt;&lt;meta name=&quot;qrichtext&quot; content=&quot;1&quot; /&gt;&lt;style type=&quot;text/css&quot;&gt;
+                                    p, li { white-space: pre-wrap; }
+                                    &lt;/style&gt;&lt;/head&gt;&lt;body style=&quot; font-family:'MS Shell Dlg 2'; font-size:8.25pt; font-weight:400; font-style:normal;&quot;&gt;
+                                    &lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:8pt;&quot;&gt;Run the selected program with ModOrganizer enabled.&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;
+                                  </string>
+                </property>
+                <property name="locale">
+                 <locale language="English" country="UnitedStates"/>
+                </property>
+                <property name="text">
+                 <string>Run</string>
+                </property>
+                <property name="icon">
+                 <iconset resource="resources.qrc">
+                  <normaloff>:/MO/gui/run</normaloff>:/MO/gui/run</iconset>
+                </property>
+                <property name="iconSize">
+                 <size>
+                  <width>36</width>
+                  <height>36</height>
+                 </size>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QPushButton" name="linkButton">
+                <property name="sizePolicy">
+                 <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+                  <horstretch>0</horstretch>
+                  <verstretch>0</verstretch>
+                 </sizepolicy>
+                </property>
+                <property name="minimumSize">
+                 <size>
+                  <width>140</width>
+                  <height>0</height>
+                 </size>
+                </property>
+                <property name="maximumSize">
+                 <size>
+                  <width>16777215</width>
+                  <height>16777215</height>
+                 </size>
+                </property>
+                <property name="baseSize">
+                 <size>
+                  <width>0</width>
+                  <height>0</height>
+                 </size>
+                </property>
+                <property name="toolTip">
+                 <string>Create a shortcut in your start menu or on the desktop to the specified program</string>
+                </property>
+                <property name="whatsThis">
+                 <string>
+                                    &lt;!DOCTYPE HTML PUBLIC &quot;-//W3C//DTD HTML 4.0//EN&quot; &quot;http://www.w3.org/TR/REC-html40/strict.dtd&quot;&gt;
+                                    &lt;html&gt;&lt;head&gt;&lt;meta name=&quot;qrichtext&quot; content=&quot;1&quot; /&gt;&lt;style type=&quot;text/css&quot;&gt;
+                                    p, li { white-space: pre-wrap; }
+                                    &lt;/style&gt;&lt;/head&gt;&lt;body style=&quot; font-family:'MS Shell Dlg 2'; font-size:8.25pt; font-weight:400; font-style:normal;&quot;&gt;
+                                    &lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:8pt;&quot;&gt;This creates a start menu shortcut that directly starts the selected program with the MO active.&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;
+                                  </string>
+                </property>
+                <property name="text">
+                 <string>Shortcut</string>
+                </property>
+                <property name="icon">
+                 <iconset resource="resources.qrc">
+                  <normaloff>:/MO/gui/link</normaloff>:/MO/gui/link</iconset>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </item>
+           </layout>
+          </widget>
+         </item>
+         <item>
+          <widget class="QTabWidget" name="tabWidget">
+           <property name="minimumSize">
+            <size>
+             <width>340</width>
+             <height>250</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>16777215</height>
+            </size>
+           </property>
+           <property name="contextMenuPolicy">
+            <enum>Qt::NoContextMenu</enum>
+           </property>
+           <property name="tabShape">
+            <enum>QTabWidget::Rounded</enum>
+           </property>
+           <property name="currentIndex">
+            <number>0</number>
+           </property>
+           <widget class="QWidget" name="espTab">
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+              <horstretch>0</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
+            </property>
+            <property name="maximumSize">
+             <size>
+              <width>16777215</width>
+              <height>16777215</height>
+             </size>
+            </property>
+            <attribute name="title">
+             <string>Plugins</string>
+            </attribute>
+            <layout class="QVBoxLayout" name="verticalLayout_4">
+             <property name="spacing">
+              <number>2</number>
+             </property>
+             <property name="topMargin">
+              <number>6</number>
+             </property>
+             <property name="bottomMargin">
+              <number>0</number>
+             </property>
+             <item>
+              <layout class="QHBoxLayout" name="horizontalLayout_7">
+               <item>
+                <widget class="QPushButton" name="sortButton">
+                 <property name="toolTip">
+                  <string>Sort the plugins using LOOT.</string>
+                 </property>
+                 <property name="whatsThis">
+                  <string>Sort the plugins using LOOT.</string>
+                 </property>
+                 <property name="text">
+                  <string>Sort</string>
+                 </property>
+                 <property name="icon">
+                  <iconset resource="resources.qrc">
+                   <normaloff>:/MO/gui/sort</normaloff>:/MO/gui/sort</iconset>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <spacer name="horizontalSpacer_3">
+                 <property name="orientation">
+                  <enum>Qt::Horizontal</enum>
+                 </property>
+                 <property name="sizeHint" stdset="0">
+                  <size>
+                   <width>40</width>
+                   <height>20</height>
+                  </size>
+                 </property>
+                </spacer>
+               </item>
+               <item>
+                <widget class="QPushButton" name="restoreButton">
+                 <property name="toolTip">
+                  <string>Restore a backup.</string>
+                 </property>
+                 <property name="whatsThis">
+                  <string>Restore a backup.</string>
+                 </property>
+                 <property name="text">
+                  <string notr="true"/>
+                 </property>
+                 <property name="icon">
+                  <iconset resource="resources.qrc">
+                   <normaloff>:/MO/gui/restore</normaloff>:/MO/gui/restore</iconset>
+                 </property>
+                 <property name="iconSize">
+                  <size>
+                   <width>16</width>
+                   <height>16</height>
+                  </size>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="saveButton">
+                 <property name="toolTip">
+                  <string>Create a backup.</string>
+                 </property>
+                 <property name="whatsThis">
+                  <string>Create a backup.</string>
+                 </property>
+                 <property name="text">
+                  <string notr="true"/>
+                 </property>
+                 <property name="icon">
+                  <iconset resource="resources.qrc">
+                   <normaloff>:/MO/gui/backup</normaloff>:/MO/gui/backup</iconset>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QLabel" name="activePluginsLabel">
+                 <property name="text">
+                  <string>Active:</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="LCDNumber" name="activePluginsCounter">
+                 <property name="minimumSize">
+                  <size>
+                   <width>0</width>
+                   <height>26</height>
+                  </size>
+                 </property>
+                 <property name="whatsThis">
+                  <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;This provides statistics about the plugin list. The total number of active plugins is normally displayed.  Other statistics may be accessed with the tooltip of this counter.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                 </property>
+                 <property name="frameShadow">
+                  <enum>QFrame::Sunken</enum>
+                 </property>
+                 <property name="digitCount">
+                  <number>4</number>
+                 </property>
+                 <property name="segmentStyle">
+                  <enum>QLCDNumber::Flat</enum>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </item>
+             <item>
+              <widget class="PluginListView" name="espList">
+               <property name="minimumSize">
+                <size>
+                 <width>250</width>
+                 <height>250</height>
+                </size>
+               </property>
+               <property name="contextMenuPolicy">
+                <enum>Qt::CustomContextMenu</enum>
+               </property>
+               <property name="toolTip">
+                <string>List of available esp/esm files.</string>
+               </property>
+               <property name="whatsThis">
+                <string>List of available esp/esm files.</string>
+               </property>
+               <property name="editTriggers">
+                <set>QAbstractItemView::EditKeyPressed|QAbstractItemView::SelectedClicked</set>
+               </property>
+               <property name="dragEnabled">
+                <bool>true</bool>
+               </property>
+               <property name="dragDropOverwriteMode">
+                <bool>false</bool>
+               </property>
+               <property name="dragDropMode">
+                <enum>QAbstractItemView::InternalMove</enum>
+               </property>
+               <property name="defaultDropAction">
+                <enum>Qt::MoveAction</enum>
+               </property>
+               <property name="alternatingRowColors">
+                <bool>true</bool>
+               </property>
+               <property name="selectionMode">
+                <enum>QAbstractItemView::ExtendedSelection</enum>
+               </property>
+               <property name="selectionBehavior">
+                <enum>QAbstractItemView::SelectRows</enum>
+               </property>
+               <property name="indentation">
+                <number>0</number>
+               </property>
+               <property name="uniformRowHeights">
+                <bool>true</bool>
+               </property>
+               <property name="itemsExpandable">
+                <bool>false</bool>
+               </property>
+               <property name="sortingEnabled">
+                <bool>true</bool>
+               </property>
+               <property name="expandsOnDoubleClick">
+                <bool>false</bool>
+               </property>
+               <attribute name="headerStretchLastSection">
+                <bool>false</bool>
+               </attribute>
+              </widget>
+             </item>
+             <item>
+              <layout class="QHBoxLayout" name="horizontalLayout_10">
+               <item>
+                <spacer name="horizontalSpacer_2">
+                 <property name="orientation">
+                  <enum>Qt::Horizontal</enum>
+                 </property>
+                 <property name="sizeHint" stdset="0">
+                  <size>
+                   <width>40</width>
+                   <height>20</height>
+                  </size>
+                 </property>
+                </spacer>
+               </item>
+               <item>
+                <widget class="MOBase::LineEditClear" name="espFilterEdit">
+                 <property name="toolTip">
+                  <string>Filter the list of plugins.</string>
+                 </property>
+                 <property name="whatsThis">
+                  <string>Filter the list of plugins.</string>
+                 </property>
+                 <property name="text">
+                  <string/>
+                 </property>
+                 <property name="placeholderText">
+                  <string>Filter</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </item>
+            </layout>
+           </widget>
+           <widget class="QWidget" name="bsaTab">
+            <property name="visible">
+             <bool>false</bool>
+            </property>
+            <attribute name="title">
+             <string>Archives</string>
+            </attribute>
+            <layout class="QVBoxLayout" name="verticalLayout_9">
+             <property name="spacing">
+              <number>2</number>
+             </property>
+             <property name="topMargin">
+              <number>6</number>
+             </property>
+             <property name="bottomMargin">
+              <number>0</number>
+             </property>
+             <item>
+              <layout class="QHBoxLayout" name="horizontalLayout_9" stretch="0">
+               <item>
+                <widget class="LinkLabel" name="managedArchiveLabel">
+                 <property name="toolTip">
+                  <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;BSAs / BA2s are bundles of game assets (textures, scripts, etc.). By default, the engine loads these bundles in a separate step from loose files. &lt;p&gt;Their load order is specified by the priority of the corresponding plugin (right pane, plugins tab).&lt;/p&gt;&lt;p&gt;If there is a matching plugin, the game will load them no matter what.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                 </property>
+                 <property name="text">
+                  <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Currently detected archives. (&lt;a href=&quot;#&quot;&gt;What is an archive?&lt;/a&gt;)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                 </property>
+                 <property name="wordWrap">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </item>
+             <item>
+              <widget class="MOBase::SortableTreeWidget" name="bsaList" native="true">
+               <property name="contextMenuPolicy">
+                <enum>Qt::CustomContextMenu</enum>
+               </property>
+               <property name="toolTip">
+                <string>List of available BS Archives. Archives not checked here are not managed by MO and ignore installation order.</string>
+               </property>
+               <property name="whatsThis">
+                <string>
+                                  BSA files are archives (comparable to .zip files) that contain data assets (meshes, textures, ...) to be used by the game. As such they &quot;compete&quot; with loose files in your data directory over which is loaded.
+                                  By default, BSAs that share their base name with an enabled ESP (i.e. plugin.esp and plugin.bsa) are automatically loaded and will have precedence over all loose files, the installation order you set up to the left is then ignored!
+
+                                  BSAs checked here are loaded in such a way that your installation order is obeyed properly.
+                                </string>
+               </property>
+               <property name="showDropIndicator" stdset="0">
+                <bool>false</bool>
+               </property>
+               <property name="dragEnabled" stdset="0">
+                <bool>false</bool>
+               </property>
+               <property name="dragDropOverwriteMode" stdset="0">
+                <bool>false</bool>
+               </property>
+               <property name="indentation" stdset="0">
+                <number>20</number>
+               </property>
+               <property name="itemsExpandable" stdset="0">
+                <bool>true</bool>
+               </property>
+               <property name="columnCount" stdset="0">
+                <number>1</number>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+           <widget class="QWidget" name="dataTab">
+            <attribute name="title">
+             <string>Data</string>
+            </attribute>
+            <layout class="QVBoxLayout" name="verticalLayout_5">
+             <property name="spacing">
+              <number>2</number>
+             </property>
+             <property name="topMargin">
+              <number>6</number>
+             </property>
+             <property name="bottomMargin">
+              <number>0</number>
+             </property>
+             <item>
+              <layout class="QHBoxLayout" name="horizontalLayout_12">
+               <item>
+                <widget class="QPushButton" name="dataTabRefresh">
+                 <property name="toolTip">
+                  <string>Refresh the data structure.</string>
+                 </property>
+                 <property name="whatsThis">
+                  <string>Refresh the data structure.</string>
+                 </property>
+                 <property name="text">
+                  <string>Refresh</string>
+                 </property>
+                 <property name="icon">
+                  <iconset resource="resources.qrc">
+                   <normaloff>:/MO/gui/resources/view-refresh.png</normaloff>:/MO/gui/resources/view-refresh.png</iconset>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <spacer name="horizontalSpacer_4">
+                 <property name="orientation">
+                  <enum>Qt::Horizontal</enum>
+                 </property>
+                 <property name="sizeHint" stdset="0">
+                  <size>
+                   <width>40</width>
+                   <height>20</height>
+                  </size>
+                 </property>
+                </spacer>
+               </item>
+              </layout>
+             </item>
+             <item>
+              <layout class="QHBoxLayout" name="horizontalLayout_2">
+               <item>
+                <widget class="QTreeView" name="dataTree">
+                 <property name="contextMenuPolicy">
+                  <enum>Qt::CustomContextMenu</enum>
+                 </property>
+                 <property name="whatsThis">
+                  <string>This is an overview of your data directory as visible to the game (and tools). </string>
+                 </property>
+                 <property name="alternatingRowColors">
+                  <bool>true</bool>
+                 </property>
+                 <property name="selectionMode">
+                  <enum>QAbstractItemView::ExtendedSelection</enum>
+                 </property>
+                 <property name="uniformRowHeights">
+                  <bool>true</bool>
+                 </property>
+                 <property name="sortingEnabled">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </item>
+             <item>
+              <layout class="QHBoxLayout" name="horizontalLayout_13" stretch="1,1,2">
+               <item>
+                <widget class="QCheckBox" name="dataTabShowOnlyConflicts">
+                 <property name="toolTip">
+                  <string>Filter the list so that only conflicts are displayed.</string>
+                 </property>
+                 <property name="whatsThis">
+                  <string>Filter the list so that only conflicts are displayed.</string>
+                 </property>
+                 <property name="text">
+                  <string>Conflicts only</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QCheckBox" name="dataTabShowFromArchives">
+                 <property name="toolTip">
+                  <string>Filter the list so that files from archives are shown.</string>
+                 </property>
+                 <property name="statusTip">
+                  <string/>
+                 </property>
+                 <property name="whatsThis">
+                  <string>Filter the list so that files from archives are shown.</string>
+                 </property>
+                 <property name="text">
+                  <string>Archives</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QCheckBox" name="dataTabShowHiddenFiles">
+                 <property name="toolTip">
+                  <string>Filter the list so that hidden files are shown.</string>
+                 </property>
+                 <property name="statusTip">
+                  <string/>
+                 </property>
+                 <property name="whatsThis">
+                  <string>Filter the list so that hidden files are shown.</string>
+                 </property>
+                 <property name="text">
+                  <string>Hidden files</string>
+                 </property>
+                 <property name="checked">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QLineEdit" name="dataTabFilter">
+                 <property name="toolTip">
+                  <string>Filter the Data tree.</string>
+                 </property>
+                 <property name="whatsThis">
+                  <string>Filter the Data tree.</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </item>
+            </layout>
+           </widget>
+           <widget class="QWidget" name="savesTab">
+            <attribute name="title">
+             <string>Saves</string>
+            </attribute>
+            <layout class="QVBoxLayout" name="verticalLayout_3">
+             <property name="spacing">
+              <number>2</number>
+             </property>
+             <property name="topMargin">
+              <number>6</number>
+             </property>
+             <property name="bottomMargin">
+              <number>0</number>
+             </property>
+             <item>
+              <widget class="QTreeWidget" name="savegameList">
+               <property name="contextMenuPolicy">
+                <enum>Qt::CustomContextMenu</enum>
+               </property>
+               <property name="toolTip">
+                <string notr="true"/>
+               </property>
+               <property name="whatsThis">
+                <string>
+                                  &lt;!DOCTYPE HTML PUBLIC &quot;-//W3C//DTD HTML 4.0//EN&quot; &quot;http://www.w3.org/TR/REC-html40/strict.dtd&quot;&gt;
+                                  &lt;html&gt;&lt;head&gt;&lt;meta name=&quot;qrichtext&quot; content=&quot;1&quot; /&gt;&lt;style type=&quot;text/css&quot;&gt;
+                                  p, li { white-space: pre-wrap; }
+                                  &lt;/style&gt;&lt;/head&gt;&lt;body style=&quot; font-family:'MS Shell Dlg 2'; font-size:8.25pt; font-weight:400; font-style:normal;&quot;&gt;
+                                  &lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:8pt;&quot;&gt;This is a list of all save games for this game. Hover over a list entry to get detailed information about the save including a list of esps/esms that were used at the time this save was created but aren't active now.&lt;/span&gt;&lt;/p&gt;
+                                  &lt;p style=&quot;-qt-paragraph-type:empty; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px; font-size:8pt;&quot;&gt;&lt;/p&gt;
+                                  &lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:8pt;&quot;&gt;If you click &amp;quot;Fix Mods...&amp;quot; in the context menu, MO will try to activate all mods and esps to fix those missing esps. It will not disable anything!&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;
+                                </string>
+               </property>
+               <property name="sizeAdjustPolicy">
+                <enum>QAbstractScrollArea::AdjustIgnored</enum>
+               </property>
+               <property name="alternatingRowColors">
+                <bool>true</bool>
+               </property>
+               <property name="selectionMode">
+                <enum>QAbstractItemView::ExtendedSelection</enum>
+               </property>
+               <property name="selectionBehavior">
+                <enum>QAbstractItemView::SelectRows</enum>
+               </property>
+               <property name="indentation">
+                <number>0</number>
+               </property>
+               <property name="rootIsDecorated">
+                <bool>false</bool>
+               </property>
+               <property name="uniformRowHeights">
+                <bool>true</bool>
+               </property>
+               <property name="sortingEnabled">
+                <bool>false</bool>
+               </property>
+               <property name="columnCount">
+                <number>2</number>
+               </property>
+               <attribute name="headerCascadingSectionResizes">
+                <bool>false</bool>
+               </attribute>
+               <attribute name="headerStretchLastSection">
+                <bool>true</bool>
+               </attribute>
+               <column>
+                <property name="text">
+                 <string>Name</string>
+                </property>
+                <property name="textAlignment">
+                 <set>AlignLeading|AlignVCenter</set>
+                </property>
+               </column>
+               <column>
+                <property name="text">
+                 <string>File</string>
+                </property>
+                <property name="textAlignment">
+                 <set>AlignLeading|AlignVCenter</set>
+                </property>
+               </column>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+           <widget class="QWidget" name="downloadTab">
+            <attribute name="title">
+             <string>Downloads</string>
+            </attribute>
+            <layout class="QVBoxLayout" name="verticalLayout_7">
+             <property name="spacing">
+              <number>2</number>
+             </property>
+             <property name="topMargin">
+              <number>6</number>
+             </property>
+             <property name="bottomMargin">
+              <number>0</number>
+             </property>
+             <item>
+              <layout class="QHBoxLayout" name="horizontalLayout" stretch="0,0">
+               <item>
+                <widget class="QPushButton" name="btnRefreshDownloads">
+                 <property name="toolTip">
+                  <string>Refresh the downloads.</string>
+                 </property>
+                 <property name="whatsThis">
+                  <string>Refresh the downloads.</string>
+                 </property>
+                 <property name="text">
+                  <string>Refresh</string>
+                 </property>
+                 <property name="icon">
+                  <iconset resource="resources.qrc">
+                   <normaloff>:/MO/gui/resources/view-refresh.png</normaloff>:/MO/gui/resources/view-refresh.png</iconset>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <spacer name="horizontalSpacer_7">
+                 <property name="orientation">
+                  <enum>Qt::Horizontal</enum>
+                 </property>
+                 <property name="sizeHint" stdset="0">
+                  <size>
+                   <width>40</width>
+                   <height>20</height>
+                  </size>
+                 </property>
+                </spacer>
+               </item>
+               <item>
+                <widget class="QPushButton" name="btnQueryDownloadsInfo">
+                 <property name="sizePolicy">
+                  <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
+                   <horstretch>0</horstretch>
+                   <verstretch>0</verstretch>
+                  </sizepolicy>
+                 </property>
+                 <property name="contextMenuPolicy">
+                  <enum>Qt::ContextMenuPolicy::DefaultContextMenu</enum>
+                 </property>
+                 <property name="text">
+                  <string>Query Metadata</string>
+                 </property>
+                 <property name="icon">
+                  <iconset resource="resources.qrc">
+                   <normaloff>:/MO/gui/resources/system-search.png</normaloff>:/MO/gui/resources/system-search.png</iconset>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </item>
+             <item>
+              <layout class="QVBoxLayout" name="downloadLayout">
+               <item>
+                <widget class="DownloadListView" name="downloadView">
+                 <property name="minimumSize">
+                  <size>
+                   <width>320</width>
+                   <height>0</height>
+                  </size>
+                 </property>
+                 <property name="contextMenuPolicy">
+                  <enum>Qt::CustomContextMenu</enum>
+                 </property>
+                 <property name="acceptDrops">
+                  <bool>true</bool>
+                 </property>
+                 <property name="toolTip">
+                  <string/>
+                 </property>
+                 <property name="whatsThis">
+                  <string>This is a list of mods you downloaded from Nexus. Double click one to install it. You can also drag an archive into here.</string>
+                 </property>
+                 <property name="dragEnabled">
+                  <bool>true</bool>
+                 </property>
+                 <property name="dragDropMode">
+                  <enum>QAbstractItemView::DragDrop</enum>
+                 </property>
+                 <property name="defaultDropAction">
+                  <enum>Qt::MoveAction</enum>
+                 </property>
+                 <property name="alternatingRowColors">
+                  <bool>true</bool>
+                 </property>
+                 <property name="verticalScrollMode">
+                  <enum>QAbstractItemView::ScrollPerPixel</enum>
+                 </property>
+                 <property name="indentation">
+                  <number>0</number>
+                 </property>
+                 <property name="uniformRowHeights">
+                  <bool>true</bool>
+                 </property>
+                 <property name="itemsExpandable">
+                  <bool>false</bool>
+                 </property>
+                 <property name="sortingEnabled">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </item>
+             <item>
+              <layout class="QHBoxLayout" name="horizontalLayout_16" stretch="1,1,2">
+               <item>
+                <widget class="QCheckBox" name="showHiddenBox">
+                 <property name="toolTip">
+                  <string>Show downloads marked as hidden.</string>
+                 </property>
+                 <property name="whatsThis">
+                  <string>Show downloads marked as hidden.</string>
+                 </property>
+                 <property name="text">
+                  <string>Hidden files</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <spacer name="horizontalSpacer_6">
+                 <property name="orientation">
+                  <enum>Qt::Horizontal</enum>
+                 </property>
+                 <property name="sizeHint" stdset="0">
+                  <size>
+                   <width>40</width>
+                   <height>20</height>
+                  </size>
+                 </property>
+                </spacer>
+               </item>
+               <item>
+                <widget class="QLineEdit" name="downloadFilterEdit">
+                 <property name="toolTip">
+                  <string>Filter the list of downloads.</string>
+                 </property>
+                 <property name="whatsThis">
+                  <string>Filter the list of downloads.</string>
+                 </property>
+                 <property name="placeholderText">
+                  <string>Filter</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </item>
+            </layout>
+           </widget>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </widget>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QToolBar" name="toolBar">
+   <property name="contextMenuPolicy">
+    <enum>Qt::CustomContextMenu</enum>
+   </property>
+   <property name="windowTitle">
+    <string>Main ToolBar</string>
+   </property>
+   <property name="movable">
+    <bool>false</bool>
+   </property>
+   <property name="iconSize">
+    <size>
+     <width>42</width>
+     <height>36</height>
+    </size>
+   </property>
+   <attribute name="toolBarArea">
+    <enum>TopToolBarArea</enum>
+   </attribute>
+   <attribute name="toolBarBreak">
+    <bool>false</bool>
+   </attribute>
+   <addaction name="actionChange_Game"/>
+   <addaction name="actionInstallMod"/>
+   <addaction name="actionNexus"/>
+   <addaction name="actionModPage"/>
+   <addaction name="actionAdd_Profile"/>
+   <addaction name="action_Refresh"/>
+   <addaction name="actionModify_Executables"/>
+   <addaction name="actionTool"/>
+   <addaction name="actionSettings"/>
+   <addaction name="separator"/>
+   <addaction name="actionEndorseMO"/>
+   <addaction name="actionNotifications"/>
+   <addaction name="actionUpdate"/>
+   <addaction name="actionHelp"/>
+  </widget>
+  <widget class="StatusBar" name="statusBar"/>
+  <widget class="QMenuBar" name="menuBar">
+   <property name="geometry">
+    <rect>
+     <x>0</x>
+     <y>0</y>
+     <width>1009</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <widget class="QMenu" name="menuFile">
+    <property name="title">
+     <string>&amp;File</string>
+    </property>
+    <addaction name="actionChange_Game"/>
+    <addaction name="actionInstallMod"/>
+    <addaction name="actionNexus"/>
+    <addaction name="separator"/>
+    <addaction name="actionExit"/>
+   </widget>
+   <widget class="QMenu" name="menuTools">
+    <property name="title">
+     <string>&amp;Tools</string>
+    </property>
+    <addaction name="actionAdd_Profile"/>
+    <addaction name="actionModify_Executables"/>
+    <addaction name="separator"/>
+    <addaction name="actionTool"/>
+    <addaction name="separator"/>
+    <addaction name="actionSettings"/>
+   </widget>
+   <widget class="QMenu" name="menuHelp">
+    <property name="title">
+     <string>&amp;Help</string>
+    </property>
+    <addaction name="actionHelp"/>
+    <addaction name="actionUpdate"/>
+    <addaction name="separator"/>
+    <addaction name="actionEndorseMO"/>
+   </widget>
+   <widget class="QMenu" name="menuView">
+    <property name="title">
+     <string>&amp;View</string>
+    </property>
+    <widget class="QMenu" name="menuToolbars">
+     <property name="title">
+      <string>&amp;Toolbars</string>
+     </property>
+     <addaction name="actionMainMenuToggle"/>
+     <addaction name="actionToolBarMainToggle"/>
+     <addaction name="actionStatusBarToggle"/>
+     <addaction name="separator"/>
+     <addaction name="actionToolBarSmallIcons"/>
+     <addaction name="actionToolBarMediumIcons"/>
+     <addaction name="actionToolBarLargeIcons"/>
+     <addaction name="separator"/>
+     <addaction name="actionToolBarIconsOnly"/>
+     <addaction name="actionToolBarTextOnly"/>
+     <addaction name="actionToolBarIconsAndText"/>
+    </widget>
+    <addaction name="action_Refresh"/>
+    <addaction name="menuToolbars"/>
+    <addaction name="actionViewLog"/>
+    <addaction name="separator"/>
+    <addaction name="actionNotifications"/>
+   </widget>
+   <widget class="QMenu" name="menuRun">
+    <property name="title">
+     <string>&amp;Run</string>
+    </property>
+   </widget>
+   <addaction name="menuFile"/>
+   <addaction name="menuView"/>
+   <addaction name="menuTools"/>
+   <addaction name="menuRun"/>
+   <addaction name="menuHelp"/>
+  </widget>
+  <widget class="QDockWidget" name="logDock">
+   <property name="minimumSize">
+    <size>
+     <width>82</width>
+     <height>44</height>
+    </size>
+   </property>
+   <property name="windowTitle">
+    <string>Log</string>
+   </property>
+   <attribute name="dockWidgetArea">
+    <number>8</number>
+   </attribute>
+   <widget class="QWidget" name="dockWidgetContents">
+    <layout class="QVBoxLayout" name="verticalLayout_6">
+     <property name="leftMargin">
+      <number>0</number>
+     </property>
+     <property name="topMargin">
+      <number>0</number>
+     </property>
+     <property name="rightMargin">
+      <number>0</number>
+     </property>
+     <property name="bottomMargin">
+      <number>0</number>
+     </property>
+     <item>
+      <widget class="LogList" name="logList">
+       <property name="sizePolicy">
+        <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+         <horstretch>0</horstretch>
+         <verstretch>0</verstretch>
+        </sizepolicy>
+       </property>
+       <property name="minimumSize">
+        <size>
+         <width>30</width>
+         <height>20</height>
+        </size>
+       </property>
+       <property name="contextMenuPolicy">
+        <enum>Qt::CustomContextMenu</enum>
+       </property>
+       <property name="alternatingRowColors">
+        <bool>true</bool>
+       </property>
+       <property name="selectionMode">
+        <enum>QAbstractItemView::ExtendedSelection</enum>
+       </property>
+       <property name="rootIsDecorated">
+        <bool>false</bool>
+       </property>
+       <property name="uniformRowHeights">
+        <bool>true</bool>
+       </property>
+       <attribute name="headerVisible">
+        <bool>false</bool>
+       </attribute>
+      </widget>
+     </item>
+    </layout>
+   </widget>
+  </widget>
+  <action name="actionInstallMod">
+   <property name="icon">
+    <iconset resource="resources.qrc">
+     <normaloff>:/MO/gui/resources/system-installer.png</normaloff>:/MO/gui/resources/system-installer.png</iconset>
+   </property>
+   <property name="text">
+    <string>Install &amp;Mod...</string>
+   </property>
+   <property name="iconText">
+    <string>Install &amp;Mod</string>
+   </property>
+   <property name="toolTip">
+    <string>Install a new mod from an archive</string>
+   </property>
+   <property name="statusTip">
+    <string>Install a new mod from an archive</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+M</string>
+   </property>
+  </action>
+  <action name="actionAdd_Profile">
+   <property name="icon">
+    <iconset resource="resources.qrc">
+     <normaloff>:/MO/gui/profiles</normaloff>:/MO/gui/profiles</iconset>
+   </property>
+   <property name="text">
+    <string>&amp;Profiles...</string>
+   </property>
+   <property name="iconText">
+    <string>&amp;Profiles</string>
+   </property>
+   <property name="toolTip">
+    <string>Configure profiles</string>
+   </property>
+   <property name="statusTip">
+    <string>Configure profiles</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+P</string>
+   </property>
+  </action>
+  <action name="actionModify_Executables">
+   <property name="icon">
+    <iconset resource="resources.qrc">
+     <normaloff>:/MO/gui/icon_executable</normaloff>:/MO/gui/icon_executable</iconset>
+   </property>
+   <property name="text">
+    <string>&amp;Executables...</string>
+   </property>
+   <property name="iconText">
+    <string>&amp;Executables</string>
+   </property>
+   <property name="toolTip">
+    <string>Configure the executables that can be started through Mod Organizer</string>
+   </property>
+   <property name="statusTip">
+    <string>Configure the executables that can be started through Mod Organizer</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+E</string>
+   </property>
+  </action>
+  <action name="actionTool">
+   <property name="icon">
+    <iconset resource="resources.qrc">
+     <normaloff>:/MO/gui/plugins</normaloff>:/MO/gui/plugins</iconset>
+   </property>
+   <property name="text">
+    <string>&amp;Tool Plugins</string>
+   </property>
+   <property name="iconText">
+    <string>&amp;Tools</string>
+   </property>
+   <property name="toolTip">
+    <string>Tools</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+I</string>
+   </property>
+  </action>
+  <action name="actionSettings">
+   <property name="icon">
+    <iconset resource="resources.qrc">
+     <normaloff>:/MO/gui/settings</normaloff>:/MO/gui/settings</iconset>
+   </property>
+   <property name="text">
+    <string>&amp;Settings...</string>
+   </property>
+   <property name="iconText">
+    <string>&amp;Settings</string>
+   </property>
+   <property name="toolTip">
+    <string>Configure settings and workarounds</string>
+   </property>
+   <property name="statusTip">
+    <string>Configure settings and workarounds</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+S</string>
+   </property>
+  </action>
+  <action name="actionNexus">
+   <property name="icon">
+    <iconset resource="resources.qrc">
+     <normaloff>:/MO/gui/resources/internet-web-browser.png</normaloff>:/MO/gui/resources/internet-web-browser.png</iconset>
+   </property>
+   <property name="text">
+    <string>Visit &amp;Nexus</string>
+   </property>
+   <property name="iconText">
+    <string>Visit &amp;Nexus</string>
+   </property>
+   <property name="toolTip">
+    <string>Visit the Nexus website in your browser for more mods</string>
+   </property>
+   <property name="statusTip">
+    <string>Visit the Nexus website in your browser for more mods</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+N</string>
+   </property>
+  </action>
+  <action name="actionModPage">
+   <property name="icon">
+    <iconset resource="resources.qrc">
+     <normaloff>:/MO/gui/resources/internet-web-browser.png</normaloff>:/MO/gui/resources/internet-web-browser.png</iconset>
+   </property>
+   <property name="text">
+    <string>Browse Mod Page</string>
+   </property>
+   <property name="iconText">
+    <string>Browse Mod Page</string>
+   </property>
+   <property name="toolTip">
+    <string>Browse Mod Page</string>
+   </property>
+   <property name="statusTip">
+    <string>Browse Mod Page</string>
+   </property>
+   <property name="visible">
+    <bool>false</bool>
+   </property>
+  </action>
+  <action name="actionUpdate">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="icon">
+    <iconset resource="resources.qrc">
+     <normaloff>:/MO/gui/update</normaloff>:/MO/gui/update</iconset>
+   </property>
+   <property name="text">
+    <string>&amp;Update Mod Organizer</string>
+   </property>
+   <property name="iconText">
+    <string>&amp;Update Mod Organizer</string>
+   </property>
+   <property name="toolTip">
+    <string>Mod Organizer is up-to-date</string>
+   </property>
+   <property name="statusTip">
+    <string>Mod Organizer is up-to-date</string>
+   </property>
+  </action>
+  <action name="actionNotifications">
+   <property name="icon">
+    <iconset resource="resources.qrc">
+     <normaloff>:/MO/gui/warning</normaloff>:/MO/gui/warning</iconset>
+   </property>
+   <property name="text">
+    <string>&amp;Notifications...</string>
+   </property>
+   <property name="toolTip">
+    <string>Open the notifications dialog</string>
+   </property>
+   <property name="statusTip">
+    <string>Open the notifications dialog</string>
+   </property>
+   <property name="whatsThis">
+    <string>This button will be highlighted on the toolbar if MO discovered potential problems in your setup and provide tips on how to fix them.</string>
+   </property>
+  </action>
+  <action name="actionHelp">
+   <property name="icon">
+    <iconset resource="resources.qrc">
+     <normaloff>:/MO/gui/help</normaloff>:/MO/gui/help</iconset>
+   </property>
+   <property name="text">
+    <string>&amp;Help</string>
+   </property>
+   <property name="iconText">
+    <string>&amp;Help</string>
+   </property>
+   <property name="toolTip">
+    <string>Show help options</string>
+   </property>
+   <property name="statusTip">
+    <string>Show help options</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+H</string>
+   </property>
+  </action>
+  <action name="actionEndorseMO">
+   <property name="icon">
+    <iconset resource="resources.qrc">
+     <normaloff>:/MO/gui/icon_favorite</normaloff>:/MO/gui/icon_favorite</iconset>
+   </property>
+   <property name="text">
+    <string>&amp;Endorse ModOrganizer</string>
+   </property>
+   <property name="iconText">
+    <string>&amp;Endorse ModOrganizer</string>
+   </property>
+   <property name="toolTip">
+    <string>Endorse Mod Organizer</string>
+   </property>
+   <property name="statusTip">
+    <string>Endorse Mod Organizer</string>
+   </property>
+  </action>
+  <action name="actionChange_Game">
+   <property name="icon">
+    <iconset resource="resources.qrc">
+     <normaloff>:/MO/gui/instance_switch</normaloff>:/MO/gui/instance_switch</iconset>
+   </property>
+   <property name="text">
+    <string>Manage Instan&amp;ces...</string>
+   </property>
+   <property name="iconText">
+    <string>Manage Instan&amp;ces...</string>
+   </property>
+   <property name="toolTip">
+    <string>Open the instance manager window to manage a different instance</string>
+   </property>
+   <property name="statusTip">
+    <string>Open the instance manager window to manage a different instance</string>
+   </property>
+  </action>
+  <action name="actionExit">
+   <property name="text">
+    <string>E&amp;xit</string>
+   </property>
+   <property name="iconText">
+    <string>E&amp;xit</string>
+   </property>
+   <property name="toolTip">
+    <string>Exits Mod Organizer</string>
+   </property>
+   <property name="statusTip">
+    <string>Exits Mod Organizer</string>
+   </property>
+  </action>
+  <action name="actionToolBarMainToggle">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>M&amp;ain Toolbar</string>
+   </property>
+  </action>
+  <action name="actionToolBarSmallIcons">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>&amp;Small Icons</string>
+   </property>
+  </action>
+  <action name="actionToolBarLargeIcons">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Lar&amp;ge Icons</string>
+   </property>
+  </action>
+  <action name="actionToolBarIconsOnly">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>&amp;Icons Only</string>
+   </property>
+  </action>
+  <action name="actionToolBarTextOnly">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>&amp;Text Only</string>
+   </property>
+  </action>
+  <action name="actionToolBarIconsAndText">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>I&amp;cons and Text</string>
+   </property>
+  </action>
+  <action name="actionToolBarMediumIcons">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>M&amp;edium Icons</string>
+   </property>
+  </action>
+  <action name="actionMainMenuToggle">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>&amp;Menu</string>
+   </property>
+  </action>
+  <action name="actionStatusBarToggle">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Status &amp;bar</string>
+   </property>
+  </action>
+  <action name="actionViewLog">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Log</string>
+   </property>
+  </action>
+  <action name="action_Refresh">
+   <property name="icon">
+    <iconset resource="resources.qrc">
+     <normaloff>:/MO/gui/resources/view-refresh.png</normaloff>:/MO/gui/resources/view-refresh.png</iconset>
+   </property>
+   <property name="text">
+    <string>&amp;Refresh</string>
+   </property>
+   <property name="shortcut">
+    <string>F5</string>
+   </property>
+  </action>
+ </widget>
+ <layoutdefault spacing="6" margin="11"/>
+ <customwidgets>
+  <customwidget>
+   <class>LinkLabel</class>
+   <extends>QLabel</extends>
+   <header location="global">linklabel.h</header>
+  </customwidget>
+  <customwidget>
+   <class>MOBase::LineEditClear</class>
+   <extends>QLineEdit</extends>
+   <header>lineeditclear.h</header>
+  </customwidget>
+  <customwidget>
+   <class>ModListView</class>
+   <extends>QTreeView</extends>
+   <header>modlistview.h</header>
+  </customwidget>
+  <customwidget>
+   <class>PluginListView</class>
+   <extends>QTreeView</extends>
+   <header>pluginlistview.h</header>
+  </customwidget>
+  <customwidget>
+   <class>LCDNumber</class>
+   <extends>QLCDNumber</extends>
+   <header>lcdnumber.h</header>
+  </customwidget>
+  <customwidget>
+   <class>MOBase::SortableTreeWidget</class>
+   <extends>QWidget</extends>
+   <header>sortabletreewidget.h</header>
+  </customwidget>
+  <customwidget>
+   <class>LogList</class>
+   <extends>QTreeView</extends>
+   <header>loglist.h</header>
+  </customwidget>
+  <customwidget>
+   <class>StatusBar</class>
+   <extends>QStatusBar</extends>
+   <header>statusbar.h</header>
+  </customwidget>
+  <customwidget>
+   <class>DownloadListView</class>
+   <extends>QTreeView</extends>
+   <header>downloadlistview.h</header>
+  </customwidget>
+ </customwidgets>
+ <resources>
+  <include location="resources.qrc"/>
+ </resources>
+ <connections/>
+</ui>

@@ -1,0 +1,18 @@
+[package]
+name = "mo2_bsa_ffi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "bsa_ffi"
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = "1.0"
+ba2 = "3.0.1"
+rayon = "1.11"
+flate2 = "1.1"
+lz4_flex = "0.11"
+byteorder = "1.5"
+tracing = "0.1"
+walkdir = "2.5"

@@ -1,0 +1,30 @@
+name: Build ESPTK
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure ESPTK build
+        shell: pwsh
+        run: |
+          cmake --preset vs2022-windows "-DCMAKE_INSTALL_PREFIX=install"
+
+      - name: Build ESPTK
+        run: cmake --build vsbuild --config RelWithDebInfo
+
+      - name: Install ESPTK
+        run: cmake --install vsbuild --config RelWithDebInfo
+
+      - name: Upload ESPTK artifact
+        uses: actions/upload-artifact@master
+        with:
+          name: esptk
+          path: ./install

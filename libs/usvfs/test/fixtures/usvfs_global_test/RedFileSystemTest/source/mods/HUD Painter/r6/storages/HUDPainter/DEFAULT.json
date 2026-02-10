@@ -1,0 +1,11 @@
+{
+  "propertiesDefault": [
+    {
+      "name": "MainColors.Red",
+      "red": 1.1761,
+      "green": 0.3809,
+      "blue": 0.3476,
+      "alpha": 1
+    }
+  ]
+}
