@@ -9,18 +9,6 @@ Fluorine Manager an attempt at porting MO2 to linux with FUSE as the VFS system.
 - Linux-native game plugins (`libgame_*.so`) are supported.
 - Portable instances are supported via local `ModOrganizer.ini` detection.
 
-## Runtime Dependencies (Linux)
-
-- `icoutils` is required for Windows `.exe` icon extraction in the UI.
-- Without `icoutils`, MO2 falls back to the default missing icon.
-
-Install:
-
-```bash
-# Arch
-sudo pacman -S icoutils
-```
-
 ## FUSE Permissions
 
 - Users only need to change `/etc/fuse.conf` when MO2 mounts with `allow_other` (or `allow_root`).
