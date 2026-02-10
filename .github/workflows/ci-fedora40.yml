@@ -235,9 +235,10 @@ jobs:
           }
 
           copy_if_found "$(find build -type f -name 'libuibase.so' | head -n1 || true)"
+          copy_if_found "$(find build -type f -name 'libarchive.so' | head -n1 || true)"
           copy_if_found "$(find build -type f -name 'liblibbsarch.so' | head -n1 || true)"
           copy_if_found "$(find libs/nak_ffi/target/release -type f -name 'libnak_ffi.so' | head -n1 || true)"
-          for so in libuibase.so libuibase.so.* liblibbsarch.so liblibbsarch.so.* libnak_ffi.so; do
+          for so in libuibase.so libuibase.so.* libarchive.so libarchive.so.* liblibbsarch.so liblibbsarch.so.* libnak_ffi.so; do
             find build libs -type f -name "${so}" -exec cp -f {} "${STAGE_DIR}/lib/" \; 2>/dev/null || true
           done
 
