@@ -313,7 +313,16 @@ jobs:
           PY="$(command -v python3.13 || command -v python3)"
           PY_VER="$("${PY}" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
           PY_STDLIB="$("${PY}" -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')"
-          PY_DYNLOAD="$("${PY}" -c 'import sysconfig; print(sysconfig.get_path("platstdlib"))')/lib-dynload"
+          # Find lib-dynload: try sysconfig, then common Fedora paths
+          PY_DYNLOAD="$("${PY}" -c "
+          import sysconfig, os
+          for base in [sysconfig.get_path('platstdlib'), sysconfig.get_path('stdlib'),
+                       '/usr/lib64/python${PY_VER}', '/usr/lib/python${PY_VER}']:
+              d = os.path.join(base, 'lib-dynload')
+              if os.path.isdir(d) and os.listdir(d):
+                  print(d); break
+          ")"
+          echo "Python: ${PY} (${PY_VER}), stdlib: ${PY_STDLIB}, dynload: ${PY_DYNLOAD}"
 
           # 4a. Create pythoncore.zip (stdlib as .pyc, ~8-12 MB)
           mkdir -p "${STAGE_DIR}/plugins/plugin_python/libs"
@@ -322,19 +331,23 @@ jobs:
 
           # 4b. Bundle C extension modules (lib-dynload/*.so)
           mkdir -p "${STAGE_DIR}/plugins/plugin_python/libs/lib-dynload"
-          if [ -d "${PY_DYNLOAD}" ]; then
-            cp -f "${PY_DYNLOAD}"/*.cpython-*.so \
-                "${STAGE_DIR}/plugins/plugin_python/libs/lib-dynload/" 2>/dev/null || true
+          if [ -n "${PY_DYNLOAD}" ] && [ -d "${PY_DYNLOAD}" ]; then
+            echo "Copying lib-dynload from ${PY_DYNLOAD}..."
+            cp -f "${PY_DYNLOAD}"/*.so \
+                "${STAGE_DIR}/plugins/plugin_python/libs/lib-dynload/" || true
+            echo "lib-dynload count: $(ls "${STAGE_DIR}/plugins/plugin_python/libs/lib-dynload/" | wc -l)"
+          else
+            echo "WARNING: lib-dynload not found! Tried: ${PY_DYNLOAD}"
+            find /usr/lib64 /usr/lib -maxdepth 3 -name "lib-dynload" -type d 2>/dev/null || true
           fi
 
           # 4c. Create portable Python home directory structure
+          # Use real copies (not symlinks) since upload-artifact strips symlinks.
           mkdir -p "${STAGE_DIR}/python/lib/python${PY_VER}"
-          # Symlink pythoncore.zip so PYTHONHOME finds it
-          ln -sf "../../plugins/plugin_python/libs/pythoncore.zip" \
+          # Copy pythoncore.zip into PYTHONHOME
+          cp -f "${STAGE_DIR}/plugins/plugin_python/libs/pythoncore.zip" \
               "${STAGE_DIR}/python/lib/python${PY_VER}/pythoncore.zip" 2>/dev/null || true
-          # Copy os.py (needed by Python init before zip import is configured)
-          cp -f "${PY_STDLIB}/os.py" "${STAGE_DIR}/python/lib/python${PY_VER}/" 2>/dev/null || true
-          # Copy _collections_abc.py and other bootstrap modules
+          # Copy bootstrap modules needed before zip import is configured
           for _mod in os.py _collections_abc.py abc.py io.py _sitebuiltins.py stat.py \
                       posixpath.py genericpath.py _bootsubprocess.py site.py \
                       codecs.py encodings/__init__.py encodings/aliases.py \
@@ -344,9 +357,12 @@ jobs:
             cp -f "${PY_STDLIB}/${_mod}" \
                 "${STAGE_DIR}/python/lib/python${PY_VER}/${_mod}" 2>/dev/null || true
           done
-          # Also copy lib-dynload into the python home so Python can find them
-          ln -sf "../../../plugins/plugin_python/libs/lib-dynload" \
-              "${STAGE_DIR}/python/lib/python${PY_VER}/lib-dynload" 2>/dev/null || true
+          # Copy lib-dynload into the python home (real copy, not symlink)
+          mkdir -p "${STAGE_DIR}/python/lib/python${PY_VER}/lib-dynload"
+          if [ -d "${STAGE_DIR}/plugins/plugin_python/libs/lib-dynload" ]; then
+            cp -f "${STAGE_DIR}/plugins/plugin_python/libs/lib-dynload"/*.so \
+                "${STAGE_DIR}/python/lib/python${PY_VER}/lib-dynload/" 2>/dev/null || true
+          fi
 
           # 4d. Install PyQt6, sip, and third-party packages
           mkdir -p "${STAGE_DIR}/python/site-packages"
