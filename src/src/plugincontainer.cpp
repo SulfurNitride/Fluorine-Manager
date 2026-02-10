@@ -858,9 +858,6 @@ std::vector<QObject*> PluginContainer::loadProxied(const QString& filepath,
 QObject* PluginContainer::loadQtPlugin(const QString& filepath)
 {
   std::unique_ptr<QPluginLoader> pluginLoader(new QPluginLoader(filepath, this));
-  // Use RTLD_GLOBAL so all plugins share the same libnak_ffi.so instance
-  // (and its Rust statics like the game detection cache).
-  pluginLoader->setLoadHints(QLibrary::ExportExternalSymbolsHint);
   if (pluginLoader->instance() == nullptr) {
     m_FailedPlugins.push_back(filepath);
     log::error("failed to load plugin {}: {}", filepath, pluginLoader->errorString());
