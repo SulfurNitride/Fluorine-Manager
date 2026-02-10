@@ -245,7 +245,7 @@ jobs:
           for needed in $(readelf -d "${RUNDIR}/ModOrganizer" | awk -F'[][]' '/NEEDED/ {print $2}'); do
             case "${needed}" in
               libboost_program_options.so*|libboost_thread.so*|libfmt.so*|libfuse3.so*)
-                src="$(ldconfig -p | awk -v so="${needed}" '$1 == so {print $NF; exit}')"
+                src="$(ldconfig -p | awk -v so="${needed}" '$1 == so {print $NF; exit}' || true)"
                 if [ -z "${src}" ]; then
                   src="$(find /usr/lib64 /usr/lib -type f -name "${needed}" 2>/dev/null | head -n1 || true)"
                 fi
@@ -312,14 +312,16 @@ jobs:
           patchelf --set-rpath '$ORIGIN:$ORIGIN/lib:$ORIGIN/plugins' "${STAGE_DIR}/ModOrganizer" || true
           find "${STAGE_DIR}/plugins" -type f -name "*.so" -exec patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/..' {} \; || true
           find "${STAGE_DIR}/lib" -type f -name "*.so*" -exec patchelf --set-rpath '$ORIGIN' {} \; || true
-          if readelf -r "${STAGE_DIR}/ModOrganizer" | grep -q "R_X86_64_COPY"; then
+          copy_relocs="$(readelf -r "${STAGE_DIR}/ModOrganizer" | grep "R_X86_64_COPY" || true)"
+          if [ -n "${copy_relocs}" ]; then
             echo "ERROR: ModOrganizer contains COPY relocations (will fail on modern glibc)."
-            readelf -r "${STAGE_DIR}/ModOrganizer" | grep "R_X86_64_COPY" || true
+            echo "${copy_relocs}"
             exit 1
           fi
-          if readelf -d "${STAGE_DIR}/ModOrganizer" | grep -q "TEXTREL"; then
+          textrel_entries="$(readelf -d "${STAGE_DIR}/ModOrganizer" | grep "TEXTREL" || true)"
+          if [ -n "${textrel_entries}" ]; then
             echo "ERROR: ModOrganizer contains TEXTREL entries (will fail at runtime)."
-            readelf -d "${STAGE_DIR}/ModOrganizer" | grep "TEXTREL" || true
+            echo "${textrel_entries}"
             exit 1
           fi
 
