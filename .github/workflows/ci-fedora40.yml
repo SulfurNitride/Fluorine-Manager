@@ -50,7 +50,7 @@ jobs:
           dnf_retry dnf -y --refresh install --setopt=install_weak_deps=False \
             gcc gcc-c++ make \
             cmake ninja-build \
-            git which file binutils patchelf \
+            git which file binutils patchelf curl \
             ccache \
             pkgconf-pkg-config \
             tomlplusplus-devel \
@@ -65,7 +65,8 @@ jobs:
             python3 python3-devel python3-pip pybind11-devel \
             qt6-qtbase-devel \
             qt6-qtwebengine-devel \
-            qt6-qtwebsockets-devel
+            qt6-qtwebsockets-devel \
+            icoutils
 
       - name: Ensure Python SIP tooling
         run: |
@@ -203,7 +204,22 @@ jobs:
             exit 1
           }
 
-      - name: Stage runtime artifact
+      - name: Download linuxdeploy tooling
+        run: |
+          set -euo pipefail
+          mkdir -p "${GITHUB_WORKSPACE}/tools"
+          curl -L --retry 3 --retry-all-errors \
+            -o "${GITHUB_WORKSPACE}/tools/linuxdeploy-x86_64.AppImage" \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          curl -L --retry 3 --retry-all-errors \
+            -o "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt-x86_64.AppImage" \
+            https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x "${GITHUB_WORKSPACE}/tools/linuxdeploy-x86_64.AppImage" \
+                   "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt-x86_64.AppImage"
+          ln -sf "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt-x86_64.AppImage" \
+                 "${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt"
+
+      - name: Build AppImage
         run: |
           set -euo pipefail
 
@@ -214,55 +230,20 @@ jobs:
           fi
 
           RUNDIR="$(dirname "${MODORG_BIN}")"
-          STAGE_DIR="${GITHUB_WORKSPACE}/artifact"
-          rm -rf "${STAGE_DIR}"
-          mkdir -p "${STAGE_DIR}/plugins" "${STAGE_DIR}/dlls" "${STAGE_DIR}/lib"
+          APPDIR="${GITHUB_WORKSPACE}/AppDir"
+          ARTIFACT_DIR="${GITHUB_WORKSPACE}/artifact"
+          rm -rf "${APPDIR}" "${ARTIFACT_DIR}"
+          mkdir -p "${APPDIR}/usr/bin" "${APPDIR}/usr/plugins" "${APPDIR}/usr/dlls" "${APPDIR}/usr/python"
 
-          # Minimal portable payload (match local artifact style).
-          cp -f "${RUNDIR}/ModOrganizer" "${STAGE_DIR}/ModOrganizer"
+          # Seed AppDir with the main executable and runtime payload produced by the build.
+          cp -f "${RUNDIR}/ModOrganizer" "${APPDIR}/usr/bin/ModOrganizer"
           if [ -f "${RUNDIR}/umu-run" ]; then
-            cp -f "${RUNDIR}/umu-run" "${STAGE_DIR}/umu-run"
-            chmod +x "${STAGE_DIR}/umu-run" || true
+            cp -f "${RUNDIR}/umu-run" "${APPDIR}/usr/bin/umu-run"
+            chmod +x "${APPDIR}/usr/bin/umu-run" || true
           fi
           if [ -f "${RUNDIR}/README-PORTABLE.txt" ]; then
-            cp -f "${RUNDIR}/README-PORTABLE.txt" "${STAGE_DIR}/README-PORTABLE.txt"
+            cp -f "${RUNDIR}/README-PORTABLE.txt" "${APPDIR}/usr/bin/README-PORTABLE.txt"
           fi
-
-          # Bundle non-system runtime shared libraries needed at startup.
-          copy_if_found() {
-            local src="$1"
-            [ -n "${src}" ] && [ -f "${src}" ] && cp -f "${src}" "${STAGE_DIR}/lib/" || true
-          }
-
-          copy_if_found "$(find build -type f -name 'libuibase.so' | head -n1 || true)"
-          copy_if_found "$(find build -type f -name 'libarchive.so' | head -n1 || true)"
-          copy_if_found "$(find build -type f -name 'liblibbsarch.so' | head -n1 || true)"
-          copy_if_found "$(find libs/nak_ffi/target/release -type f -name 'libnak_ffi.so' | head -n1 || true)"
-          copy_if_found "$(find libs/bsa_ffi/target/release -type f -name 'libbsa_ffi.so' | head -n1 || true)"
-          for so in libuibase.so libuibase.so.* libarchive.so libarchive.so.* liblibbsarch.so liblibbsarch.so.* libnak_ffi.so libbsa_ffi.so; do
-            find build libs -type f -name "${so}" -exec cp -f {} "${STAGE_DIR}/lib/" \; 2>/dev/null || true
-          done
-
-          # Bundle distro libs with versioned SONAMEs that may be missing on target systems.
-          # Scan both the main binary and plugin .so files for NEEDED entries.
-          _all_binaries="${RUNDIR}/ModOrganizer"
-          for _so in $(find build/libs -maxdepth 5 -name '*.so' -type f 2>/dev/null); do
-            _all_binaries="${_all_binaries} ${_so}"
-          done
-          _needed_libs="$(for _bin in ${_all_binaries}; do
-            readelf -d "${_bin}" 2>/dev/null | awk -F'[][]' '/NEEDED/ {print $2}'
-          done | sort -u)"
-          for needed in ${_needed_libs}; do
-            case "${needed}" in
-              libboost_program_options.so*|libboost_thread.so*|libfmt.so*|libfuse3.so*|libpython3*.so*)
-                src="$(ldconfig -p | awk -v so="${needed}" '$1 == so {print $NF; exit}' || true)"
-                if [ -z "${src}" ]; then
-                  src="$(find /usr/lib64 /usr/lib -type f -name "${needed}" 2>/dev/null | head -n1 || true)"
-                fi
-                copy_if_found "${src}"
-                ;;
-            esac
-          done
 
           # Gather built plugin .so files (game plugins, tools, installers, previews, etc.).
           find build/libs -type f \( \
@@ -278,166 +259,112 @@ jobs:
             -name 'libbsa_packer.so' -o \
             -name 'libproxy.so' -o \
             -name 'librunner.so' \
-          \) -exec cp -f {} "${STAGE_DIR}/plugins/" \;
+          \) -exec cp -f {} "${APPDIR}/usr/plugins/" \;
 
           # Python plugin payload used by this port.
           [ -f build/src/src/plugins/libplugin_python.so ] && \
-            cp -f build/src/src/plugins/libplugin_python.so "${STAGE_DIR}/plugins/" || true
+            cp -f build/src/src/plugins/libplugin_python.so "${APPDIR}/usr/plugins/" || true
           [ -f build/src/src/plugins/lzokay.py ] && \
-            cp -f build/src/src/plugins/lzokay.py "${STAGE_DIR}/plugins/" || true
+            cp -f build/src/src/plugins/lzokay.py "${APPDIR}/usr/plugins/" || true
           [ -f build/src/src/plugins/winreg.py ] && \
-            cp -f build/src/src/plugins/winreg.py "${STAGE_DIR}/plugins/" || true
+            cp -f build/src/src/plugins/winreg.py "${APPDIR}/usr/plugins/" || true
           [ -f build/src/src/plugins/pyCfg.py ] && \
-            cp -f build/src/src/plugins/pyCfg.py "${STAGE_DIR}/plugins/" || true
+            cp -f build/src/src/plugins/pyCfg.py "${APPDIR}/usr/plugins/" || true
           [ -f build/src/src/plugins/DDSPreview.py ] && \
-            cp -f build/src/src/plugins/DDSPreview.py "${STAGE_DIR}/plugins/" || true
+            cp -f build/src/src/plugins/DDSPreview.py "${APPDIR}/usr/plugins/" || true
           [ -f build/src/src/plugins/Form43Checker.py ] && \
-            cp -f build/src/src/plugins/Form43Checker.py "${STAGE_DIR}/plugins/" || true
+            cp -f build/src/src/plugins/Form43Checker.py "${APPDIR}/usr/plugins/" || true
           [ -f build/src/src/plugins/ScriptExtenderPluginChecker.py ] && \
-            cp -f build/src/src/plugins/ScriptExtenderPluginChecker.py "${STAGE_DIR}/plugins/" || true
+            cp -f build/src/src/plugins/ScriptExtenderPluginChecker.py "${APPDIR}/usr/plugins/" || true
           [ -d build/src/src/plugins/basic_games ] && \
-            cp -a build/src/src/plugins/basic_games "${STAGE_DIR}/plugins/" || true
+            cp -a build/src/src/plugins/basic_games "${APPDIR}/usr/plugins/" || true
           [ -d build/src/src/plugins/data ] && \
-            cp -a build/src/src/plugins/data "${STAGE_DIR}/plugins/" || true
+            cp -a build/src/src/plugins/data "${APPDIR}/usr/plugins/" || true
           [ -d build/src/src/plugins/libs ] && \
-            cp -a build/src/src/plugins/libs "${STAGE_DIR}/plugins/" || true
+            cp -a build/src/src/plugins/libs "${APPDIR}/usr/plugins/" || true
           [ -d build/src/src/plugins/dlls ] && \
-            cp -a build/src/src/plugins/dlls "${STAGE_DIR}/plugins/" || true
-          rm -f "${STAGE_DIR}/plugins/FNISPatches.py" \
-                "${STAGE_DIR}/plugins/FNISTool.py" \
-                "${STAGE_DIR}/plugins/FNISToolReset.py" || true
+            cp -a build/src/src/plugins/dlls "${APPDIR}/usr/plugins/" || true
+          rm -f "${APPDIR}/usr/plugins/FNISPatches.py" \
+                "${APPDIR}/usr/plugins/FNISTool.py" \
+                "${APPDIR}/usr/plugins/FNISToolReset.py" || true
 
-          # ---- Portable Python runtime ----
-          # Bundle a self-contained Python so the artifact works on distros
-          # that ship a different Python version (or none at all).
-          PY="$(command -v python3.13 || command -v python3)"
-          PY_VER="$("${PY}" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-          PY_STDLIB="$("${PY}" -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')"
-          # Find lib-dynload: try sysconfig, then common Fedora paths
-          PY_DYNLOAD="$("${PY}" -c "
-          import sysconfig, os
-          for base in [sysconfig.get_path('platstdlib'), sysconfig.get_path('stdlib'),
-                       '/usr/lib64/python${PY_VER}', '/usr/lib/python${PY_VER}']:
-              d = os.path.join(base, 'lib-dynload')
-              if os.path.isdir(d) and os.listdir(d):
-                  print(d); break
-          ")"
-          echo "Python: ${PY} (${PY_VER}), stdlib: ${PY_STDLIB}, dynload: ${PY_DYNLOAD}"
-
-          # 4a. Create pythoncore.zip (stdlib as .pyc, ~8-12 MB)
-          mkdir -p "${STAGE_DIR}/plugins/plugin_python/libs"
-          "${PY}" libs/plugin_python/src/proxy/build_pythoncore.py \
-              "${STAGE_DIR}/plugins/plugin_python/libs/pythoncore.zip" || true
-
-          # 4b. Bundle C extension modules (lib-dynload/*.so)
-          mkdir -p "${STAGE_DIR}/plugins/plugin_python/libs/lib-dynload"
-          if [ -n "${PY_DYNLOAD}" ] && [ -d "${PY_DYNLOAD}" ]; then
-            echo "Copying lib-dynload from ${PY_DYNLOAD}..."
-            cp -f "${PY_DYNLOAD}"/*.so \
-                "${STAGE_DIR}/plugins/plugin_python/libs/lib-dynload/" || true
-            echo "lib-dynload count: $(ls "${STAGE_DIR}/plugins/plugin_python/libs/lib-dynload/" | wc -l)"
-          else
-            echo "WARNING: lib-dynload not found! Tried: ${PY_DYNLOAD}"
-            find /usr/lib64 /usr/lib -maxdepth 3 -name "lib-dynload" -type d 2>/dev/null || true
-          fi
-
-          # 4c. Create portable Python home directory structure
-          # Use real copies (not symlinks) since upload-artifact strips symlinks.
-          mkdir -p "${STAGE_DIR}/python/lib/python${PY_VER}"
-          # Copy pythoncore.zip into PYTHONHOME
-          cp -f "${STAGE_DIR}/plugins/plugin_python/libs/pythoncore.zip" \
-              "${STAGE_DIR}/python/lib/python${PY_VER}/pythoncore.zip" 2>/dev/null || true
-          # Copy bootstrap modules needed before zip import is configured
-          for _mod in os.py _collections_abc.py abc.py io.py _sitebuiltins.py stat.py \
-                      posixpath.py genericpath.py _bootsubprocess.py site.py \
-                      codecs.py encodings/__init__.py encodings/aliases.py \
-                      encodings/utf_8.py encodings/ascii.py encodings/latin_1.py; do
-            _dir="$(dirname "${_mod}")"
-            mkdir -p "${STAGE_DIR}/python/lib/python${PY_VER}/${_dir}"
-            cp -f "${PY_STDLIB}/${_mod}" \
-                "${STAGE_DIR}/python/lib/python${PY_VER}/${_mod}" 2>/dev/null || true
-          done
-          # Copy lib-dynload into the python home (real copy, not symlink)
-          mkdir -p "${STAGE_DIR}/python/lib/python${PY_VER}/lib-dynload"
-          if [ -d "${STAGE_DIR}/plugins/plugin_python/libs/lib-dynload" ]; then
-            cp -f "${STAGE_DIR}/plugins/plugin_python/libs/lib-dynload"/*.so \
-                "${STAGE_DIR}/python/lib/python${PY_VER}/lib-dynload/" 2>/dev/null || true
-          fi
-
-          # 4d. Install PyQt6, sip, and third-party packages
-          mkdir -p "${STAGE_DIR}/python/site-packages"
-          "${PY}" -m pip install --target "${STAGE_DIR}/python/site-packages" \
-              PyQt6-sip PyQt6 psutil vdf pyyaml 2>/dev/null || true
-
-          # 4e. Ensure plugin_python directory structure is complete
-          # (proxy expects dlls/ and libs/ subdirs under plugin_python/)
-          mkdir -p "${STAGE_DIR}/plugins/plugin_python/dlls"
-          # Move librunner.so into the correct subdirectory
-          if [ -f "${STAGE_DIR}/plugins/librunner.so" ]; then
-            mv -f "${STAGE_DIR}/plugins/librunner.so" \
-                "${STAGE_DIR}/plugins/plugin_python/dlls/librunner.so"
-          fi
-          # Move mobase.so into libs/ if it was staged elsewhere
-          MOBASE_SO="$(find build -type f -name 'mobase*.so' | head -n1 || true)"
-          if [ -n "${MOBASE_SO}" ] && [ ! -f "${STAGE_DIR}/plugins/plugin_python/libs/mobase.so" ]; then
-            cp -f "${MOBASE_SO}" "${STAGE_DIR}/plugins/plugin_python/libs/"
-          fi
-
-          # 4f. patchelf bundled Python extensions for relocatability
-          find "${STAGE_DIR}/plugins/plugin_python" -name "*.so" \
-              -exec patchelf --set-rpath '$ORIGIN:$ORIGIN/../../lib:$ORIGIN/../../../lib' {} \; 2>/dev/null || true
-          find "${STAGE_DIR}/python/site-packages" -name "*.so" \
-              -exec patchelf --set-rpath '$ORIGIN:$ORIGIN/../../lib:$ORIGIN/../../../lib' {} \; 2>/dev/null || true
-
-          echo "=== Python bundle contents ==="
-          find "${STAGE_DIR}/plugins/plugin_python" -type f | sort || true
-          find "${STAGE_DIR}/python" -type f | head -50 || true
-          echo "=== Python bundle size ==="
-          du -sh "${STAGE_DIR}/plugins/plugin_python" "${STAGE_DIR}/python" 2>/dev/null || true
-
-          # 7z runtime.
+          # 7z runtime (loaded dynamically at runtime, so stage explicitly).
           if [ -f "${RUNDIR}/dlls/7z.so" ]; then
-            cp -f "${RUNDIR}/dlls/7z.so" "${STAGE_DIR}/dlls/7z.so"
+            cp -f "${RUNDIR}/dlls/7z.so" "${APPDIR}/usr/dlls/7z.so"
           else
             SO7="$(find build -type f -name 7z.so | head -n1 || true)"
-            [ -n "${SO7}" ] && cp -f "${SO7}" "${STAGE_DIR}/dlls/7z.so" || true
+            [ -n "${SO7}" ] && cp -f "${SO7}" "${APPDIR}/usr/dlls/7z.so" || true
           fi
-          if [ -f "${STAGE_DIR}/dlls/7z.so" ]; then
-            cp -f "${STAGE_DIR}/dlls/7z.so" "${STAGE_DIR}/dlls/7zip.dll"
+          if [ -f "${APPDIR}/usr/dlls/7z.so" ]; then
+            cp -f "${APPDIR}/usr/dlls/7z.so" "${APPDIR}/usr/dlls/7zip.dll"
           fi
 
-          # Make the bundle relocatable (remove CI-only absolute RUNPATHs).
-          patchelf --set-rpath '$ORIGIN:$ORIGIN/lib:$ORIGIN/plugins' "${STAGE_DIR}/ModOrganizer" || true
-          find "${STAGE_DIR}/plugins" -maxdepth 1 -type f -name "*.so" -exec patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/..:$ORIGIN/dlls:$ORIGIN/plugin_python/dlls' {} \; || true
-          find "${STAGE_DIR}/plugins/plugin_python" -type f -name "*.so" -exec patchelf --set-rpath '$ORIGIN:$ORIGIN/..:$ORIGIN/../../lib:$ORIGIN/../../../lib' {} \; 2>/dev/null || true
-          find "${STAGE_DIR}/lib" -type f -name "*.so*" -exec patchelf --set-rpath '$ORIGIN' {} \; || true
-          copy_relocs="$(readelf -r "${STAGE_DIR}/ModOrganizer" | grep "R_X86_64_COPY" || true)"
+          # Bundle Python runtime payload staged by CMake (site-packages, etc.).
+          [ -d build/src/src/python ] && cp -a build/src/src/python/. "${APPDIR}/usr/python/" || true
+
+          # Bundle icoutils tools so executable icon extraction works without host packages.
+          for tool in wrestool icotool; do
+            if command -v "${tool}" >/dev/null 2>&1; then
+              cp -f "$(command -v "${tool}")" "${APPDIR}/usr/bin/${tool}"
+            fi
+          done
+
+          # linuxdeploy uses desktop metadata for launcher/AppImage generation.
+          cat > "${APPDIR}/ModOrganizer.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=ModOrganizer
+Exec=ModOrganizer
+Icon=modorganizer
+Categories=Game;
+Terminal=false
+EOF
+          cp -f src/src/resources/mo_icon.png "${APPDIR}/modorganizer.png"
+
+          export PATH="${GITHUB_WORKSPACE}/tools:${PATH}"
+          export LINUXDEPLOY_PLUGIN_QT_APPIMAGE="${GITHUB_WORKSPACE}/tools/linuxdeploy-plugin-qt-x86_64.AppImage"
+          export QMAKE=/usr/bin/qmake6
+          export EXTRA_QT_PLUGINS="waylandcompositor;wayland-decoration-client;wayland-graphics-integration-client;wayland-shell-integration"
+
+          "${GITHUB_WORKSPACE}/tools/linuxdeploy-x86_64.AppImage" --appimage-extract-and-run \
+            --appdir "${APPDIR}" \
+            --desktop-file "${APPDIR}/ModOrganizer.desktop" \
+            --icon-file "${APPDIR}/modorganizer.png" \
+            --executable "${APPDIR}/usr/bin/ModOrganizer" \
+            --plugin qt \
+            --output appimage
+
+          mkdir -p "${ARTIFACT_DIR}"
+          APPIMAGE_FILE="$(find "${GITHUB_WORKSPACE}" -maxdepth 1 -type f -name '*.AppImage' | head -n1 || true)"
+          if [ -z "${APPIMAGE_FILE}" ]; then
+            echo "AppImage was not produced"
+            exit 1
+          fi
+
+          mv -f "${APPIMAGE_FILE}" "${ARTIFACT_DIR}/ModOrganizer-fedora41-x86_64.AppImage"
+
+          copy_relocs="$(readelf -r "${APPDIR}/usr/bin/ModOrganizer" | grep "R_X86_64_COPY" || true)"
           if [ -n "${copy_relocs}" ]; then
             echo "ERROR: ModOrganizer contains COPY relocations (will fail on modern glibc)."
             echo "${copy_relocs}"
             exit 1
           fi
-          textrel_entries="$(readelf -d "${STAGE_DIR}/ModOrganizer" | grep "TEXTREL" || true)"
+          textrel_entries="$(readelf -d "${APPDIR}/usr/bin/ModOrganizer" | grep "TEXTREL" || true)"
           if [ -n "${textrel_entries}" ]; then
             echo "ERROR: ModOrganizer contains TEXTREL entries (will fail at runtime)."
             echo "${textrel_entries}"
             exit 1
           fi
 
-          # Strip symbols to keep artifact size close to local portable builds.
-          strip --strip-unneeded "${STAGE_DIR}/ModOrganizer" || true
-          find "${STAGE_DIR}/plugins" -type f -name "*.so" -exec strip --strip-unneeded {} \; || true
-          find "${STAGE_DIR}/dlls" -type f -name "*.so" -exec strip --strip-unneeded {} \; || true
-
           echo "Artifact contents:"
-          find "${STAGE_DIR}" -maxdepth 3 -type f | sort
+          find "${ARTIFACT_DIR}" -maxdepth 3 -type f | sort
           echo "Artifact size:"
-          du -sh "${STAGE_DIR}"
+          du -sh "${ARTIFACT_DIR}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fluorine-manager-fedora41-runtime
+          name: fluorine-manager-fedora41-appimage
           path: artifact/
           if-no-files-found: error
 
