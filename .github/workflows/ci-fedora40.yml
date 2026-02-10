@@ -16,7 +16,7 @@ jobs:
       CCACHE_DIR: /__w/.ccache
       CMAKE_BUILD_TYPE: RelWithDebInfo
       LIBLOOT_PREFIX: /__w/.cache/libloot
-      LIBLOOT_REF: main
+      LIBLOOT_REF: master
 
     steps:
       - name: Checkout
