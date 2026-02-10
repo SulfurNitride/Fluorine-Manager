@@ -102,13 +102,12 @@ target_compile_definitions(organizer PRIVATE
     FUSE_USE_VERSION=35)
 
 if(NOT WIN32)
-    # Enforce PIE for the main executable to avoid copy relocations against Qt
-    # symbols on newer glibc/toolchain combinations.
+    # Enforce PIE for the main executable.
     include(CheckPIESupported)
     check_pie_supported()
     set_target_properties(organizer PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_compile_options(organizer PRIVATE -fPIE)
-    target_link_options(organizer PRIVATE -pie -Wl,-z,nocopyreloc)
+    target_link_options(organizer PRIVATE -pie)
 endif()
 
 if(NOT WIN32)

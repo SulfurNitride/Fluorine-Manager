@@ -14,6 +14,9 @@ jobs:
 
     env:
       CCACHE_DIR: /__w/.ccache
+      CCACHE_BASEDIR: /__w/Fluorine-Manager/Fluorine-Manager
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 2G
       CMAKE_BUILD_TYPE: RelWithDebInfo
       LIBLOOT_PREFIX: /__w/.cache/libloot
       LIBLOOT_REF: master
@@ -44,8 +47,7 @@ jobs:
             done
           }
 
-          dnf_retry dnf -y --refresh update
-          dnf_retry dnf -y install \
+          dnf_retry dnf -y --refresh install --setopt=install_weak_deps=False \
             gcc gcc-c++ make \
             cmake ninja-build \
             git which file binutils patchelf \
@@ -158,8 +160,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /__w/.ccache
-          key: ccache-fedora41-${{ hashFiles('CMakeLists.txt', 'src/**/CMakeLists.txt', 'libs/**/CMakeLists.txt', '.github/workflows/ci-fedora40.yml') }}
+          key: ccache-fedora41-v2-${{ github.ref_name }}
           restore-keys: |
+            ccache-fedora41-v2-
             ccache-fedora41-
 
       - name: Rust cache
@@ -312,6 +315,11 @@ jobs:
           if readelf -r "${STAGE_DIR}/ModOrganizer" | grep -q "R_X86_64_COPY"; then
             echo "ERROR: ModOrganizer contains COPY relocations (will fail on modern glibc)."
             readelf -r "${STAGE_DIR}/ModOrganizer" | grep "R_X86_64_COPY" || true
+            exit 1
+          fi
+          if readelf -d "${STAGE_DIR}/ModOrganizer" | grep -q "TEXTREL"; then
+            echo "ERROR: ModOrganizer contains TEXTREL entries (will fail at runtime)."
+            readelf -d "${STAGE_DIR}/ModOrganizer" | grep "TEXTREL" || true
             exit 1
           fi
 
