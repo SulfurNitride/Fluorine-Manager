@@ -111,7 +111,7 @@ jobs:
           mkdir -p "${STAGE_DIR}"
 
           # Base runtime layout from the organizer output directory.
-          rsync -a "${RUNDIR}/" "${STAGE_DIR}/"
+          cp -a "${RUNDIR}/." "${STAGE_DIR}/"
 
           # Ensure plugin folder exists.
           mkdir -p "${STAGE_DIR}/plugins"
