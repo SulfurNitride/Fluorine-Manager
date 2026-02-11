@@ -30,6 +30,10 @@ You can then get started with: `flatpak run com.fluorine.manager` or you should 
 
 More information can be found in the [FAQ](https://github.com/SulfurNitride/Fluorine-Manager/blob/main/docs/FAQ.md).
 
+You can find me in the [NaK Discord](https://discord.gg/9JWQzSeUWt) 
+
+If you want to support the things I put out, I do have a [Ko-Fi](https://ko-fi.com/sulfurnitride) I will never charge money for any of my content.
+
 ## Build
 
 ```bash
