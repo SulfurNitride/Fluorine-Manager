@@ -1,4 +1,5 @@
 #include "protonlauncher.h"
+#include "fluorinepaths.h"
 
 #include <nak_ffi.h>
 #include <QCoreApplication>
@@ -224,6 +225,9 @@ ProtonLauncher& ProtonLauncher::setWrapper(const QString& wrapperCmd)
 
   const QStringList parts = QProcess::splitCommand(wrapperCmd.trimmed());
   for (const QString& part : parts) {
+    if (part.compare("%command%", Qt::CaseInsensitive) == 0) {
+      continue;
+    }
     QString key;
     QString value;
     if (parseEnvAssignment(part, key, value)) {
@@ -366,9 +370,7 @@ bool ProtonLauncher::launchWithUmu(qint64& pid) const
   // Use the full path to our copied umu-run since the host PATH won't include it.
   QString umuRun;
   if (isFlatpak()) {
-    const QString dataDir =
-        QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
-    const QString flatpakUmu = QDir(dataDir).filePath("fluorine/umu-run");
+    const QString flatpakUmu = fluorineDataDir() + QStringLiteral("/umu-run");
     if (QFileInfo::exists(flatpakUmu)) {
       umuRun = flatpakUmu;
     } else {

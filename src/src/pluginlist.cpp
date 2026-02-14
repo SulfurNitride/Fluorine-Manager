@@ -567,7 +567,7 @@ void PluginList::shiftPluginsPriority(const QModelIndexList& indices, int offset
   for (auto& idx : indices) {
     allIndex.push_back(idx.row());
   }
-  std::sort(allIndex.begin(), allIndex.end(), [=](int lhs, int rhs) {
+  std::sort(allIndex.begin(), allIndex.end(), [=, this](int lhs, int rhs) {
     bool cmp = m_ESPs[lhs].priority < m_ESPs[rhs].priority;
     return offset > 0 ? !cmp : cmp;
   });
@@ -662,7 +662,10 @@ void PluginList::readLockedOrderFrom(const QString& fileName)
     return;
   }
 
-  file.open(QIODevice::ReadOnly);
+  if (!file.open(QIODevice::ReadOnly)) {
+    log::error("failed to open locked order file '{}': {}", fileName, file.errorString());
+    return;
+  }
   int lineNumber = 0;
   while (!file.atEnd()) {
     QByteArray line = file.readLine();

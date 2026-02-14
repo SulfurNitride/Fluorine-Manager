@@ -17,6 +17,11 @@ mo2_configure_target(pybind11-utils
 	TRANSLATIONS OFF
 )
 mo2_default_source_group()
+set_target_properties(pybind11-utils PROPERTIES
+  AUTOMOC OFF
+  AUTOUIC OFF
+  AUTORCC OFF
+)
 target_link_libraries(pybind11-utils PUBLIC pybind11::pybind11)
 target_include_directories(pybind11-utils PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 

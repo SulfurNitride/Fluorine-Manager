@@ -18,10 +18,9 @@ RUNDIR="build/src/src"
 
 PY_MM="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 
-# ── Output layout ──
-OUT_DIR="/src/build/ModOrganizer-portable"
-ZIP_OUT="/src/build/ModOrganizer-linux-x86_64.zip"
-rm -rf "${OUT_DIR}" "${ZIP_OUT}"
+# ── Output layout (staging area — installed to ~/.local/share/fluorine by build-native.sh) ──
+OUT_DIR="/src/build/staging"
+rm -rf "${OUT_DIR}"
 mkdir -p "${OUT_DIR}/plugins" "${OUT_DIR}/dlls" "${OUT_DIR}/lib"
 
 # ── Main binary + helpers ──
@@ -238,10 +237,11 @@ if ! PYTHONHOME="${OUT_DIR}/python" \
 fi
 
 # ── Launcher script ──
-cat > "${OUT_DIR}/ModOrganizer" <<'LAUNCH'
+cat > "${OUT_DIR}/fluorine-manager" <<'LAUNCH'
 #!/usr/bin/env bash
 set -euo pipefail
-HERE="$(cd "$(dirname "$0")" && pwd)"
+SELF="$(readlink -f "$0")"
+HERE="$(cd "$(dirname "$SELF")" && pwd)"
 export PATH="${HERE}:${PATH}"
 export LD_LIBRARY_PATH="${HERE}/lib:${HERE}/python/lib:${LD_LIBRARY_PATH:-}"
 export MO2_BASE_DIR="${HERE}"
@@ -284,18 +284,11 @@ fi
 cd "${HERE}"
 exec env PYTHONHOME="${MO2_PYTHONHOME}" "${HERE}/ModOrganizer-core" "$@"
 LAUNCH
-chmod +x "${OUT_DIR}/ModOrganizer"
-
-# ── ZIP ──
-(
-  cd "${OUT_DIR}"
-  zip -r -9 "${ZIP_OUT}" .
-)
+chmod +x "${OUT_DIR}/fluorine-manager"
 
 # ── Summary ──
 echo ""
-echo "=== Package Summary ==="
+echo "=== Build Summary ==="
 du -sh "${OUT_DIR}"/*/ "${OUT_DIR}"/ModOrganizer-core 2>/dev/null | sort -rh
 echo ""
-ZIP_SIZE="$(du -sh "${ZIP_OUT}" | cut -f1)"
-echo "Done! Portable ZIP at: build/ModOrganizer-linux-x86_64.zip (${ZIP_SIZE})"
+echo "Staging complete."

@@ -57,6 +57,16 @@ void ModListSortProxy::updateFilterActive()
   emit filterActive(m_FilterActive);
 }
 
+void ModListSortProxy::refreshFilter()
+{
+#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
+  beginFilterChange();
+  endFilterChange(QSortFilterProxyModel::Direction::Rows);
+#else
+  invalidateFilter();
+#endif
+}
+
 void ModListSortProxy::setCriteria(const std::vector<Criteria>& criteria)
 {
   // avoid refreshing the filter unless we are checking all mods for update.
@@ -67,7 +77,7 @@ void ModListSortProxy::setCriteria(const std::vector<Criteria>& criteria)
   if (changed || isForUpdates) {
     m_Criteria = criteria;
     updateFilterActive();
-    invalidateFilter();
+    refreshFilter();
     emit filterInvalidated();
   }
 }
@@ -258,7 +268,7 @@ void ModListSortProxy::updateFilter(const QString& filter)
 {
   m_Filter = filter;
   updateFilterActive();
-  invalidateFilter();
+  refreshFilter();
   emit filterInvalidated();
 }
 
@@ -564,7 +574,7 @@ void ModListSortProxy::setOptions(ModListSortProxy::FilterMode mode,
   if (m_FilterMode != mode || separators != m_FilterSeparators) {
     m_FilterMode       = mode;
     m_FilterSeparators = separators;
-    invalidateFilter();
+    refreshFilter();
     emit filterInvalidated();
   }
 }
@@ -586,12 +596,12 @@ bool ModListSortProxy::filterAcceptsRow(int source_row, const QModelIndex& paren
     return false;
   }
 
-  unsigned int index = ULONG_MAX;
+  unsigned int index = UINT_MAX;
   {
     bool ok = false;
     index   = idx.data(ModList::IndexRole).toInt(&ok);
     if (!ok) {
-      index = ULONG_MAX;
+      index = UINT_MAX;
     }
   }
 

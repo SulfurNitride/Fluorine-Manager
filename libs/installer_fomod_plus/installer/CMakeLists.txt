@@ -29,7 +29,7 @@ FetchContent_Declare(
                 -P ${CMAKE_CURRENT_LIST_DIR}/../cmake/patch_pugixml.cmake
 )
 
-FetchContent_Declare(json URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz)
+FetchContent_Declare(json URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(pugixml json)
 
 set(project_type plugin)

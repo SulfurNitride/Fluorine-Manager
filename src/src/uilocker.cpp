@@ -205,10 +205,10 @@ private:
     m_topLevel->setGeometry(mainUI->rect());
 
     m_filter.reset(new Filter);
-    m_filter->resized = [=] {
+    m_filter->resized = [=, this] {
       m_topLevel->setGeometry(mainUI->rect());
     };
-    m_filter->closed = [=] {
+    m_filter->closed = [=, this] {
       checkTarget();
     };
 

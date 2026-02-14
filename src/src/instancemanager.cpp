@@ -21,6 +21,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "createinstancedialog.h"
 #include "createinstancedialogpages.h"
 #include "filesystemutilities.h"
+#include "fluorinepaths.h"
 #include "instancemanagerdialog.h"
 #include "nexusinterface.h"
 #include "plugincontainer.h"
@@ -625,8 +626,14 @@ QString InstanceManager::instancePath(const QString& instanceName) const
 
 QString InstanceManager::globalInstancesRootPath() const
 {
+#ifndef _WIN32
+  // Use the shared Fluorine data dir so the path is the same in native and
+  // Flatpak builds (QStandardPaths is remapped inside a Flatpak sandbox).
+  return QDir::fromNativeSeparators(fluorineDataDir());
+#else
   return QDir::fromNativeSeparators(
       QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation));
+#endif
 }
 
 QString InstanceManager::iniPath(const QString& instanceDir) const

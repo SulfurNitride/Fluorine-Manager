@@ -102,32 +102,12 @@ public:
   // disables all the pages except for the given one, used on startup when some
   // specific info is missing
   template <class Page>
-  void setSinglePage(const QString& instanceName)
-  {
-    for (auto&& p : m_pages) {
-      if (auto* tp = dynamic_cast<Page*>(p.get())) {
-        tp->setSkip(false);
-      } else {
-        p->setSkip(true);
-      }
-    }
-
-    setSinglePageImpl(instanceName);
-  }
+  void setSinglePage(const QString& instanceName);
 
   // returns the page having the give path, or null
   //
   template <class Page>
-  Page* getPage()
-  {
-    for (auto&& p : m_pages) {
-      if (auto* tp = dynamic_cast<Page*>(p.get())) {
-        return tp;
-      }
-    }
-
-    return nullptr;
-  }
+  Page* getPage();
 
   // moves to the next page; if `allowFinish` is true, calls finish() if
   // currently on the last page
@@ -218,20 +198,7 @@ private:
   // that's not empty; used by gatherInfo()
   //
   template <class MF, class... Args>
-  auto getSelected(MF mf, Args&&... args) const
-  {
-    // return type
-    using T = decltype((std::declval<cid::Page>().*mf)(std::forward<Args>(args)...));
-
-    for (auto&& p : m_pages) {
-      const auto t = (p.get()->*mf)(std::forward<Args>(args)...);
-      if (t != T()) {
-        return t;
-      }
-    }
-
-    return T();
-  }
+  auto getSelected(MF mf, Args&&... args) const;
 };
 
 #endif  // MODORGANIZER_CREATEINSTANCEDIALOG_INCLUDED

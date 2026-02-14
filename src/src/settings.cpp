@@ -1409,7 +1409,7 @@ void PluginSettings::registerPlugin(IPlugin* plugin)
 
     if (!temp.isValid()) {
       temp = setting.defaultValue;
-    } else if (!temp.convert(setting.defaultValue.type())) {
+    } else if (!temp.convert(setting.defaultValue.metaType())) {
       log::warn("failed to interpret \"{}\" as correct type for \"{}\" in plugin "
                 "\"{}\", using default",
                 temp.toString(), setting.key, plugin->name());

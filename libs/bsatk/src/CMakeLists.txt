@@ -1,4 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
+if(POLICY CMP0167)
+  cmake_policy(SET CMP0167 NEW)
+endif()
 
 find_package(Boost REQUIRED COMPONENTS thread)
 find_package(ZLIB REQUIRED)

@@ -4,6 +4,7 @@
 #include <Windows.h>
 #else
 #include <QDateTime>
+#include <QTimeZone>
 
 // SYSTEMTIME is _SYSTEMTIME (defined in gamebryosavegame.h for Linux)
 using SYSTEMTIME = _SYSTEMTIME;
@@ -16,7 +17,7 @@ static void FileTimeToSystemTime(const FILETIME* ft, SYSTEMTIME* st)
   const int64_t unixSecs = static_cast<int64_t>(ticks / 10000000ULL) - 11644473600LL;
   const uint64_t remainderHns = ticks % 10000000ULL;  // leftover 100ns units
 
-  const QDateTime dt = QDateTime::fromSecsSinceEpoch(unixSecs, Qt::UTC);
+  const QDateTime dt = QDateTime::fromSecsSinceEpoch(unixSecs, QTimeZone::UTC);
   const QDate d = dt.date();
   const QTime t = dt.time();
 

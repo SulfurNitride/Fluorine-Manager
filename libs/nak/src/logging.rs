@@ -1,7 +1,7 @@
 //! Logging for Fluorine Manager.
 //!
 //! All log messages are:
-//! 1. Written to `~/.var/app/com.fluorine.manager/logs/nak.log` (always)
+//! 1. Written to `~/.local/share/fluorine/logs/nak.log` (always)
 //! 2. Forwarded to an optional callback set via `set_log_callback()` (for MOBase::log)
 
 use std::fs;
@@ -25,8 +25,7 @@ pub fn set_log_callback(cb: impl Fn(&str, &str) + Send + Sync + 'static) {
 
 /// Get the log directory path.
 fn log_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join(".var/app/com.fluorine.manager/logs")
+    crate::paths::data_dir().join("logs")
 }
 
 /// Get the log file path.

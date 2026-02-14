@@ -18,10 +18,10 @@ ModListSettingsTab::ModListSettingsTab(Settings& s, SettingsDialog& d)
           {ModList::COL_VERSION, ui->collapsibleSeparatorsIconsVersionBox}}
 {
   // connect before setting to trigger
-  QObject::connect(ui->collapsibleSeparatorsAscBox, &QCheckBox::toggled, [=] {
+  QObject::connect(ui->collapsibleSeparatorsAscBox, &QCheckBox::toggled, [=, this] {
     updateCollapsibleSeparatorsGroup();
   });
-  QObject::connect(ui->collapsibleSeparatorsDscBox, &QCheckBox::toggled, [=] {
+  QObject::connect(ui->collapsibleSeparatorsDscBox, &QCheckBox::toggled, [=, this] {
     updateCollapsibleSeparatorsGroup();
   });
 

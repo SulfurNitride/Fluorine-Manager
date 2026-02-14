@@ -699,13 +699,23 @@ std::size_t InstanceManagerDialog::singleSelectionIndex() const
     return NoSelection;
   }
 
-  return static_cast<std::size_t>(sel.indexes()[0].row());
+  const auto indexes = sel.indexes();
+  if (indexes.size() != 1 || !indexes[0].isValid()) {
+    return NoSelection;
+  }
+
+  const int row = indexes[0].row();
+  if (row < 0 || static_cast<std::size_t>(row) >= m_instances.size()) {
+    return NoSelection;
+  }
+
+  return static_cast<std::size_t>(row);
 }
 
 const Instance* InstanceManagerDialog::singleSelection() const
 {
   const auto i = singleSelectionIndex();
-  if (i == NoSelection) {
+  if (i == NoSelection || i >= m_instances.size()) {
     return nullptr;
   }
 

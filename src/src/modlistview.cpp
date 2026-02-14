@@ -154,11 +154,11 @@ ModListView::ModListView(QWidget* parent)
   // time window
   m_refreshMarkersTimer.setInterval(50);
   m_refreshMarkersTimer.setSingleShot(true);
-  connect(&m_refreshMarkersTimer, &QTimer::timeout, [=] {
+  connect(&m_refreshMarkersTimer, &QTimer::timeout, [=, this] {
     refreshMarkersAndPlugins();
   });
 
-  installEventFilter(new CopyEventFilter(this, [=](auto& index) {
+  installEventFilter(new CopyEventFilter(this, [=, this](auto& index) {
     QVariant mIndex = index.data(ModList::IndexRole);
     QString name    = index.data(Qt::DisplayRole).toString();
     if (mIndex.isValid() && hasCollapsibleSeparators()) {
@@ -430,7 +430,7 @@ void ModListView::scrollToAndSelect(const QModelIndexList& indexes,
   }
   selectionModel()->select(selection,
                            QItemSelectionModel::Select | QItemSelectionModel::Rows);
-  QTimer::singleShot(50, [=] {
+  QTimer::singleShot(50, [=, this] {
     setFocus();
   });
 }
@@ -716,21 +716,21 @@ void ModListView::setup(OrganizerCore& core, CategoryFactory& factory, MainWindo
         mwui->filtersSeparators,
         mwui->espList};
 
-  connect(m_core, &OrganizerCore::modInstalled, [=](auto&& name) {
+  connect(m_core, &OrganizerCore::modInstalled, [=, this](auto&& name) {
     onModInstalled(name);
   });
   connect(m_core, &OrganizerCore::profileChanged, this, &ModListView::onProfileChanged);
-  connect(core.modList(), &ModList::modPrioritiesChanged, [=](auto&& indices) {
+  connect(core.modList(), &ModList::modPrioritiesChanged, [=, this](auto&& indices) {
     onModPrioritiesChanged(indices);
   });
-  connect(core.modList(), &ModList::clearOverwrite, [=] {
+  connect(core.modList(), &ModList::clearOverwrite, [=, this] {
     m_actions->clearOverwrite();
   });
-  connect(core.modList(), &ModList::modStatesChanged, [=] {
+  connect(core.modList(), &ModList::modStatesChanged, [=, this] {
     updateModCount();
     setOverwriteMarkers(selectionModel()->selectedRows());
   });
-  connect(core.modList(), &ModList::modelReset, [=] {
+  connect(core.modList(), &ModList::modelReset, [=, this] {
     clearOverwriteMarkers();
   });
 
@@ -746,14 +746,14 @@ void ModListView::setup(OrganizerCore& core, CategoryFactory& factory, MainWindo
 
   // we need to store the expanded/collapsed state of all items and restore them 1) when
   // switching proxies, 2) when filtering and 3) when reseting the mod list.
-  connect(this, &QTreeView::expanded, [=](const QModelIndex& index) {
+  connect(this, &QTreeView::expanded, [=, this](const QModelIndex& index) {
     auto it = m_collapsed[m_sortProxy->sourceModel()].find(
         index.data(Qt::DisplayRole).toString());
     if (it != m_collapsed[m_sortProxy->sourceModel()].end()) {
       m_collapsed[m_sortProxy->sourceModel()].erase(it);
     }
   });
-  connect(this, &QTreeView::collapsed, [=](const QModelIndex& index) {
+  connect(this, &QTreeView::collapsed, [=, this](const QModelIndex& index) {
     m_collapsed[m_sortProxy->sourceModel()].insert(
         index.data(Qt::DisplayRole).toString());
   });
@@ -761,7 +761,7 @@ void ModListView::setup(OrganizerCore& core, CategoryFactory& factory, MainWindo
   // the top-level proxy
   m_sortProxy = new ModListSortProxy(core.currentProfile().get(), &core);
   setModel(m_sortProxy);
-  connect(m_sortProxy, &ModList::modelReset, [=] {
+  connect(m_sortProxy, &ModList::modelReset, [=, this] {
     refreshExpandedItems();
   });
 
@@ -773,7 +773,7 @@ void ModListView::setup(OrganizerCore& core, CategoryFactory& factory, MainWindo
             }
           });
   connect(ui.groupBy, QOverload<int>::of(&QComboBox::currentIndexChanged),
-          [=](int index) {
+          [=, this](int index) {
             updateGroupByProxy();
             onModFilterActive(m_sortProxy->isFilterActive());
           });
@@ -788,11 +788,11 @@ void ModListView::setup(OrganizerCore& core, CategoryFactory& factory, MainWindo
   connect(m_sortProxy, &ModListSortProxy::filterInvalidated, this,
           &ModListView::updateModCount);
 
-  connect(header(), &QHeaderView::sortIndicatorChanged, [=](int, Qt::SortOrder) {
+  connect(header(), &QHeaderView::sortIndicatorChanged, [=, this](int, Qt::SortOrder) {
     verticalScrollBar()->repaint();
   });
   connect(header(), &QHeaderView::sectionResized,
-          [=](int logicalIndex, int oldSize, int newSize) {
+          [=, this](int logicalIndex, int oldSize, int newSize) {
             m_sortProxy->setColumnVisible(logicalIndex, newSize != 0);
           });
 
@@ -839,13 +839,13 @@ void ModListView::setup(OrganizerCore& core, CategoryFactory& factory, MainWindo
   // in the manual installer
   connect(
       m_core->modList(), &ModList::downloadArchiveDropped, this,
-      [=](int row, int priority) {
+      [=, this](int row, int priority) {
         m_core->installDownload(row, priority);
       },
       Qt::QueuedConnection);
   connect(
       m_core->modList(), &ModList::externalArchiveDropped, this,
-      [=](const QUrl& url, int priority) {
+      [=, this](const QUrl& url, int priority) {
         setWindowState(Qt::WindowActive);
         m_core->installArchive(url.toLocalFile(), priority, false, nullptr);
       },
@@ -853,32 +853,32 @@ void ModListView::setup(OrganizerCore& core, CategoryFactory& factory, MainWindo
   connect(m_core->modList(), &ModList::externalFolderDropped, this,
           &ModListView::onExternalFolderDropped);
 
-  connect(selectionModel(), &QItemSelectionModel::selectionChanged, [=] {
+  connect(selectionModel(), &QItemSelectionModel::selectionChanged, [=, this] {
     m_refreshMarkersTimer.start();
   });
-  connect(this, &QTreeView::collapsed, [=] {
+  connect(this, &QTreeView::collapsed, [=, this] {
     m_refreshMarkersTimer.start();
   });
-  connect(this, &QTreeView::expanded, [=] {
+  connect(this, &QTreeView::expanded, [=, this] {
     m_refreshMarkersTimer.start();
   });
 
   // filters
   connect(m_sortProxy, &ModListSortProxy::filterActive, this,
           &ModListView::onModFilterActive);
-  connect(m_filters.get(), &FilterList::criteriaChanged, [=](auto&& v) {
+  connect(m_filters.get(), &FilterList::criteriaChanged, [=, this](auto&& v) {
     onFiltersCriteria(v);
   });
-  connect(m_filters.get(), &FilterList::optionsChanged, [=](auto&& mode, auto&& sep) {
+  connect(m_filters.get(), &FilterList::optionsChanged, [=, this](auto&& mode, auto&& sep) {
     setFilterOptions(mode, sep);
   });
   connect(ui.filter, &QLineEdit::textChanged, m_sortProxy,
           &ModListSortProxy::updateFilter);
-  connect(ui.clearFilters, &QPushButton::clicked, [=]() {
+  connect(ui.clearFilters, &QPushButton::clicked, [=, this]() {
     ui.filter->clear();
     m_filters->clearSelection();
   });
-  connect(m_sortProxy, &ModListSortProxy::filterInvalidated, [=]() {
+  connect(m_sortProxy, &ModListSortProxy::filterInvalidated, [=, this]() {
     if (hasCollapsibleSeparators()) {
       refreshExpandedItems();
     }
@@ -1383,9 +1383,9 @@ void ModListView::dropEvent(QDropEvent* event)
 {
   // from Qt source
   QModelIndex index;
-  if (viewport()->rect().contains(event->pos())) {
-    index = indexAt(event->pos());
-    if (!index.isValid() || !visualRect(index).contains(event->pos()))
+  if (viewport()->rect().contains(event->position().toPoint())) {
+    index = indexAt(event->position().toPoint());
+    if (!index.isValid() || !visualRect(index).contains(event->position().toPoint()))
       index = QModelIndex();
   }
 
@@ -1439,10 +1439,10 @@ void ModListView::mousePressEvent(QMouseEvent* event)
   // restore triggers
   setEditTriggers(triggers);
 
-  const auto index = indexAt(event->pos());
+  const auto index = indexAt(event->position().toPoint());
 
   if (event->isAccepted() && hasCollapsibleSeparators() && index.isValid() &&
-      model()->hasChildren(indexAt(event->pos())) &&
+      model()->hasChildren(indexAt(event->position().toPoint())) &&
       (event->modifiers() & Qt::AltModifier)) {
 
     const auto flag = selectionModel()->isSelected(index)
@@ -1472,13 +1472,13 @@ void ModListView::mouseReleaseEvent(QMouseEvent* event)
   // selection state of the item after
   QTreeView::mouseReleaseEvent(event);
 
-  const auto index = indexAt(event->pos());
+  const auto index = indexAt(event->position().toPoint());
 
   // restore triggers
   setEditTriggers(triggers);
 
   if (event->isAccepted() && hasCollapsibleSeparators() && index.isValid() &&
-      model()->hasChildren(indexAt(event->pos())) &&
+      model()->hasChildren(indexAt(event->position().toPoint())) &&
       (event->modifiers() & Qt::AltModifier)) {
 
     const auto flag = selectionModel()->isSelected(index)

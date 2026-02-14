@@ -127,11 +127,15 @@ int FomodInstallerDialog::bomOffset(const QByteArray& buffer)
   static const unsigned char BOM_UTF8[]    = {0xEF, 0xBB, 0xBF};
   static const unsigned char BOM_UTF16BE[] = {0xFE, 0xFF};
   static const unsigned char BOM_UTF16LE[] = {0xFF, 0xFE};
+  auto startsWithBytes = [&buffer](const unsigned char* bytes, qsizetype size) {
+    return buffer.startsWith(
+        QByteArrayView(reinterpret_cast<const char*>(bytes), size));
+  };
 
-  if (buffer.startsWith(reinterpret_cast<const char*>(BOM_UTF8)))
+  if (startsWithBytes(BOM_UTF8, sizeof(BOM_UTF8)))
     return 3;
-  if (buffer.startsWith(reinterpret_cast<const char*>(BOM_UTF16BE)) ||
-      buffer.startsWith(reinterpret_cast<const char*>(BOM_UTF16LE)))
+  if (startsWithBytes(BOM_UTF16BE, sizeof(BOM_UTF16BE)) ||
+      startsWithBytes(BOM_UTF16LE, sizeof(BOM_UTF16LE)))
     return 2;
 
   return 0;
@@ -150,25 +154,30 @@ QByteArray skipXmlHeader(QIODevice& file)
   static const unsigned char UTF16LE[]     = {0x3C, 0x00, 0x3F, 0x00};
   static const unsigned char UTF16BE[]     = {0x00, 0x3C, 0x00, 0x3F};
   static const unsigned char UTF8[]        = {0x3C, 0x3F, 0x78, 0x6D};
+  auto startsWithBytes = [](const QByteArray& bytes, const unsigned char* prefix,
+                            qsizetype size) {
+    return bytes.startsWith(
+        QByteArrayView(reinterpret_cast<const char*>(prefix), size));
+  };
 
   file.seek(0);
   QByteArray rawBytes = file.read(4);
   QTextStream stream(&file);
   int bom = 0;
-  if (rawBytes.startsWith((const char*)UTF16LE_BOM)) {
+  if (startsWithBytes(rawBytes, UTF16LE_BOM, sizeof(UTF16LE_BOM))) {
     stream.setEncoding(QStringConverter::Encoding::Utf16LE);
     bom = 2;
-  } else if (rawBytes.startsWith((const char*)UTF16BE_BOM)) {
+  } else if (startsWithBytes(rawBytes, UTF16BE_BOM, sizeof(UTF16BE_BOM))) {
     stream.setEncoding(QStringConverter::Encoding::Utf16BE);
     bom = 2;
-  } else if (rawBytes.startsWith((const char*)UTF8_BOM)) {
+  } else if (startsWithBytes(rawBytes, UTF8_BOM, sizeof(UTF8_BOM))) {
     stream.setEncoding(QStringConverter::Encoding::Utf8);
     bom = 3;
-  } else if (rawBytes.startsWith(QByteArray((const char*)UTF16LE, 4))) {
+  } else if (startsWithBytes(rawBytes, UTF16LE, sizeof(UTF16LE))) {
     stream.setEncoding(QStringConverter::Encoding::Utf16LE);
-  } else if (rawBytes.startsWith(QByteArray((const char*)UTF16BE, 4))) {
+  } else if (startsWithBytes(rawBytes, UTF16BE, sizeof(UTF16BE))) {
     stream.setEncoding(QStringConverter::Encoding::Utf16BE);
-  } else if (rawBytes.startsWith(QByteArray((const char*)UTF8, 4))) {
+  } else if (startsWithBytes(rawBytes, UTF8, sizeof(UTF8))) {
     stream.setEncoding(QStringConverter::Encoding::Utf8);
   }  // otherwise maybe the textstream knows the encoding?
 

@@ -1,7 +1,7 @@
 //! Linux tool management (winetricks, cabextract)
 //!
 //! Handles downloading and managing Linux CLI tools.
-//! Tools are stored in ~/.var/app/com.fluorine.manager/bin/ for Fluorine Manager.
+//! Tools are stored in ~/.local/share/fluorine/bin/ for Fluorine Manager.
 
 use std::error::Error;
 use std::fs;
@@ -13,14 +13,13 @@ use std::process::Command;
 use crate::logging::{log_error, log_info, log_warning};
 
 // ============================================================================
-// NaK Bin Directory (~/.var/app/com.fluorine.manager/bin/)
+// NaK Bin Directory (~/.local/share/fluorine/bin/)
 // ============================================================================
 
-/// Get the tool bin directory path (~/.var/app/com.fluorine.manager/bin/)
+/// Get the tool bin directory path (~/.local/share/fluorine/bin/)
 /// This is accessible from both native and Flatpak environments.
 pub fn get_nak_bin_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join(".var/app/com.fluorine.manager/bin")
+    crate::paths::data_dir().join("bin")
 }
 
 /// Check if a command exists (either in system PATH or tool bin)

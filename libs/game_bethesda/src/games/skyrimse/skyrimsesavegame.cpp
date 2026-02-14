@@ -4,6 +4,7 @@
 #include <Windows.h>
 #else
 #include <QDateTime>
+#include <QTimeZone>
 
 // Windows ULARGE_INTEGER union for 64-bit FILETIME math
 union _ULARGE_INTEGER {
@@ -29,7 +30,7 @@ static void FileTimeToSystemTime(const FILETIME* ft, SYSTEMTIME* st)
   int64_t unixSecs = static_cast<int64_t>(ull.QuadPart / 10000000ULL) - 11644473600LL;
   uint64_t remainderHns = ull.QuadPart % 10000000ULL;  // leftover 100ns units
 
-  QDateTime dt = QDateTime::fromSecsSinceEpoch(unixSecs, Qt::UTC);
+  QDateTime dt = QDateTime::fromSecsSinceEpoch(unixSecs, QTimeZone::UTC);
   QDate d      = dt.date();
   QTime t      = dt.time();
 

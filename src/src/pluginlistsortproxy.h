@@ -53,6 +53,7 @@ protected:
   virtual bool lessThan(const QModelIndex& left, const QModelIndex& right) const;
 
 private:
+  void refreshFilter();
   int m_SortIndex;
   Qt::SortOrder m_SortOrder;
 

@@ -44,6 +44,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <QApplication>
 #include <QDirIterator>
 #include <QMutexLocker>
+#include <QTimeZone>
 
 using namespace MOBase;
 using namespace MOShared;
@@ -412,7 +413,7 @@ std::set<QSharedPointer<ModInfo>> ModInfo::filteredMods(QString gameName,
                        info->gameName().compare(gameName, Qt::CaseInsensitive) == 0)
                      if (info->getLastNexusUpdate().addSecs(-3600) <
                          QDateTime::fromSecsSinceEpoch(
-                             update["latest_file_update"].toInt(), Qt::UTC))
+                             update["latest_file_update"].toInt(), QTimeZone::UTC))
                        return true;
                    return false;
                  });

@@ -64,7 +64,17 @@ bool removeDir(const QString& dirName)
                dir.entryInfoList(QDir::NoDotAndDotDot | QDir::System | QDir::Hidden |
                                      QDir::AllDirs | QDir::Files,
                                  QDir::DirsFirst)) {
-      if (info.isDir()) {
+      // Never recurse into symlinked directories: in Flatpak they can point to
+      // read-only runtime locations (e.g. /app), and we only want to remove the link.
+      if (info.isSymLink()) {
+        QFile file(info.absoluteFilePath());
+        if (!file.remove()) {
+          reportError(QObject::tr("removal of \"%1\" failed: %2")
+                          .arg(info.absoluteFilePath())
+                          .arg(file.errorString()));
+          return false;
+        }
+      } else if (info.isDir()) {
         if (!removeDir(info.absoluteFilePath())) {
           return false;
         }
@@ -209,7 +219,11 @@ static bool shellOpDelete(const QStringList& fileNames, bool recycle)
   // On Linux, "recycle" moves to trash using Qt; otherwise just delete
   for (const auto& fileName : fileNames) {
     QFileInfo fi(fileName);
-    if (fi.isDir()) {
+    if (fi.isSymLink()) {
+      if (!QFile::remove(fileName)) {
+        return false;
+      }
+    } else if (fi.isDir()) {
       if (!removeDir(fileName)) {
         return false;
       }

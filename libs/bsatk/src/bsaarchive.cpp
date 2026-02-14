@@ -446,11 +446,9 @@ EErrorCode Archive::write(const char* fileName)
     writeHeader(outfile, determineFileFlags(fileNames),
                 static_cast<BSAULong>(folderNames.size()), folderNamesLength,
                 fileNamesLength);
-#pragma message("folders (and files?) need to be sorted by hash!")
     // dummy-pass: before we can store the actual folder data
 
     // prepare folder and file headers
-#pragma message("it's unnecessary to write actual data, placeholders are sufficient")
     for (std::vector<Folder::Ptr>::const_iterator folderIter = folders.begin();
          folderIter != folders.end(); ++folderIter) {
       (*folderIter)->writeHeader(outfile);
@@ -673,7 +671,6 @@ EErrorCode Archive::extractDirect(File::Ptr file, std::ofstream& outFile) const
     if (namePrefixed()) {
       std::string fullName = readBString(m_File);
       if (size <= fullName.length()) {
-#pragma message("report error!")
         return result;
       }
       size -= fullName.length() + 1;
@@ -735,7 +732,6 @@ std::shared_ptr<unsigned char[]> Archive::decompress(unsigned char* inBuffer,
       stream.next_out  = reinterpret_cast<Bytef*>(outBuffer.get());
       zlibRet          = inflate(&stream, Z_NO_FLUSH);
       if ((zlibRet != Z_OK) && (zlibRet != Z_STREAM_END) && (zlibRet != Z_BUF_ERROR)) {
-#pragma message("pass result code to caller")
         throw std::runtime_error("invalid data");
       }
     } while (stream.avail_out == 0);
@@ -824,7 +820,6 @@ EErrorCode Archive::extractCompressed(File::Ptr file, std::ofstream& outFile) co
     if (namePrefixed()) {
       std::string fullName = readBString(m_File);
       if (inSize <= fullName.length()) {
-#pragma message("report error!")
         return result;
       }
       inSize -= fullName.length() + 1;
@@ -850,7 +845,6 @@ EErrorCode Archive::extractCompressed(File::Ptr file, std::ofstream& outFile) co
     if (namePrefixed()) {
       std::string fullName = readBString(m_File);
       if (inSize <= fullName.length()) {
-#pragma message("report error!")
         return result;
       }
       inSize -= fullName.length() + 1;
@@ -907,7 +901,6 @@ void Archive::readFiles(std::queue<FileInfo>& queue, boost::mutex& mutex,
       if (namePrefixed()) {
         std::string fullName = readBString(m_File);
         if (size <= fullName.length()) {
-#pragma message("report error!")
           continue;
         }
         size -= fullName.length() + 1;
@@ -954,7 +947,6 @@ void Archive::readFiles(std::queue<FileInfo>& queue, boost::mutex& mutex,
                        reinterpret_cast<char*>(unpackedChunk.get()), length);
                 unpackedChunk.reset();
               } catch (const std::exception&) {
-#pragma message("report error!")
                 continue;
               }
             } else {
@@ -1029,7 +1021,6 @@ void Archive::extractFiles(const std::string& targetDirectory,
                              fstream::out | fstream::binary | fstream::trunc);
 
     if (!outputFile.is_open()) {
-#pragma message("report error!")
       continue;
       // return ERROR_ACCESSFAILED;
     }
@@ -1052,7 +1043,6 @@ void Archive::extractFiles(const std::string& targetDirectory,
               buffer.reset();
             }
           } catch (const std::exception&) {
-#pragma message("report error!")
             dataBuffer.first.reset();
             fileInfo.data.first.reset();
             continue;
@@ -1121,7 +1111,6 @@ void Archive::extractFiles(const std::string& targetDirectory,
                            dataBuffer.second);
         }
       } catch (const std::exception&) {
-#pragma message("report error!")
         dataBuffer.first.reset();
         fileInfo.data.first.reset();
         continue;
@@ -1151,7 +1140,6 @@ EErrorCode Archive::extractAll(
     const std::function<bool(int value, std::string fileName)>& progress,
     bool overwrite)
 {
-#pragma message("report errors")
   createFolders(outputDirectory, m_RootFolder);
 
   std::vector<File::Ptr> fileList;

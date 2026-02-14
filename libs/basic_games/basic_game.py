@@ -31,11 +31,11 @@ def _find_wine_userprofile() -> str | None:
 
     candidates: list[str] = []
 
-    # 1. Flatpak data prefix (most common for Fluorine)
-    flatpak_pfx = os.path.expanduser(
-        "~/.var/app/com.fluorine.manager/Prefix/pfx"
+    # 1. Fluorine data prefix (shared by native and Flatpak builds)
+    fluorine_pfx = os.path.expanduser(
+        "~/.local/share/fluorine/Prefix/pfx"
     )
-    candidates.append(flatpak_pfx)
+    candidates.append(fluorine_pfx)
 
     # 2. Fluorine config prefix_path
     try:

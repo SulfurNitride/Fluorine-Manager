@@ -21,24 +21,24 @@ PluginListContextMenu::PluginListContextMenu(const QModelIndex& index,
   }
 
   if (!m_selected.isEmpty()) {
-    addAction(tr("Enable selected"), [=]() {
+    addAction(tr("Enable selected"), [=, this]() {
       m_core.pluginList()->setEnabled(m_selected, true);
     });
-    addAction(tr("Disable selected"), [=]() {
+    addAction(tr("Disable selected"), [=, this]() {
       m_core.pluginList()->setEnabled(m_selected, false);
     });
 
     addSeparator();
   }
 
-  addAction(tr("Enable all"), [=]() {
+  addAction(tr("Enable all"), [=, this]() {
     if (QMessageBox::question(m_view->topLevelWidget(), tr("Confirm"),
                               tr("Really enable all plugins?"),
                               QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes) {
       m_core.pluginList()->setEnabledAll(true);
     }
   });
-  addAction(tr("Disable all"), [=]() {
+  addAction(tr("Disable all"), [=, this]() {
     if (QMessageBox::question(m_view->topLevelWidget(), tr("Confirm"),
                               tr("Really disable all plugins?"),
                               QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes) {
@@ -65,12 +65,12 @@ PluginListContextMenu::PluginListContextMenu(const QModelIndex& index,
     }
 
     if (hasLocked) {
-      addAction(tr("Unlock load order"), [=]() {
+      addAction(tr("Unlock load order"), [=, this]() {
         setESPLock(m_selected, false);
       });
     }
     if (hasUnlocked) {
-      addAction(tr("Lock load order"), [=]() {
+      addAction(tr("Lock load order"), [=, this]() {
         setESPLock(m_selected, true);
       });
     }
@@ -83,14 +83,14 @@ PluginListContextMenu::PluginListContextMenu(const QModelIndex& index,
         ModInfo::getIndex(m_core.pluginList()->origin(m_index.data().toString()));
     // this is to avoid showing the option on game files like skyrim.esm
     if (modInfoIndex != UINT_MAX) {
-      addAction(tr("Open Origin in Explorer"), [=]() {
+      addAction(tr("Open Origin in Explorer"), [=, this]() {
         openOriginExplorer(m_selected);
       });
       ModInfo::Ptr modInfo              = ModInfo::getByIndex(modInfoIndex);
       std::vector<ModInfo::EFlag> flags = modInfo->getFlags();
 
       if (!modInfo->isForeign() && m_selected.size() == 1) {
-        QAction* infoAction = addAction(tr("Open Origin Info..."), [=]() {
+        QAction* infoAction = addAction(tr("Open Origin Info..."), [=, this]() {
           openOriginInformation(index);
         });
         setDefaultAction(infoAction);
@@ -103,13 +103,13 @@ QMenu* PluginListContextMenu::createSendToContextMenu()
 {
   QMenu* menu = new QMenu(m_view);
   menu->setTitle(tr("Send to... "));
-  menu->addAction(tr("Top"), [=]() {
+  menu->addAction(tr("Top"), [=, this]() {
     m_core.pluginList()->sendToPriority(m_selected, 0);
   });
-  menu->addAction(tr("Bottom"), [=]() {
+  menu->addAction(tr("Bottom"), [=, this]() {
     m_core.pluginList()->sendToPriority(m_selected, INT_MAX);
   });
-  menu->addAction(tr("Priority..."), [=]() {
+  menu->addAction(tr("Priority..."), [=, this]() {
     sendPluginsToPriority(m_selected);
   });
   return menu;

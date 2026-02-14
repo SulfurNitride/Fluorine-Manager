@@ -988,7 +988,10 @@ std::optional<int> CreatePortableCommand::runEarly()
   const QStringList profileFiles = {"modlist.txt", "plugins.txt", "loadorder.txt", "initweaks.ini"};
   for (const auto& f : profileFiles) {
     QFile file(QDir(instanceDir).filePath("profiles/Default/" + f));
-    file.open(QIODevice::WriteOnly);
+    if (!file.open(QIODevice::WriteOnly)) {
+      std::cerr << "Error: failed to create file: " << f.toStdString() << "\n";
+      return 1;
+    }
     file.close();
   }
 

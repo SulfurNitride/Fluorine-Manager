@@ -56,8 +56,6 @@ pub fn find_steam_protons() -> Vec<SteamProton> {
         return protons;
     };
 
-    let is_flatpak = steam_path.to_string_lossy().contains(".var/app/com.valvesoftware.Steam");
-
     // 1. Steam's built-in Protons (steamapps/common/Proton*)
     protons.extend(find_builtin_protons(&steam_path));
 
@@ -65,11 +63,8 @@ pub fn find_steam_protons() -> Vec<SteamProton> {
     protons.extend(find_custom_protons(&steam_path));
 
     // 3. System-level Protons in /usr/share/steam/compatibilitytools.d/
-    if is_flatpak {
-        crate::logging::log_info("Flatpak Steam detected - skipping system protons in /usr/share/steam/compatibilitytools.d/");
-    } else {
-        protons.extend(find_system_protons());
-    }
+    //    (Arch packages Proton here; Flatpak has --filesystem=/usr/share/steam:ro)
+    protons.extend(find_system_protons());
 
     // Filter to only include Proton 10+ (required for Steam-native integration)
     protons.retain(is_proton_10_or_newer);

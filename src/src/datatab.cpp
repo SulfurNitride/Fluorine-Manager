@@ -58,7 +58,7 @@ DataTab::DataTab(OrganizerCore& core, PluginContainer& pc, QWidget* parent,
     onHiddenFiles();
   });
 
-  connect(ui.tree->selectionModel(), &QItemSelectionModel::selectionChanged, [=] {
+  connect(ui.tree->selectionModel(), &QItemSelectionModel::selectionChanged, [=, this] {
     const auto* fileTreeModel     = m_filetree->model();
     const auto& selectedIndexList = MOShared::indexViewToModel(
         ui.tree->selectionModel()->selectedRows(), fileTreeModel);

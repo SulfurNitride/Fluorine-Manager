@@ -201,6 +201,7 @@ pub enum GameVersion {
     StarfieldV3,
 }
 
+#[allow(dead_code)]
 impl GameVersion {
     /// Get display name for this game version
     pub fn display_name(&self) -> &'static str {
@@ -353,6 +354,7 @@ impl GameVersion {
 }
 
 /// Detect game version from archive format
+#[allow(dead_code)]
 pub fn detect_game_version(archive_path: &Path) -> Option<GameVersion> {
     match detect_format(archive_path) {
         Some(ArchiveFormat::Tes3Bsa) => Some(GameVersion::Morrowind),

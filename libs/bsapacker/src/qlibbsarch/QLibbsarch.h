@@ -3,6 +3,7 @@
 #include <libbsarch/libbsarch.h>
 #include <string>
 #include <stdexcept>
+#include <cstring>
 #include <QDebug>
 #include <QDir>
 #include <QStringList>
@@ -23,7 +24,9 @@ namespace QLibBsarch
 	{
 		if (result.code == BSA_RESULT_EXCEPTION)
 		{
-			const std::string &error = QLibBsarch::wcharToString(result.text);
+			wchar_t aligned_text[1024];
+			std::memcpy(aligned_text, result.text, sizeof(aligned_text));
+			const std::string error = QLibBsarch::wcharToString(aligned_text);
 			LOG_LIBBSARCH << QString::fromStdString(error);
 			throw std::runtime_error(error);
 		}
@@ -31,12 +34,7 @@ namespace QLibBsarch
 
 	inline void checkResult(const bsa_result_message_buffer_s &result)
 	{
-		if (result.message.code == BSA_RESULT_EXCEPTION)
-		{
-			const std::string &error = QLibBsarch::wcharToString(result.message.text);
-			LOG_LIBBSARCH << QString::fromStdString(error);
-			throw std::runtime_error(error);
-		}
+		checkResult(result.message);
 	}
 
 } // namespace QLibBsarch

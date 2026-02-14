@@ -529,7 +529,7 @@ HandlePtr Process::openHandleForWait() const
   // On Linux, just wrap the pid. The caller can use waitpid() or
   // kill(pid, 0) to check on the process.
   if (kill(m_pid, 0) == 0) {
-    return HandlePtr(HandleCloser::pointer(m_pid));
+    return HandlePtr(HandleCloser::pointer(static_cast<uintptr_t>(m_pid)));
   }
   return {};
 }

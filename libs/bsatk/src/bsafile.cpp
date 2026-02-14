@@ -104,7 +104,6 @@ EErrorCode File::writeData(fstream& sourceArchive, fstream& targetArchive) const
 
   if (m_SourceFile.length() == 0) {
     // copy from source archive
-#pragma message("we may have to compress/decompress!")
     sourceArchive.seekg(m_DataOffset, fstream::beg);
 
     try {

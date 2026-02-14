@@ -34,6 +34,16 @@ PluginListSortProxy::PluginListSortProxy(QObject* parent)
   this->setDynamicSortFilter(true);
 }
 
+void PluginListSortProxy::refreshFilter()
+{
+#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
+  beginFilterChange();
+  endFilterChange(QSortFilterProxyModel::Direction::Rows);
+#else
+  invalidateFilter();
+#endif
+}
+
 void PluginListSortProxy::setEnabledColumns(unsigned int columns)
 {
   emit layoutAboutToBeChanged();
@@ -46,7 +56,7 @@ void PluginListSortProxy::setEnabledColumns(unsigned int columns)
 void PluginListSortProxy::updateFilter(const QString& filter)
 {
   m_CurrentFilter = filter;
-  invalidateFilter();
+  refreshFilter();
 }
 
 bool PluginListSortProxy::filterAcceptsRow(int row, const QModelIndex&) const

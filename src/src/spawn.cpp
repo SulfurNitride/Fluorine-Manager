@@ -914,7 +914,7 @@ bool checkSteam(QWidget* parent, const SpawnParameters& sp, const QDir& gameDire
 
     const auto c = dialogs::confirmStartSteam(parent, sp, details);
 
-    if (c == QDialogButtonBox::Yes) {
+    if (c == QMessageBox::Yes) {
       log::debug("user wants to start steam");
 
       if (!startSteam(parent)) {
@@ -928,7 +928,7 @@ bool checkSteam(QWidget* parent, const SpawnParameters& sp, const QDir& gameDire
         log::error("steam is still not running, hoping for the best");
         return true;
       }
-    } else if (c == QDialogButtonBox::No) {
+    } else if (c == QMessageBox::No) {
       log::debug("user declined to start steam");
       return true;
     } else {

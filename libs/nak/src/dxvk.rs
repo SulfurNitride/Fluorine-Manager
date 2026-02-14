@@ -1,7 +1,7 @@
 //! DXVK configuration management for Fluorine Manager.
 //!
 //! Downloads dxvk.conf from upstream, appends Fluorine-specific settings,
-//! and stores at `~/.var/app/com.fluorine.manager/config/dxvk.conf`.
+//! and stores at `~/.local/share/fluorine/config/dxvk.conf`.
 
 use std::error::Error;
 use std::fs;
@@ -20,9 +20,7 @@ dxvk.enableGraphicsPipelineLibrary = False
 
 /// Get the path where the DXVK config will be stored.
 pub fn get_dxvk_conf_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home)
-        .join(".var/app/com.fluorine.manager/config/dxvk.conf")
+    crate::paths::data_dir().join("config/dxvk.conf")
 }
 
 /// Ensure the dxvk.conf file exists, downloading if necessary.

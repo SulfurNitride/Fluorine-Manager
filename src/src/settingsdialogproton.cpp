@@ -1,6 +1,7 @@
 #include "settingsdialogproton.h"
 
 #include "fluorineconfig.h"
+#include "fluorinepaths.h"
 #include "ui_settingsdialog.h"
 
 #include <QtConcurrent/QtConcurrentRun>
@@ -150,7 +151,7 @@ void ProtonSettingsTab::refreshState()
     ui->prefixLocationEdit->setReadOnly(false);
     if (ui->prefixLocationEdit->text().isEmpty()) {
       ui->prefixLocationEdit->setText(
-          QDir::homePath() + "/.var/app/com.fluorine.manager/Prefix");
+          fluorineDataDir() + "/Prefix");
     }
   }
 
@@ -288,7 +289,7 @@ void ProtonSettingsTab::onBrowsePrefixLocation()
 
 QString ProtonSettingsTab::ensureWinetricks()
 {
-  const QString nakWinetricks = QDir::homePath() + "/.var/app/com.fluorine.manager/bin/winetricks";
+  const QString nakWinetricks = fluorineDataDir() + "/bin/winetricks";
   if (QFileInfo::exists(nakWinetricks)) {
     return nakWinetricks;
   }
@@ -298,7 +299,7 @@ QString ProtonSettingsTab::ensureWinetricks()
     return systemWinetricks;
   }
 
-  const QString nakBinDir = QDir::homePath() + "/.var/app/com.fluorine.manager/bin";
+  const QString nakBinDir = fluorineDataDir() + "/bin";
   QDir().mkpath(nakBinDir);
 
   QString downloadTool;

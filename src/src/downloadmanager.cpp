@@ -232,7 +232,8 @@ DownloadManager::DownloadManager(NexusInterface* nexusInterface, QObject* parent
   connect(&m_DirWatcher, SIGNAL(directoryChanged(QString)), this,
           SLOT(directoryChanged(QString)));
   m_TimeoutTimer.setSingleShot(false);
-  // connect(&m_TimeoutTimer, SIGNAL(timeout()), this, SLOT(checkDownloadTimeout()));
+  connect(&m_TimeoutTimer, &QTimer::timeout, this,
+          &DownloadManager::checkDownloadTimeout);
   m_TimeoutTimer.start(5 * 1000);
 }
 
@@ -959,8 +960,10 @@ void DownloadManager::cancelDownload(int index)
     return;
   }
 
-  if (m_ActiveDownloads.at(index)->m_State == STATE_DOWNLOADING) {
-    setState(m_ActiveDownloads.at(index), STATE_CANCELING);
+  DownloadInfo* info = m_ActiveDownloads.at(index);
+  if (info->m_State == STATE_DOWNLOADING || info->m_State == STATE_STARTED ||
+      info->m_State == STATE_PAUSING) {
+    setState(info, STATE_CANCELING);
   }
 }
 
@@ -1613,6 +1616,12 @@ void DownloadManager::setState(DownloadManager::DownloadInfo* info,
   }
   info->m_State = state;
   switch (state) {
+  case STATE_CANCELING: {
+    // Force termination so the download transitions through finished().
+    if (info->m_Reply != nullptr && info->m_Reply->isRunning()) {
+      info->m_Reply->abort();
+    }
+  } break;
   case STATE_PAUSED: {
     info->m_Reply->abort();
     info->m_Output.close();
@@ -2414,16 +2423,38 @@ void DownloadManager::managedGameChanged(MOBase::IPluginGame const* managedGame)
 void DownloadManager::checkDownloadTimeout()
 {
   for (int i = 0; i < m_ActiveDownloads.size(); ++i) {
-    if (m_ActiveDownloads[i]->m_StartTime.elapsed() -
-                m_ActiveDownloads[i]->m_DownloadTimeLast >
-            5 * 1000 &&
-        m_ActiveDownloads[i]->m_State == STATE_DOWNLOADING &&
-        m_ActiveDownloads[i]->m_Reply != nullptr &&
-        m_ActiveDownloads[i]->m_Reply->isOpen()) {
-      pauseDownload(i);
-      downloadFinished(i);
-      resumeDownload(i);
+    DownloadInfo* info = m_ActiveDownloads[i];
+    if (info->m_State != STATE_DOWNLOADING || info->m_Reply == nullptr ||
+        !info->m_Reply->isOpen()) {
+      continue;
     }
+
+    const bool stalled =
+        (info->m_StartTime.elapsed() - info->m_DownloadTimeLast) > (5 * 1000);
+    if (!stalled) {
+      continue;
+    }
+
+    pauseDownload(i);
+    downloadFinished(i);
+
+    // downloadFinished() can remove the download entry, so find it again.
+    const int index = indexByInfo(info);
+    if (index < 0) {
+      continue;
+    }
+
+    if (info->m_Tries <= 0) {
+      emit showMessage(tr("Download stalled repeatedly and was paused. "
+                          "Please retry manually."));
+      continue;
+    }
+
+    --info->m_Tries;
+    log::warn("download '{}' stalled, retrying ({} retries left)", info->m_FileName,
+              info->m_Tries);
+    resumeDownloadInt(index);
+    emit update(index);
   }
 }
 

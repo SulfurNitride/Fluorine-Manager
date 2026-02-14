@@ -128,6 +128,7 @@ protected:
   virtual bool filterAcceptsRow(int row, const QModelIndex& parent) const;
 
 private:
+  void refreshFilter();
   unsigned long flagsId(const std::vector<ModInfo::EFlag>& flags) const;
   unsigned long conflictFlagsId(const std::vector<ModInfo::EConflictFlag>& flags) const;
   bool hasConflictFlag(const std::vector<ModInfo::EConflictFlag>& flags) const;

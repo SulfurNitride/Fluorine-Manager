@@ -1,5 +1,6 @@
 #include "commandline.h"
 #include "env.h"
+#include "fluorinepaths.h"
 #include "instancemanager.h"
 #include "loglist.h"
 #include "moapplication.h"
@@ -81,6 +82,8 @@ int run(int argc, char* argv[])
     return *r;
   }
 #endif
+
+  fluorineMigrateDataDir();
 
   initLogging();
 

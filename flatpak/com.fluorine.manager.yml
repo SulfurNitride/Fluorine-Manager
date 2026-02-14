@@ -19,6 +19,7 @@ finish-args:
   - --filesystem=~/.steam:ro
   - --filesystem=~/.local/share/Steam
   - --filesystem=~/.var/app/com.valvesoftware.Steam:ro
+  - --filesystem=/usr/share/steam:ro
   - --talk-name=org.freedesktop.Flatpak
 
 cleanup:
@@ -228,8 +229,6 @@ modules:
         cmake -S . -B _build -G Ninja \
           -DCMAKE_BUILD_TYPE=Release \
           -DCMAKE_PREFIX_PATH=/app \
-          -DPython3_ROOT_DIR=/app/lib/fluorine/python \
-          -DPython3_EXECUTABLE=/app/lib/fluorine/python/bin/python3 \
           -DBUILD_PLUGIN_PYTHON=ON
       - cmake --build _build --parallel
 

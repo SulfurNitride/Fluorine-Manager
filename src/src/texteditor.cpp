@@ -104,7 +104,9 @@ bool TextEditor::save()
   }
 
   QFile file(m_filename);
-  file.open(QIODevice::WriteOnly);
+  if (!file.open(QIODevice::WriteOnly)) {
+    return false;
+  }
   file.resize(0);
 
   auto codec = QStringConverter::encodingForName(m_encoding.toUtf8());
@@ -468,7 +470,7 @@ TextEditorToolbar::TextEditorToolbar(TextEditor& editor)
   m_save = new QAction(QIcon(":/MO/gui/save"), QObject::tr("&Save"), &editor);
 
   m_save->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-  m_save->setShortcut(Qt::CTRL + Qt::Key_S);
+  m_save->setShortcut(Qt::CTRL | Qt::Key_S);
   m_editor.addAction(m_save);
 
   m_wordWrap =

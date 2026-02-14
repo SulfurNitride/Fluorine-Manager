@@ -2171,7 +2171,7 @@ p, li { white-space: pre-wrap; }
            </item>
            <item>
             <widget class="QWidget" name="widget_12" native="true">
-             <layout class="QHBoxLayout" name="horizontalLayout">
+             <layout class="QHBoxLayout" name="horizontalLayout_usvfs">
               <property name="leftMargin">
                <number>0</number>
               </property>
@@ -2221,7 +2221,7 @@ p, li { white-space: pre-wrap; }
                </widget>
               </item>
               <item>
-               <spacer name="horizontalSpacer">
+               <spacer name="horizontalSpacer_usvfs">
                 <property name="orientation">
                  <enum>Qt::Orientation::Horizontal</enum>
                 </property>

@@ -7,6 +7,7 @@ pub mod config;
 pub mod dxvk;
 pub mod game_finder;
 pub mod logging;
+pub mod paths;
 pub mod runtime_wrap;
 pub mod steam;
 pub mod utils;

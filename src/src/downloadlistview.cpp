@@ -228,64 +228,64 @@ void DownloadListView::onCustomContextMenu(const QPoint& point)
       hidden = m_Manager->isHidden(row);
 
       if (state >= DownloadManager::STATE_READY) {
-        menu.addAction(tr("Install"), [=] {
+        menu.addAction(tr("Install"), [=, this] {
           issueInstall(row);
         });
         if (m_Manager->isInfoIncomplete(row)) {
-          menu.addAction(tr("Query Info"), [=] {
+          menu.addAction(tr("Query Info"), [=, this] {
             issueQueryInfoMd5(row);
           });
         } else {
-          menu.addAction(tr("Visit on Nexus"), [=] {
+          menu.addAction(tr("Visit on Nexus"), [=, this] {
             issueVisitOnNexus(row);
           });
-          menu.addAction(tr("Visit the uploader's profile"), [=] {
+          menu.addAction(tr("Visit the uploader's profile"), [=, this] {
             issueVisitUploaderProfile(row);
           });
         }
-        menu.addAction(tr("Open File"), [=] {
+        menu.addAction(tr("Open File"), [=, this] {
           issueOpenFile(row);
         });
-        menu.addAction(tr("Open Meta File"), [=] {
+        menu.addAction(tr("Open Meta File"), [=, this] {
           issueOpenMetaFile(row);
         });
-        menu.addAction(tr("Reveal in Explorer"), [=] {
+        menu.addAction(tr("Reveal in Explorer"), [=, this] {
           issueOpenInDownloadsFolder(row);
         });
 
         menu.addSeparator();
 
-        menu.addAction(tr("Delete..."), [=] {
+        menu.addAction(tr("Delete..."), [=, this] {
           issueDelete(row);
         });
         if (hidden)
-          menu.addAction(tr("Un-Hide"), [=] {
+          menu.addAction(tr("Un-Hide"), [=, this] {
             issueRestoreToView(row);
           });
         else
-          menu.addAction(tr("Hide"), [=] {
+          menu.addAction(tr("Hide"), [=, this] {
             issueRemoveFromView(row);
           });
       } else if (state == DownloadManager::STATE_DOWNLOADING) {
-        menu.addAction(tr("Cancel"), [=] {
+        menu.addAction(tr("Cancel"), [=, this] {
           issueCancel(row);
         });
-        menu.addAction(tr("Pause"), [=] {
+        menu.addAction(tr("Pause"), [=, this] {
           issuePause(row);
         });
-        menu.addAction(tr("Reveal in Explorer"), [=] {
+        menu.addAction(tr("Reveal in Explorer"), [=, this] {
           issueOpenInDownloadsFolder(row);
         });
       } else if ((state == DownloadManager::STATE_PAUSED) ||
                  (state == DownloadManager::STATE_ERROR) ||
                  (state == DownloadManager::STATE_PAUSING)) {
-        menu.addAction(tr("Delete..."), [=] {
+        menu.addAction(tr("Delete..."), [=, this] {
           issueDelete(row);
         });
-        menu.addAction(tr("Resume"), [=] {
+        menu.addAction(tr("Resume"), [=, this] {
           issueResume(row);
         });
-        menu.addAction(tr("Reveal in Explorer"), [=] {
+        menu.addAction(tr("Reveal in Explorer"), [=, this] {
           issueOpenInDownloadsFolder(row);
         });
       }
@@ -297,29 +297,29 @@ void DownloadListView::onCustomContextMenu(const QPoint& point)
     // display download-specific actions
   }
 
-  menu.addAction(tr("Delete Installed Downloads..."), [=] {
+  menu.addAction(tr("Delete Installed Downloads..."), [=, this] {
     issueDeleteCompleted();
   });
-  menu.addAction(tr("Delete Uninstalled Downloads..."), [=] {
+  menu.addAction(tr("Delete Uninstalled Downloads..."), [=, this] {
     issueDeleteUninstalled();
   });
-  menu.addAction(tr("Delete All Downloads..."), [=] {
+  menu.addAction(tr("Delete All Downloads..."), [=, this] {
     issueDeleteAll();
   });
 
   menu.addSeparator();
   if (!hidden) {
-    menu.addAction(tr("Hide Installed..."), [=] {
+    menu.addAction(tr("Hide Installed..."), [=, this] {
       issueRemoveFromViewCompleted();
     });
-    menu.addAction(tr("Hide Uninstalled..."), [=] {
+    menu.addAction(tr("Hide Uninstalled..."), [=, this] {
       issueRemoveFromViewUninstalled();
     });
-    menu.addAction(tr("Hide All..."), [=] {
+    menu.addAction(tr("Hide All..."), [=, this] {
       issueRemoveFromViewAll();
     });
   } else {
-    menu.addAction(tr("Un-Hide All..."), [=] {
+    menu.addAction(tr("Un-Hide All..."), [=, this] {
       issueRestoreToViewAll();
     });
   }

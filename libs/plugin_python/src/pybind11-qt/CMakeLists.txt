@@ -56,5 +56,8 @@ add_custom_command(
 add_dependencies(pybind11-qt PyQt6-siph)
 
 target_include_directories(pybind11-qt PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+if(NOT MSVC)
+	target_compile_options(pybind11-qt PRIVATE -Wno-attributes)
+endif()
 
 add_library(pybind11::qt ALIAS pybind11-qt)

@@ -98,7 +98,10 @@ bool FluorineConfig::prefixExists() const
     return false;
   }
 
-  return QDir(QDir(prefix_path).filePath("drive_c")).exists();
+  // prefix_path may point to the compatdata dir (containing pfx/) or
+  // directly to the pfx dir (containing drive_c).
+  const QDir dir(prefix_path);
+  return dir.exists("drive_c") || dir.exists("pfx/drive_c");
 }
 
 QString FluorineConfig::compatDataPath() const

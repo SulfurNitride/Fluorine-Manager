@@ -443,7 +443,7 @@ target_compile_options(7z PRIVATE
   -Wno-unused-parameter
   -Wno-sign-compare
   -Wno-missing-field-initializers
-  -Wno-reorder
+  $<$<COMPILE_LANGUAGE:CXX>:-Wno-reorder>
 )
 
 target_link_libraries(7z PRIVATE pthread dl)

@@ -495,7 +495,11 @@ void GameGamebryo::copyToProfile(QString const& sourcePath,
     sourceFile = resolveFileCaseInsensitive(sourceFile);
     if (!MOBase::shellCopy(sourceFile, filePath)) {
       // if copy file fails, create the file empty
-      QFile(filePath).open(QIODevice::WriteOnly);
+      QFile outputFile(filePath);
+      if (!outputFile.open(QIODevice::WriteOnly)) {
+        MOBase::log::warn("Failed to create fallback file '{}': {}", filePath,
+                          outputFile.errorString());
+      }
     }
   }
 }

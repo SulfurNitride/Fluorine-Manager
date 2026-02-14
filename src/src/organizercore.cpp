@@ -213,7 +213,7 @@ OrganizerCore::OrganizerCore(Settings& settings)
           &OrganizerCore::onDirectoryRefreshed);
 
   connect(&m_ModList, SIGNAL(removeOrigin(QString)), this, SLOT(removeOrigin(QString)));
-  connect(&m_ModList, &ModList::modStatesChanged, [=] {
+  connect(&m_ModList, &ModList::modStatesChanged, [=, this] {
     currentProfile()->writeModlist();
   });
   connect(&m_ModList, &ModList::modPrioritiesChanged, [this](auto&& indexes) {
@@ -908,7 +908,7 @@ OrganizerCore::doInstall(const QString& archivePath, GuessedValue<QString> modNa
     //
     connect(
         this, &OrganizerCore::directoryStructureReady, this,
-        [=] {
+        [=, this] {
           const int modIndex = ModInfo::getIndex(modName);
           if (modIndex != UINT_MAX) {
             const auto modInfo = ModInfo::getByIndex(modIndex);

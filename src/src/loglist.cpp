@@ -20,6 +20,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "loglist.h"
 #include "copyeventfilter.h"
 #include "env.h"
+#include "fluorinepaths.h"
 #include "organizercore.h"
 #include <cstdlib>
 
@@ -27,15 +28,6 @@ using namespace MOBase;
 
 static LogModel* g_instance = nullptr;
 const std::size_t MaxLines  = 1000;
-
-static QString fluorineLogDir()
-{
-#ifndef _WIN32
-  return QDir::homePath() + "/.var/app/com.fluorine.manager/logs";
-#else
-  return {};
-#endif
-}
 
 static std::unique_ptr<env::Console> m_console;
 static bool m_stdout = false;
@@ -249,7 +241,7 @@ void LogList::clear()
 void LogList::openLogsFolder()
 {
 #ifndef _WIN32
-  const QString logsPath = fluorineLogDir();
+  const QString logsPath = fluorineDataDir() + "/logs";
 #else
   const QString logsPath = qApp->property("dataPath").toString() + "/" +
                            QString::fromStdWString(AppConfig::logPath());
@@ -414,8 +406,8 @@ bool createAndMakeWritable(const std::wstring& subPath)
 bool setLogDirectory(const QString& dir)
 {
 #ifndef _WIN32
-  // On Linux, all logs go to ~/.var/app/com.fluorine.manager/logs/
-  const QString logDir = fluorineLogDir();
+  // On Linux, all logs go to ~/.local/share/fluorine/logs/
+  const QString logDir = fluorineDataDir() + "/logs";
   QDir().mkpath(logDir);
   const auto logFile = logDir + "/" +
                        QString::fromStdWString(AppConfig::logFileName());

@@ -5,7 +5,7 @@ if(NOT TARGET mo2::uibase)
   find_package(mo2-uibase CONFIG REQUIRED)
 endif()
 
-pybind11_add_module(mobase MODULE)
+pybind11_add_module(mobase MODULE NO_EXTRAS)
 mo2_default_source_group()
 mo2_configure_target(mobase
 	NO_SOURCES
@@ -38,3 +38,8 @@ mo2_target_sources(mobase
 		./wrappers/wrappers.h
 )
 target_link_libraries(mobase PRIVATE pybind11::qt pybind11::utils mo2::uibase Qt6::Core)
+set_target_properties(mobase PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+if(NOT MSVC)
+  target_compile_options(mobase PRIVATE -fno-lto)
+  target_link_options(mobase PRIVATE -fno-lto)
+endif()

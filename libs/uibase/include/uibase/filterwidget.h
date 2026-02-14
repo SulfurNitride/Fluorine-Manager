@@ -24,10 +24,12 @@ class QDLLEXPORT FilterWidgetProxyModel : public QSortFilterProxyModel
 public:
   FilterWidgetProxyModel(FilterWidget& fw, QWidget* parent = nullptr);
   void refreshFilter() {
-#if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
+#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
     beginFilterChange();
-#endif
+    endFilterChange(QSortFilterProxyModel::Direction::Rows);
+#else
     invalidateFilter();
+#endif
   }
 
 protected:

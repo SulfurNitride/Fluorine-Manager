@@ -32,16 +32,55 @@ You can then get started with: `flatpak run com.fluorine.manager` or you should 
 
 More information can be found in the [FAQ](https://github.com/SulfurNitride/Fluorine-Manager/blob/main/docs/FAQ.md).
 
-You can find me in the [NaK Discord](https://discord.gg/9JWQzSeUWt) 
+You can find me in the [NaK Discord](https://discord.gg/9JWQzSeUWt)
 
 If you want to support the things I put out, I do have a [Ko-Fi](https://ko-fi.com/sulfurnitride) I will never charge money for any of my content.
 
-## Build
+## Building
+
+Both builds install to `~/.local/share/fluorine/` — the same location, so Flatpak and native share instances, plugins, and configs.
+
+### Flatpak (recommended for end users)
 
 ```bash
-cmake -B build
-cmake --build build -j"$(nproc)"
+./build-flatpak.sh bundle
+# Produces a .flatpak file you can install with:
+# flatpak install --user fluorine-manager.flatpak
 ```
+
+### Native (container build)
+
+Requires podman (or docker). The container handles all dependencies automatically.
+
+```bash
+./build-native.sh
+# Builds inside a container, then installs to ~/.local/share/fluorine/
+# Creates a desktop entry and symlinks fluorine-manager into ~/.local/bin/
+```
+
+### Native (building from source on host)
+
+If you want to build directly on your system without a container, you need:
+
+**Build tools:** GCC/Clang, CMake, Ninja, Rust toolchain, pkg-config, patchelf
+
+**Libraries:**
+- Qt 6 (base, webengine, websockets, wayland)
+- Boost (program_options, thread)
+- Python 3 dev headers, pybind11, PyQt6
+- spdlog, toml++, tinyxml2, sqlite3, fontconfig
+- libfuse3, lz4, zlib, zstd, bzip2, lzma
+- OpenSSL, libcurl
+
+**Python packages:** `sip` (build tools), `psutil`, `vdf`
+
+Then build:
+```bash
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_PLUGIN_PYTHON=ON
+cmake --build build --parallel
+```
+
+Note: `python-sip` (the build tools package providing `sipbuild`) is required in addition to `python-pyqt6-sip` (the runtime module). If you see `ModuleNotFoundError: No module named 'sipbuild'`, install `python-sip`.
 
 ## Known Limitations
 
@@ -55,4 +94,3 @@ libs/      MO2 sub-libraries
 src/       Main organizer source
 docs/      Notes and tracking
 ```
-

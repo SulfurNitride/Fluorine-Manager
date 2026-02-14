@@ -43,7 +43,7 @@ public:
   {
     // extract the tag name
     auto match      = m_TagNameExp.match(input, 1, QRegularExpression::NormalMatch,
-                                         QRegularExpression::AnchoredMatchOption);
+                                         QRegularExpression::AnchorAtOffsetMatchOption);
     QString tagName = match.captured(0).toLower();
     TagMap::iterator tagIter = m_TagMap.find(tagName);
     if (tagIter != m_TagMap.end()) {

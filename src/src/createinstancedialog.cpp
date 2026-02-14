@@ -7,6 +7,7 @@
 #include "ui_createinstancedialog.h"
 #include <iplugingame.h>
 #include <utility.h>
+#include <utility>
 
 using namespace MOBase;
 
@@ -133,13 +134,13 @@ CreateInstanceDialog::CreateInstanceDialog(const PluginContainer& pc, Settings* 
 
   addShortcutAction(QKeySequence::Find, Actions::Find);
 
-  addShortcut(Qt::ALT + Qt::Key_Left, [&] {
+  addShortcut(Qt::ALT | Qt::Key_Left, [&] {
     back();
   });
-  addShortcut(Qt::ALT + Qt::Key_Right, [&] {
+  addShortcut(Qt::ALT | Qt::Key_Right, [&] {
     next(false);
   });
-  addShortcut(Qt::CTRL + Qt::Key_Return, [&] {
+  addShortcut(Qt::CTRL | Qt::Key_Return, [&] {
     next();
   });
 
@@ -494,6 +495,22 @@ bool CreateInstanceDialog::switching() const
   return m_switching;
 }
 
+template <class MF, class... Args>
+auto CreateInstanceDialog::getSelected(MF mf, Args&&... args) const
+{
+  // return type
+  using T = decltype((std::declval<cid::Page>().*mf)(std::forward<Args>(args)...));
+
+  for (auto&& p : m_pages) {
+    const auto t = (p.get()->*mf)(std::forward<Args>(args)...);
+    if (t != T()) {
+      return t;
+    }
+  }
+
+  return T();
+}
+
 CreateInstanceDialog::CreationInfo CreateInstanceDialog::rawCreationInfo() const
 {
   const auto iniFilename = QString::fromStdWString(AppConfig::iniFileName());
@@ -562,3 +579,34 @@ CreateInstanceDialog::CreationInfo CreateInstanceDialog::creationInfo() const
 
   return ci;
 }
+
+template <class Page>
+void CreateInstanceDialog::setSinglePage(const QString& instanceName)
+{
+  for (auto&& p : m_pages) {
+    if (auto* tp = dynamic_cast<Page*>(p.get())) {
+      tp->setSkip(false);
+    } else {
+      p->setSkip(true);
+    }
+  }
+
+  setSinglePageImpl(instanceName);
+}
+
+template <class Page>
+Page* CreateInstanceDialog::getPage()
+{
+  for (auto&& p : m_pages) {
+    if (auto* tp = dynamic_cast<Page*>(p.get())) {
+      return tp;
+    }
+  }
+
+  return nullptr;
+}
+
+// explicit instantiations for types used by instancemanager.cpp
+template void CreateInstanceDialog::setSinglePage<cid::GamePage>(const QString&);
+template void CreateInstanceDialog::setSinglePage<cid::VariantsPage>(const QString&);
+template cid::GamePage* CreateInstanceDialog::getPage<cid::GamePage>();
