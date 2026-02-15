@@ -261,6 +261,7 @@ MainWindow::MainWindow(Settings& settings, OrganizerCore& organizerCore,
   QApplication::setEffectEnabled(Qt::UI_AnimateCombo, false);
   QApplication::setEffectEnabled(Qt::UI_AnimateTooltip, false);
   QApplication::setEffectEnabled(Qt::UI_FadeTooltip, false);
+  QApplication::setDesktopFileName(QString("com.fluorine.manager"));
 
 #ifdef MO2_WEBENGINE
   QWebEngineProfile::defaultProfile()->setPersistentCookiesPolicy(

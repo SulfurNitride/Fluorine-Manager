@@ -54,16 +54,20 @@ cp -af "${STAGING}/." "${INSTALL_DIR}/"
 # ── Desktop entry ──
 DESKTOP_DIR="${HOME}/.local/share/applications"
 mkdir -p "${DESKTOP_DIR}"
-cat > "${DESKTOP_DIR}/fluorine-manager.desktop" <<EOF
+cat > "${DESKTOP_DIR}/com.fluorine.manager.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Fluorine Manager
 Comment=Mod Organizer 2 for Linux
 Exec=${INSTALL_DIR}/fluorine-manager
-Icon=fluorine-manager
+Icon=com.fluorine.manager
 Terminal=false
 Categories=Game;
 EOF
+
+# Icon
+mkdir -p "${HOME}/.local/share/icons/hicolor/256x256/apps/"
+cp -f "${SCRIPT_DIR}/flatpak/com.fluorine.manager.png" "${HOME}/.local/share/icons/hicolor/256x256/apps/"
 
 # ── Symlink into ~/.local/bin for PATH access ──
 BIN_DIR="${HOME}/.local/bin"
