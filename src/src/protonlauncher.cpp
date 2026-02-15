@@ -378,9 +378,25 @@ bool ProtonLauncher::launchWithUmu(qint64& pid) const
       umuRun = QStringLiteral("umu-run");
     }
   } else {
-    const QString bundled =
-        QCoreApplication::applicationDirPath() + QStringLiteral("/umu-run");
-    const QString system = QStandardPaths::findExecutable(QStringLiteral("umu-run"));
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QString bundled = appDir + QStringLiteral("/umu-run");
+
+    // Search PATH for a system umu-run, excluding our own app directory
+    // (the launcher prepends it to PATH, so findExecutable would find the
+    // bundled copy otherwise).
+    QString system;
+    const QStringList pathDirs =
+        QString::fromLocal8Bit(qgetenv("PATH")).split(QLatin1Char(':'), Qt::SkipEmptyParts);
+    for (const QString& dir : pathDirs) {
+      if (QDir(dir) == QDir(appDir))
+        continue;
+      const QString candidate = QStandardPaths::findExecutable(
+          QStringLiteral("umu-run"), {dir});
+      if (!candidate.isEmpty()) {
+        system = candidate;
+        break;
+      }
+    }
 
     if (m_preferSystemUmu) {
       if (!system.isEmpty()) {
