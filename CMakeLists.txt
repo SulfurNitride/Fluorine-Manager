@@ -165,16 +165,49 @@ if(BUILD_BSA_FFI)
 endif()
 
 if(BUILD_PLUGIN_PYTHON)
-  set(_mo2_pyvenv_python "${CMAKE_SOURCE_DIR}/build/pyvenv/bin/python")
+  set(_mo2_pyvenv "${CMAKE_SOURCE_DIR}/build/pyvenv")
+  set(_mo2_pyvenv_python "${_mo2_pyvenv}/bin/python")
+
+  # Bootstrap a local Python venv with uv if the pyvenv doesn't exist yet.
+  if(NOT EXISTS "${_mo2_pyvenv_python}")
+    find_program(_uv_exe uv)
+    if(_uv_exe)
+      message(STATUS "Bootstrapping Python venv with uv...")
+      execute_process(
+        COMMAND ${_uv_exe} venv "${_mo2_pyvenv}" --python 3.13 --seed
+        RESULT_VARIABLE _uv_venv_rc)
+      if(_uv_venv_rc EQUAL 0)
+        execute_process(
+          COMMAND ${_uv_exe} pip install --python "${_mo2_pyvenv_python}"
+                  pybind11 psutil vdf
+          RESULT_VARIABLE _uv_pip_rc)
+        if(NOT _uv_pip_rc EQUAL 0)
+          message(WARNING "uv pip install failed (rc=${_uv_pip_rc})")
+        endif()
+      else()
+        message(WARNING "uv venv creation failed (rc=${_uv_venv_rc})")
+      endif()
+    endif()
+  endif()
+
   if(EXISTS "${_mo2_pyvenv_python}")
     set(Python_EXECUTABLE "${_mo2_pyvenv_python}" CACHE FILEPATH
       "Python executable for plugin_python build" FORCE)
-    set(pybind11_DIR
-      "${CMAKE_SOURCE_DIR}/build/pyvenv/lib/python3.14/site-packages/pybind11/share/cmake/pybind11"
-      CACHE PATH "pybind11 cmake dir for plugin_python" FORCE)
-    set(MO2_PYLIBS_DIR "${CMAKE_SOURCE_DIR}/build/pyvenv"
+    # Detect pybind11 cmake dir dynamically (version-independent path).
+    execute_process(
+      COMMAND "${_mo2_pyvenv_python}" -c
+        "import pybind11; print(pybind11.get_cmake_dir())"
+      OUTPUT_VARIABLE _pybind11_cmake_dir
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      RESULT_VARIABLE _pybind11_rc)
+    if(_pybind11_rc EQUAL 0 AND _pybind11_cmake_dir)
+      set(pybind11_DIR "${_pybind11_cmake_dir}"
+        CACHE PATH "pybind11 cmake dir for plugin_python" FORCE)
+    endif()
+    set(MO2_PYLIBS_DIR "${_mo2_pyvenv}"
       CACHE PATH "Python runtime root for plugin_python" FORCE)
   endif()
+
   add_subdirectory(libs/plugin_python)
 endif()
 
