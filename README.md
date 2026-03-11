@@ -53,6 +53,14 @@ NOTE: Native builds are available but are not officially supported by me. Please
 
 - Some third-party MO2 plugins are Windows-only and will fail on Linux (for example DLL/ctypes `windll` assumptions).
 - Themes are currently not working as intended.
+- Fluorine Manager requires Steam to be installed on the user's computer so that Proton is available to it.
+- When using the native build, the following libraries are not bundled and must be made available to Fluorine Manager(on most systems, simply install the required packages. On NixOS, make the packages containing these libraries available under "programs.nix-ld.libraries = [];" in configuration.nix, solutions for NixOS like steam-run currently run into FUSE permission issues):
+  - libEGL
+  - libGL
+  - libGLX
+  - libstdc
+  - libX11
+  - libXkbcommon
 
 ## Project Layout
 
