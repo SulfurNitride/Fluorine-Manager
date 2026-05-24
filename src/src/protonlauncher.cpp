@@ -1062,6 +1062,25 @@ bool ProtonLauncher::launchDirect(qint64& pid) const
     env.insert(it.key(), it.value());
   }
 
+  // Native Linux games often ship shared libraries beside the executable.
+  // QProcess sets the cwd, but the dynamic loader/dlopen will not search it
+  // unless it is also present in LD_LIBRARY_PATH.
+  QStringList libraryPaths;
+  if (!m_workingDir.isEmpty()) {
+    libraryPaths << QDir::cleanPath(m_workingDir);
+  }
+  const QString binaryDir = QFileInfo(m_binary).absolutePath();
+  if (!binaryDir.isEmpty() && !libraryPaths.contains(binaryDir)) {
+    libraryPaths << binaryDir;
+  }
+  const QString existingLdLibraryPath = env.value("LD_LIBRARY_PATH");
+  if (!existingLdLibraryPath.isEmpty()) {
+    libraryPaths << existingLdLibraryPath.split(':', Qt::SkipEmptyParts);
+  }
+  if (!libraryPaths.isEmpty()) {
+    env.insert("LD_LIBRARY_PATH", libraryPaths.join(':'));
+  }
+
   if (m_useTerminal) {
     wrapInTerminal(program, arguments);
   }

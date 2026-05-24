@@ -462,7 +462,7 @@ int spawn(const SpawnParameters& sp, pid_t& processId)
       launcher.setSavesBindMount(sp.saveBindMountSource, sp.saveBindMountTarget);
     }
   } else {
-    MOBase::log::info("Proton disabled for this executable, launching directly");
+    MOBase::log::info("Launching executable directly without Proton");
   }
 
   launcher.setUseTerminal(sp.useTerminal);

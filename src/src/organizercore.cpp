@@ -104,7 +104,9 @@ QStringList toStringList(InputIterator current, InputIterator end)
 QString resolveWinePrefixPath(const Settings& settings,
                               const IPluginGame* managedGame)
 {
-  Q_UNUSED(managedGame);
+  if (managedGame != nullptr && managedGame->isNativeLinux()) {
+    return {};
+  }
 
   if (auto cfg = FluorineConfig::load(); cfg.has_value() && cfg->prefixExists()) {
     return cfg->prefix_path.trimmed();

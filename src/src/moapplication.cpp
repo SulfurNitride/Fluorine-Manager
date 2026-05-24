@@ -390,9 +390,9 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
     FuseConnector::tryCleanupStaleMount(dataDir);
   }
 
-  // Restore any stale INI/save backups left by a previous crash. This ensures
-  // the documents directory is clean before we do anything else.
-  {
+  // Restore any stale INI/save backups left by a previous Wine/Proton crash.
+  // Native Linux game instances do not use the prefix during launch.
+  if (!m_instance->gamePlugin()->isNativeLinux()) {
     auto prefixPath = FluorineConfig::prefixPath();
     if (!prefixPath || prefixPath->isEmpty()) {
       QSettings const instanceSettings(m_settings->filename(), QSettings::IniFormat);
