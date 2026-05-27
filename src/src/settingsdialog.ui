@@ -1895,6 +1895,41 @@ If you disable this feature, MO will only display official DLCs this way. Please
          </property>
          <layout class="QVBoxLayout" name="verticalLayout_38">
           <item>
+           <widget class="QCheckBox" name="usvfsWineBackendCheck">
+            <property name="toolTip">
+             <string>Launch Wine/Proton targets through the experimental USVFS backend instead of the Linux FUSE mount.</string>
+            </property>
+            <property name="text">
+             <string>Use experimental USVFS Wine backend</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <layout class="QHBoxLayout" name="horizontalLayout_16">
+            <item>
+             <widget class="QLabel" name="label_66">
+              <property name="text">
+               <string>USVFS Helper:</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLineEdit" name="usvfsLauncherPathEdit">
+              <property name="placeholderText">
+               <string>fluorine-usvfs-launcher.exe next to Fluorine</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="usvfsLauncherBrowseButton">
+              <property name="text">
+               <string>Browse...</string>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item>
            <layout class="QHBoxLayout" name="horizontalLayout_14">
             <item>
              <widget class="QLabel" name="label_65">

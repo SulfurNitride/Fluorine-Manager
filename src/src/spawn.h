@@ -29,23 +29,23 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 class QProcess;
 class Settings;
 
-namespace spawn
-{
+namespace spawn {
 
 /*
  * @param binary the binary to spawn
  * @param arguments arguments to pass to the binary
  * @param profileName name of the active profile
- * @param currentDirectory the directory to use as the working directory to run in
- * @param logLevel log level to be used by the hook library. Ignored if hooked is false
+ * @param currentDirectory the directory to use as the working directory to run
+ * in
+ * @param logLevel log level to be used by the hook library. Ignored if hooked
+ * is false
  * @param hooked if set, the binary is started with mo injected
- * @param stdout if not equal to INVALID_HANDLE_VALUE, this is used as stdout for the
- * process
- * @param stderr if not equal to INVALID_HANDLE_VALUE, this is used as stderr for the
- * process
+ * @param stdout if not equal to INVALID_HANDLE_VALUE, this is used as stdout
+ * for the process
+ * @param stderr if not equal to INVALID_HANDLE_VALUE, this is used as stderr
+ * for the process
  */
-struct SpawnParameters
-{
+struct SpawnParameters {
   QFileInfo binary;
   QString arguments;
   QDir currentDirectory;
@@ -53,8 +53,8 @@ struct SpawnParameters
   bool hooked = false;
   bool useProton = true;
   bool useTerminal = false;
-  int stdOut       = -1;
-  int stdErr       = -1;
+  int stdOut = -1;
+  int stdErr = -1;
   // When both are set and unprivileged user namespaces are available,
   // spawn() wraps the launch so `saveBindMountTarget` becomes a live view
   // of `saveBindMountSource` for the duration of the game process tree.
@@ -62,37 +62,39 @@ struct SpawnParameters
   // without symlinks, which Wine can accidentally replace.
   QString saveBindMountSource;
   QString saveBindMountTarget;
+  // Experimental Proton-only USVFS backend. When set, Proton starts the helper
+  // executable and passes it the manifest plus the real target executable.
+  QString usvfsManifestPath;
+  QString usvfsLauncherPath;
 };
 
-bool checkSteam(QWidget* parent, const SpawnParameters& sp, const QDir& gameDirectory,
-                const QString& steamAppID, const Settings& settings);
+bool checkSteam(QWidget *parent, const SpawnParameters &sp,
+                const QDir &gameDirectory, const QString &steamAppID,
+                const Settings &settings);
 
-bool checkBlacklist(QWidget* parent, const SpawnParameters& sp, Settings& settings);
+bool checkBlacklist(QWidget *parent, const SpawnParameters &sp,
+                    Settings &settings);
 
 /**
  * @brief spawn a binary, returning the new pid (or -1 on failure)
  **/
-pid_t startBinary(QWidget* parent, const SpawnParameters& sp);
+pid_t startBinary(QWidget *parent, const SpawnParameters &sp);
 
-enum class FileExecutionTypes
-{
-  Executable = 1,
-  Other
-};
+enum class FileExecutionTypes { Executable = 1, Other };
 
-struct FileExecutionContext
-{
+struct FileExecutionContext {
   QFileInfo binary;
   QString arguments;
   FileExecutionTypes type;
 };
 
-QString findJavaInstallation(const QString& jarFile);
+QString findJavaInstallation(const QString &jarFile);
 
-FileExecutionContext getFileExecutionContext(QWidget* parent, const QFileInfo& target);
+FileExecutionContext getFileExecutionContext(QWidget *parent,
+                                             const QFileInfo &target);
 
-FileExecutionTypes getFileExecutionType(const QFileInfo& target);
+FileExecutionTypes getFileExecutionType(const QFileInfo &target);
 
-}  // namespace spawn
+} // namespace spawn
 
-#endif  // SPAWN_H
+#endif // SPAWN_H

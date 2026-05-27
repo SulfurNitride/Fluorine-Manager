@@ -57,6 +57,17 @@ mkdir -p "${OUT_DIR}/plugins" "${OUT_DIR}/lib"
 cp -f "${RUNDIR}/ModOrganizer" "${OUT_DIR}/ModOrganizer-core"
 [ -f "${RUNDIR}/README-PORTABLE.txt" ] && cp -f "${RUNDIR}/README-PORTABLE.txt" "${OUT_DIR}/"
 [ -f "/src/src/fluorine-manager" ] && cp -f "/src/src/fluorine-manager" "${OUT_DIR}/"
+if [ -n "${FLUORINE_USVFS_LAUNCHER:-}" ]; then
+    if [ ! -f "${FLUORINE_USVFS_LAUNCHER}" ]; then
+        echo "ERROR: FLUORINE_USVFS_LAUNCHER does not exist: ${FLUORINE_USVFS_LAUNCHER}"
+        exit 1
+    fi
+    cp -f "${FLUORINE_USVFS_LAUNCHER}" "${OUT_DIR}/fluorine-usvfs-launcher.exe"
+    echo "Bundled USVFS Wine helper from ${FLUORINE_USVFS_LAUNCHER}"
+elif [ -f "/src/fluorine-usvfs-launcher.exe" ]; then
+    cp -f "/src/fluorine-usvfs-launcher.exe" "${OUT_DIR}/fluorine-usvfs-launcher.exe"
+    echo "Bundled USVFS Wine helper from repository root"
+fi
 
 # wrestool/icotool no longer needed — icon extraction is built into the C++ PE parser
 

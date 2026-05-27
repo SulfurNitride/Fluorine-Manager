@@ -1,9 +1,8 @@
 #include "protonlauncher.h"
 
 #include "fluorinepaths.h"
-#include "steamdetection.h"
 #include "slrmanager.h"
-#include <cstdio>
+#include "steamdetection.h"
 #include <QByteArray>
 #include <QCoreApplication>
 #include <QDir>
@@ -11,18 +10,17 @@
 #include <QFileInfo>
 #include <QProcess>
 #include <QProcessEnvironment>
-#include <QStandardPaths>
 #include <QSet>
+#include <QStandardPaths>
+#include <cstdio>
 #include <log.h>
 
-namespace
-{
+namespace {
 // Restore the pre-launcher environment for child processes (Proton, Wine).
 // The fluorine-manager launcher script saves FLUORINE_ORIG_* before
 // modifying PATH, LD_LIBRARY_PATH, etc., so game processes get a clean
 // host environment without the bundled-library paths leaking through.
-void cleanFluorineEnv(QProcessEnvironment& env)
-{
+void cleanFluorineEnv(QProcessEnvironment &env) {
   // Remove Fluorine-specific vars that should never leak to game processes.
   env.remove("QT_QPA_PLATFORM_PLUGIN_PATH");
   env.remove("MO2_PLUGINS_DIR");
@@ -33,8 +31,8 @@ void cleanFluorineEnv(QProcessEnvironment& env)
   // Restore saved pre-launcher values from FLUORINE_ORIG_*. If those
   // vars are missing (e.g. someone invoked ModOrganizer-core directly),
   // fall back to stripping bundled-runtime paths by pattern.
-  auto restoreOrStrip = [](const QString& var, const QString& origVar,
-                           QProcessEnvironment& e) {
+  auto restoreOrStrip = [](const QString &var, const QString &origVar,
+                           QProcessEnvironment &e) {
     if (e.contains(origVar)) {
       const QString orig = e.value(origVar);
       if (orig.isEmpty()) {
@@ -45,9 +43,10 @@ void cleanFluorineEnv(QProcessEnvironment& env)
       e.remove(origVar);
     } else {
       const QString value = e.value(var);
-      if (value.isEmpty()) return;
+      if (value.isEmpty())
+        return;
       QStringList kept;
-      for (const QString& p : value.split(':')) {
+      for (const QString &p : value.split(':')) {
         if (p.contains("/fluorine/python")) {
           continue;
         }
@@ -69,20 +68,20 @@ void cleanFluorineEnv(QProcessEnvironment& env)
   restoreOrStrip("QT_PLUGIN_PATH", "FLUORINE_ORIG_QT_PLUGIN_PATH", env);
 
   MOBase::log::debug("cleanFluorineEnv: {} (LD_LIBRARY_PATH='{}')",
-                     hasOrigVars ? "restored from FLUORINE_ORIG_*" : "pattern-strip fallback",
+                     hasOrigVars ? "restored from FLUORINE_ORIG_*"
+                                 : "pattern-strip fallback",
                      env.value("LD_LIBRARY_PATH", "<unset>"));
 }
 
-QString decodeMountInfoPath(const QByteArray& encoded)
-{
+QString decodeMountInfoPath(const QByteArray &encoded) {
   QByteArray decoded;
   decoded.reserve(encoded.size());
 
   for (int i = 0; i < encoded.size(); ++i) {
-    if (encoded[i] == '\\' && i + 3 < encoded.size() &&
-        encoded[i + 1] >= '0' && encoded[i + 1] <= '7' &&
-        encoded[i + 2] >= '0' && encoded[i + 2] <= '7' &&
-        encoded[i + 3] >= '0' && encoded[i + 3] <= '7') {
+    if (encoded[i] == '\\' && i + 3 < encoded.size() && encoded[i + 1] >= '0' &&
+        encoded[i + 1] <= '7' && encoded[i + 2] >= '0' &&
+        encoded[i + 2] <= '7' && encoded[i + 3] >= '0' &&
+        encoded[i + 3] <= '7') {
       const char c = static_cast<char>(((encoded[i + 1] - '0') << 6) |
                                        ((encoded[i + 2] - '0') << 3) |
                                        (encoded[i + 3] - '0'));
@@ -96,8 +95,7 @@ QString decodeMountInfoPath(const QByteArray& encoded)
   return QString::fromUtf8(decoded);
 }
 
-QString canonicalPathForPressureVessel(const QString& path)
-{
+QString canonicalPathForPressureVessel(const QString &path) {
   const QFileInfo info(path);
   const QString canonical = info.canonicalFilePath();
   if (!canonical.isEmpty()) {
@@ -108,20 +106,16 @@ QString canonicalPathForPressureVessel(const QString& path)
   return absolute.isEmpty() ? QString{} : QDir::cleanPath(absolute);
 }
 
-bool pressureVesselSharesByDefault(const QString& path)
-{
+bool pressureVesselSharesByDefault(const QString &path) {
   static const QStringList defaultRoots = {
-      QDir::homePath(),
-      QStringLiteral("/home"),
-      QStringLiteral("/media"),
-      QStringLiteral("/mnt"),
-      QStringLiteral("/opt"),
-      QStringLiteral("/run/media"),
+      QDir::homePath(),         QStringLiteral("/home"),
+      QStringLiteral("/media"), QStringLiteral("/mnt"),
+      QStringLiteral("/opt"),   QStringLiteral("/run/media"),
       QStringLiteral("/srv"),
   };
 
   const QString clean = QDir::cleanPath(path);
-  for (const QString& root : defaultRoots) {
+  for (const QString &root : defaultRoots) {
     const QString cleanRoot = QDir::cleanPath(root);
     if (clean == cleanRoot || clean.startsWith(cleanRoot + '/')) {
       return true;
@@ -131,32 +125,22 @@ bool pressureVesselSharesByDefault(const QString& path)
   return false;
 }
 
-bool isSystemRootPath(const QString& path)
-{
+bool isSystemRootPath(const QString &path) {
   static const QStringList systemRootPrefixes = {
-      QStringLiteral("/bin"),
-      QStringLiteral("/boot"),
-      QStringLiteral("/dev"),
-      QStringLiteral("/efi"),
-      QStringLiteral("/etc"),
-      QStringLiteral("/lib"),
-      QStringLiteral("/lib32"),
-      QStringLiteral("/lib64"),
-      QStringLiteral("/lost+found"),
-      QStringLiteral("/nix"),
-      QStringLiteral("/proc"),
-      QStringLiteral("/root"),
-      QStringLiteral("/run"),
-      QStringLiteral("/sbin"),
-      QStringLiteral("/snap"),
-      QStringLiteral("/sys"),
-      QStringLiteral("/tmp"),
-      QStringLiteral("/usr"),
+      QStringLiteral("/bin"),        QStringLiteral("/boot"),
+      QStringLiteral("/dev"),        QStringLiteral("/efi"),
+      QStringLiteral("/etc"),        QStringLiteral("/lib"),
+      QStringLiteral("/lib32"),      QStringLiteral("/lib64"),
+      QStringLiteral("/lost+found"), QStringLiteral("/nix"),
+      QStringLiteral("/proc"),       QStringLiteral("/root"),
+      QStringLiteral("/run"),        QStringLiteral("/sbin"),
+      QStringLiteral("/snap"),       QStringLiteral("/sys"),
+      QStringLiteral("/tmp"),        QStringLiteral("/usr"),
       QStringLiteral("/var"),
   };
 
   const QString clean = QDir::cleanPath(path);
-  for (const QString& prefix : systemRootPrefixes) {
+  for (const QString &prefix : systemRootPrefixes) {
     if (clean == prefix || clean.startsWith(prefix + '/')) {
       return true;
     }
@@ -165,10 +149,9 @@ bool isSystemRootPath(const QString& path)
   return false;
 }
 
-bool shouldExposeMountPointToPressureVessel(const QString& mountPoint,
-                                            const QString& fsType,
-                                            const QString& source)
-{
+bool shouldExposeMountPointToPressureVessel(const QString &mountPoint,
+                                            const QString &fsType,
+                                            const QString &source) {
   if (mountPoint.isEmpty() || mountPoint == "/" ||
       pressureVesselSharesByDefault(mountPoint) ||
       isSystemRootPath(mountPoint)) {
@@ -176,18 +159,18 @@ bool shouldExposeMountPointToPressureVessel(const QString& mountPoint,
   }
 
   static const QSet<QString> ignoredFsTypes = {
-      QStringLiteral("autofs"),     QStringLiteral("bdev"),
+      QStringLiteral("autofs"),      QStringLiteral("bdev"),
       QStringLiteral("binfmt_misc"), QStringLiteral("bpf"),
-      QStringLiteral("cgroup"),     QStringLiteral("cgroup2"),
-      QStringLiteral("configfs"),   QStringLiteral("debugfs"),
-      QStringLiteral("devpts"),     QStringLiteral("devtmpfs"),
-      QStringLiteral("efivarfs"),   QStringLiteral("fusectl"),
-      QStringLiteral("hugetlbfs"),  QStringLiteral("mqueue"),
-      QStringLiteral("nsfs"),       QStringLiteral("overlay"),
-      QStringLiteral("proc"),       QStringLiteral("pstore"),
-      QStringLiteral("ramfs"),      QStringLiteral("securityfs"),
-      QStringLiteral("squashfs"),   QStringLiteral("sysfs"),
-      QStringLiteral("tmpfs"),      QStringLiteral("tracefs"),
+      QStringLiteral("cgroup"),      QStringLiteral("cgroup2"),
+      QStringLiteral("configfs"),    QStringLiteral("debugfs"),
+      QStringLiteral("devpts"),      QStringLiteral("devtmpfs"),
+      QStringLiteral("efivarfs"),    QStringLiteral("fusectl"),
+      QStringLiteral("hugetlbfs"),   QStringLiteral("mqueue"),
+      QStringLiteral("nsfs"),        QStringLiteral("overlay"),
+      QStringLiteral("proc"),        QStringLiteral("pstore"),
+      QStringLiteral("ramfs"),       QStringLiteral("securityfs"),
+      QStringLiteral("squashfs"),    QStringLiteral("sysfs"),
+      QStringLiteral("tmpfs"),       QStringLiteral("tracefs"),
   };
 
   if (ignoredFsTypes.contains(fsType)) {
@@ -199,27 +182,24 @@ bool shouldExposeMountPointToPressureVessel(const QString& mountPoint,
          source.startsWith(QStringLiteral("LABEL=")) ||
          fsType.startsWith(QStringLiteral("fuse.")) ||
          fsType == QStringLiteral("fuseblk") ||
-         fsType == QStringLiteral("ntfs3") ||
-         fsType == QStringLiteral("zfs") ||
+         fsType == QStringLiteral("ntfs3") || fsType == QStringLiteral("zfs") ||
          fsType == QStringLiteral("btrfs") ||
-         fsType == QStringLiteral("ext4") ||
-         fsType == QStringLiteral("xfs");
+         fsType == QStringLiteral("ext4") || fsType == QStringLiteral("xfs");
 }
 
-void addPressureVesselPath(QSet<QString>& paths, const QString& path)
-{
+void addPressureVesselPath(QSet<QString> &paths, const QString &path) {
   const QString clean = canonicalPathForPressureVessel(path);
   if (!clean.isEmpty() && QFileInfo(clean).exists()) {
     paths.insert(clean);
   }
 }
 
-void addTopLevelRootDirectoriesToPressureVessel(QSet<QString>& paths)
-{
+void addTopLevelRootDirectoriesToPressureVessel(QSet<QString> &paths) {
   const QFileInfoList entries =
-      QDir(QStringLiteral("/")).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
+      QDir(QStringLiteral("/"))
+          .entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
 
-  for (const QFileInfo& entry : entries) {
+  for (const QFileInfo &entry : entries) {
     const QString path = QDir::cleanPath(entry.absoluteFilePath());
     if (pressureVesselSharesByDefault(path) || isSystemRootPath(path) ||
         entry.isSymLink()) {
@@ -230,8 +210,8 @@ void addTopLevelRootDirectoriesToPressureVessel(QSet<QString>& paths)
   }
 }
 
-void addPressureVesselStorageRootForPath(QSet<QString>& paths, const QString& path)
-{
+void addPressureVesselStorageRootForPath(QSet<QString> &paths,
+                                         const QString &path) {
   const QString clean = canonicalPathForPressureVessel(path);
   if (clean.isEmpty() || pressureVesselSharesByDefault(clean)) {
     return;
@@ -245,13 +225,12 @@ void addPressureVesselStorageRootForPath(QSet<QString>& paths, const QString& pa
   addPressureVesselPath(paths, QStringLiteral("/") + parts.first());
 }
 
-QStringList extraPressureVesselFilesystems(const QStringList& importantPaths)
-{
+QStringList extraPressureVesselFilesystems(const QStringList &importantPaths) {
   QSet<QString> paths;
 
   addTopLevelRootDirectoriesToPressureVessel(paths);
 
-  for (const QString& path : importantPaths) {
+  for (const QString &path : importantPaths) {
     addPressureVesselStorageRootForPath(paths, path);
   }
 
@@ -279,9 +258,8 @@ QStringList extraPressureVesselFilesystems(const QStringList& importantPaths)
   return result;
 }
 
-void appendPressureVesselFilesystems(QProcessEnvironment& env,
-                                     const QStringList& paths)
-{
+void appendPressureVesselFilesystems(QProcessEnvironment &env,
+                                     const QStringList &paths) {
   if (paths.isEmpty()) {
     return;
   }
@@ -301,9 +279,9 @@ void appendPressureVesselFilesystems(QProcessEnvironment& env,
 
 // GE-Proton crashes in update_builtin_libs() if tracked_files doesn't exist
 // (e.g. prefix was created by plain Wine, not Proton).  Create an empty one.
-void ensureTrackedFilesExist(const QString& compatDataPath)
-{
-  if (compatDataPath.isEmpty()) return;
+void ensureTrackedFilesExist(const QString &compatDataPath) {
+  if (compatDataPath.isEmpty())
+    return;
   const QString tracked = QDir(compatDataPath).filePath("tracked_files");
   if (!QFileInfo::exists(tracked)) {
     QDir().mkpath(compatDataPath);
@@ -315,8 +293,7 @@ void ensureTrackedFilesExist(const QString& compatDataPath)
   }
 }
 
-QString compatDataPathFromPrefix(const QString& prefixPath)
-{
+QString compatDataPathFromPrefix(const QString &prefixPath) {
   if (prefixPath.isEmpty()) {
     return {};
   }
@@ -350,8 +327,7 @@ QString compatDataPathFromPrefix(const QString& prefixPath)
   return QDir::cleanPath(QFileInfo(prefixPath).dir().absolutePath());
 }
 
-QString detectSteamPath()
-{
+QString detectSteamPath() {
   {
     const QString steamPath = findSteamPath().trimmed();
     if (!steamPath.isEmpty()) {
@@ -372,24 +348,25 @@ QString detectSteamPath()
   return {};
 }
 
-// Find the Steam Linux Runtime run script (steamrt4 preferred, sniper fallback).
-// SLR wraps the Proton launch in a pressure-vessel container that provides
-// GStreamer, 32-bit libs, and an FHS-compliant environment — required on
-// NixOS and other non-FHS distros. Proton 11+ requires steamrt4.
-// Returns empty string if SLR is not installed.
-QString detectSLRRunScript()
-{
+// Find the Steam Linux Runtime run script (steamrt4 preferred, sniper
+// fallback). SLR wraps the Proton launch in a pressure-vessel container that
+// provides GStreamer, 32-bit libs, and an FHS-compliant environment — required
+// on NixOS and other non-FHS distros. Proton 11+ requires steamrt4. Returns
+// empty string if SLR is not installed.
+QString detectSLRRunScript() {
   const QString steamPath = detectSteamPath();
 
   const QStringList candidates = {
       steamPath + "/steamapps/common/SteamLinuxRuntime_4/run",
       steamPath + "/steamapps/common/SteamLinuxRuntime_sniper/run",
-      QDir::home().filePath(".local/share/Steam/steamapps/common/SteamLinuxRuntime_4/run"),
-      QDir::home().filePath(".local/share/Steam/steamapps/common/SteamLinuxRuntime_sniper/run"),
+      QDir::home().filePath(
+          ".local/share/Steam/steamapps/common/SteamLinuxRuntime_4/run"),
+      QDir::home().filePath(
+          ".local/share/Steam/steamapps/common/SteamLinuxRuntime_sniper/run"),
       "/usr/lib/pressure-vessel/wrap",
   };
 
-  for (const QString& path : candidates) {
+  for (const QString &path : candidates) {
     if (!path.isEmpty() && QFileInfo::exists(path)) {
       return path;
     }
@@ -398,12 +375,11 @@ QString detectSLRRunScript()
 }
 
 // Detect an available terminal emulator on the system.
-QString findTerminal()
-{
-  static const char* candidates[] = {
+QString findTerminal() {
+  static const char *candidates[] = {
       "konsole", "gnome-terminal", "xfce4-terminal", "alacritty",
-      "kitty", "foot", "xterm"};
-  for (const auto* name : candidates) {
+      "kitty",   "foot",           "xterm"};
+  for (const auto *name : candidates) {
     const QString path = QStandardPaths::findExecutable(name);
     if (!path.isEmpty())
       return path;
@@ -413,8 +389,7 @@ QString findTerminal()
 
 // Wrap a program + args in a terminal emulator.
 // Modifies program and arguments in-place.
-void wrapInTerminal(QString& program, QStringList& arguments)
-{
+void wrapInTerminal(QString &program, QStringList &arguments) {
   const QString term = findTerminal();
   if (term.isEmpty()) {
     MOBase::log::warn("No terminal emulator found; launching without terminal");
@@ -426,7 +401,7 @@ void wrapInTerminal(QString& program, QStringList& arguments)
   // Build a shell command for the inner program + args.
   // Append a read prompt so the terminal stays open after exit.
   QString innerCmd = "'" + QString(program).replace("'", "'\\''") + "'";
-  for (const auto& a : arguments)
+  for (const auto &a : arguments)
     innerCmd += " '" + QString(a).replace("'", "'\\''") + "'";
   innerCmd += "; echo; echo '--- Process exited with code '$?' ---'; "
               "echo 'Press Enter to close...'; read";
@@ -449,17 +424,15 @@ void wrapInTerminal(QString& program, QStringList& arguments)
     termArgs << "-e" << "bash" << "-c" << innerCmd;
   }
 
-  MOBase::log::info("Launching in terminal: {} {}", term,
-                     termArgs.join(' '));
-  program   = term;
+  MOBase::log::info("Launching in terminal: {} {}", term, termArgs.join(' '));
+  program = term;
   arguments = termArgs;
 }
 
-bool startWithEnv(const QString& program, const QStringList& arguments,
-                  const QString& workingDir,
-                  const QProcessEnvironment& environment, qint64& pid)
-{
-  auto* process = new QProcess();
+bool startWithEnv(const QString &program, const QStringList &arguments,
+                  const QString &workingDir,
+                  const QProcessEnvironment &environment, qint64 &pid) {
+  auto *process = new QProcess();
   process->setProgram(program);
   process->setArguments(arguments);
 
@@ -472,23 +445,27 @@ bool startWithEnv(const QString& program, const QStringList& arguments,
 
   // Filter noisy Wine/Proton stderr (GStreamer warnings, etc.) while
   // forwarding everything else to our stderr.
-  QObject::connect(process, &QProcess::readyReadStandardError, process, [process]() {
-    const QByteArray data = process->readAllStandardError();
-    for (const QByteArray& line : data.split('\n')) {
-      if (line.isEmpty())
-        continue;
-      if (line.contains("GStreamer-WARNING") || line.contains("Failed to load plugin") ||
-          line.contains("ProtonFixes[") || line.contains("wineserver: NTSync") ||
-          line.contains("[MANGOHUD]") || line.contains("radv is not a conformant"))
-        continue;
-      std::fwrite(line.constData(), 1, line.size(), stderr);
-      std::fputc('\n', stderr);
-    }
-  });
+  QObject::connect(process, &QProcess::readyReadStandardError, process,
+                   [process]() {
+                     const QByteArray data = process->readAllStandardError();
+                     for (const QByteArray &line : data.split('\n')) {
+                       if (line.isEmpty())
+                         continue;
+                       if (line.contains("GStreamer-WARNING") ||
+                           line.contains("Failed to load plugin") ||
+                           line.contains("ProtonFixes[") ||
+                           line.contains("wineserver: NTSync") ||
+                           line.contains("[MANGOHUD]") ||
+                           line.contains("radv is not a conformant"))
+                         continue;
+                       std::fwrite(line.constData(), 1, line.size(), stderr);
+                       std::fputc('\n', stderr);
+                     }
+                   });
 
-  QObject::connect(process,
-                   QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-                   process, &QProcess::deleteLater);
+  QObject::connect(
+      process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+      process, &QProcess::deleteLater);
 
   process->start();
   if (!process->waitForStarted(5000)) {
@@ -500,12 +477,11 @@ bool startWithEnv(const QString& program, const QStringList& arguments,
   return true;
 }
 
-void wrapProgram(const QStringList& wrapperCommands, const QString& program,
-                 const QStringList& arguments, QString& wrappedProgram,
-                 QStringList& wrappedArguments)
-{
+void wrapProgram(const QStringList &wrapperCommands, const QString &program,
+                 const QStringList &arguments, QString &wrappedProgram,
+                 QStringList &wrappedArguments) {
   if (wrapperCommands.isEmpty()) {
-    wrappedProgram   = program;
+    wrappedProgram = program;
     wrappedArguments = arguments;
     return;
   }
@@ -521,8 +497,7 @@ void wrapProgram(const QStringList& wrapperCommands, const QString& program,
   wrappedArguments.append(arguments);
 }
 
-bool isValidEnvKey(const QString& key)
-{
+bool isValidEnvKey(const QString &key) {
   if (key.isEmpty()) {
     return false;
   }
@@ -541,8 +516,8 @@ bool isValidEnvKey(const QString& key)
   return true;
 }
 
-bool parseEnvAssignment(const QString& token, QString& keyOut, QString& valueOut)
-{
+bool parseEnvAssignment(const QString &token, QString &keyOut,
+                        QString &valueOut) {
   const int eq = token.indexOf('=');
   if (eq <= 0) {
     return false;
@@ -553,59 +528,52 @@ bool parseEnvAssignment(const QString& token, QString& keyOut, QString& valueOut
     return false;
   }
 
-  keyOut   = key;
+  keyOut = key;
   valueOut = token.mid(eq + 1);
   return true;
 }
-}  // namespace
+} // namespace
 
 ProtonLauncher::ProtonLauncher()
 
-= default;
+    = default;
 
-ProtonLauncher& ProtonLauncher::setBinary(const QString& path)
-{
+ProtonLauncher &ProtonLauncher::setBinary(const QString &path) {
   m_binary = path.trimmed();
   return *this;
 }
 
-ProtonLauncher& ProtonLauncher::setArguments(const QStringList& args)
-{
+ProtonLauncher &ProtonLauncher::setArguments(const QStringList &args) {
   m_arguments = args;
   return *this;
 }
 
-ProtonLauncher& ProtonLauncher::setWorkingDir(const QString& dir)
-{
+ProtonLauncher &ProtonLauncher::setWorkingDir(const QString &dir) {
   m_workingDir = dir.trimmed();
   return *this;
 }
 
-ProtonLauncher& ProtonLauncher::setProtonPath(const QString& path)
-{
+ProtonLauncher &ProtonLauncher::setProtonPath(const QString &path) {
   m_protonPath = path.trimmed();
   return *this;
 }
 
-ProtonLauncher& ProtonLauncher::setPrefix(const QString& path)
-{
+ProtonLauncher &ProtonLauncher::setPrefix(const QString &path) {
   m_prefixPath = path.trimmed();
   return *this;
 }
 
-ProtonLauncher& ProtonLauncher::setSteamAppId(uint32_t id)
-{
+ProtonLauncher &ProtonLauncher::setSteamAppId(uint32_t id) {
   m_steamAppId = id;
   return *this;
 }
 
-ProtonLauncher& ProtonLauncher::setWrapper(const QString& wrapperCmd)
-{
+ProtonLauncher &ProtonLauncher::setWrapper(const QString &wrapperCmd) {
   m_wrapperCommands.clear();
   m_wrapperEnvVars.clear();
 
   const QStringList parts = QProcess::splitCommand(wrapperCmd.trimmed());
-  for (const QString& part : parts) {
+  for (const QString &part : parts) {
     if (part.compare("%command%", Qt::CaseInsensitive) == 0) {
       continue;
     }
@@ -621,32 +589,28 @@ ProtonLauncher& ProtonLauncher::setWrapper(const QString& wrapperCmd)
   return *this;
 }
 
-ProtonLauncher& ProtonLauncher::setSteamDrm(bool useSteamDrm)
-{
+ProtonLauncher &ProtonLauncher::setSteamDrm(bool useSteamDrm) {
   m_useSteamDrm = useSteamDrm;
   return *this;
 }
 
-ProtonLauncher& ProtonLauncher::setSteamOverlay(bool useSteamOverlay)
-{
+ProtonLauncher &ProtonLauncher::setSteamOverlay(bool useSteamOverlay) {
   m_useSteamOverlay = useSteamOverlay;
   return *this;
 }
 
-ProtonLauncher& ProtonLauncher::setUseSLR(bool useSLR)
-{
+ProtonLauncher &ProtonLauncher::setUseSLR(bool useSLR) {
   m_useSLR = useSLR;
   return *this;
 }
 
-ProtonLauncher& ProtonLauncher::setStoreVariant(const QString& variant)
-{
+ProtonLauncher &ProtonLauncher::setStoreVariant(const QString &variant) {
   m_storeVariant = variant.trimmed();
   return *this;
 }
 
-ProtonLauncher& ProtonLauncher::addEnvVar(const QString& key, const QString& value)
-{
+ProtonLauncher &ProtonLauncher::addEnvVar(const QString &key,
+                                          const QString &value) {
   if (!key.isEmpty()) {
     m_envVars.insert(key, value);
   }
@@ -654,22 +618,28 @@ ProtonLauncher& ProtonLauncher::addEnvVar(const QString& key, const QString& val
   return *this;
 }
 
-ProtonLauncher& ProtonLauncher::setUseTerminal(bool useTerminal)
-{
+ProtonLauncher &ProtonLauncher::addFilesystemPath(const QString &path) {
+  const QString cleaned = QDir::cleanPath(path.trimmed());
+  if (!cleaned.isEmpty() && !m_extraFilesystemPaths.contains(cleaned)) {
+    m_extraFilesystemPaths.append(cleaned);
+  }
+
+  return *this;
+}
+
+ProtonLauncher &ProtonLauncher::setUseTerminal(bool useTerminal) {
   m_useTerminal = useTerminal;
   return *this;
 }
 
-ProtonLauncher& ProtonLauncher::setSavesBindMount(const QString& source,
-                                                  const QString& target)
-{
+ProtonLauncher &ProtonLauncher::setSavesBindMount(const QString &source,
+                                                  const QString &target) {
   m_bindMountSource = source.trimmed();
   m_bindMountTarget = target.trimmed();
   return *this;
 }
 
-bool ProtonLauncher::unprivilegedBindMountSupported()
-{
+bool ProtonLauncher::unprivilegedBindMountSupported() {
   // Need both an `unshare` binary and a kernel that lets unprivileged users
   // enter a user namespace with CAP_SYS_ADMIN (which is what makes
   // `mount --bind` work without root).  Debian stable + some hardened
@@ -691,8 +661,7 @@ bool ProtonLauncher::unprivilegedBindMountSupported()
   return true;
 }
 
-std::pair<bool, qint64> ProtonLauncher::launch() const
-{
+std::pair<bool, qint64> ProtonLauncher::launch() const {
   qint64 pid = -1;
 
   if (!m_protonPath.isEmpty()) {
@@ -702,8 +671,7 @@ std::pair<bool, qint64> ProtonLauncher::launch() const
   return {launchDirect(pid), pid};
 }
 
-bool ProtonLauncher::launchWithProton(qint64& pid) const
-{
+bool ProtonLauncher::launchWithProton(qint64 &pid) const {
   if (m_binary.isEmpty() || m_protonPath.isEmpty()) {
     return false;
   }
@@ -721,10 +689,12 @@ bool ProtonLauncher::launchWithProton(qint64& pid) const
   // any existing wineserver to shut down first, then launch the game.  This is
   // what umu-launcher uses and ensures the previous session is fully cleaned up
   // before starting a new one.
-  const QStringList protonArgs = QStringList() << "waitforexitandrun" << m_binary << m_arguments;
+  const QStringList protonArgs = QStringList() << "waitforexitandrun"
+                                               << m_binary << m_arguments;
   QStringList pressureVesselImportantPaths;
   pressureVesselImportantPaths << m_binary << m_workingDir << m_prefixPath
                                << m_bindMountSource << m_bindMountTarget;
+  pressureVesselImportantPaths.append(m_extraFilesystemPaths);
 
   // If SLR is enabled, wrap the whole proton invocation inside the
   // pressure-vessel container provided by SteamLinuxRuntime_sniper.
@@ -736,7 +706,8 @@ bool ProtonLauncher::launchWithProton(qint64& pid) const
     const QString runScript = getSlrRunScript();
     if (!runScript.isEmpty()) {
       MOBase::log::info("SLR: wrapping launch with {}", runScript);
-      // Build: [wrappers] run_script [--filesystem=...] -- proton_script protonArgs
+      // Build: [wrappers] run_script [--filesystem=...] -- proton_script
+      // protonArgs
       QStringList slrArgs;
 
       // Expose host directories to the pressure-vessel container.
@@ -773,8 +744,9 @@ bool ProtonLauncher::launchWithProton(qint64& pid) const
       if (m_useSteamOverlay) {
         const QString steamPath = detectSteamPath();
         if (!steamPath.isEmpty()) {
-          slrArgs << QStringLiteral("--filesystem=%1/ubuntu12_32").arg(steamPath)
-                  << QStringLiteral("--filesystem=%1/ubuntu12_64").arg(steamPath);
+          slrArgs
+              << QStringLiteral("--filesystem=%1/ubuntu12_32").arg(steamPath)
+              << QStringLiteral("--filesystem=%1/ubuntu12_64").arg(steamPath);
         }
       }
 
@@ -788,8 +760,9 @@ bool ProtonLauncher::launchWithProton(qint64& pid) const
             QDir::homePath() + "/.local/share/fluorine/steamrt/xrandr-bin";
         if (QDir(xrandrDir).exists()) {
           slrArgs << QStringLiteral("--filesystem=%1").arg(xrandrDir);
-          containerCmd << QStringLiteral("/usr/bin/env")
-                       << QStringLiteral("PATH=%1:/usr/bin:/bin").arg(xrandrDir);
+          containerCmd
+              << QStringLiteral("/usr/bin/env")
+              << QStringLiteral("PATH=%1:/usr/bin:/bin").arg(xrandrDir);
         }
       }
       containerCmd << protonScript << protonArgs;
@@ -798,11 +771,14 @@ bool ProtonLauncher::launchWithProton(qint64& pid) const
       slrArgs.append(containerCmd);
       wrapProgram(m_wrapperCommands, runScript, slrArgs, program, arguments);
     } else {
-      MOBase::log::warn("SLR enabled but run script not found — launching without SLR");
-      wrapProgram(m_wrapperCommands, protonScript, protonArgs, program, arguments);
+      MOBase::log::warn(
+          "SLR enabled but run script not found — launching without SLR");
+      wrapProgram(m_wrapperCommands, protonScript, protonArgs, program,
+                  arguments);
     }
   } else {
-    wrapProgram(m_wrapperCommands, protonScript, protonArgs, program, arguments);
+    wrapProgram(m_wrapperCommands, protonScript, protonArgs, program,
+                arguments);
   }
 
   QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
@@ -812,11 +788,10 @@ bool ProtonLauncher::launchWithProton(qint64& pid) const
   // Prepend fluorine's bin dir to PATH so the container sees our injected
   // xrandr (steamrt4 ships without it; Proton-GE protonfixes require it).
   {
-    const QString fluorineBin =
-        QDir::homePath() + "/.local/share/fluorine/bin";
+    const QString fluorineBin = QDir::homePath() + "/.local/share/fluorine/bin";
     const QString existing = env.value("PATH");
-    env.insert("PATH", existing.isEmpty() ? fluorineBin
-                                          : fluorineBin + ":" + existing);
+    env.insert("PATH",
+               existing.isEmpty() ? fluorineBin : fluorineBin + ":" + existing);
   }
 
   if (!m_prefixPath.isEmpty()) {
@@ -854,14 +829,14 @@ bool ProtonLauncher::launchWithProton(qint64& pid) const
     const QString appId = QString::number(m_steamAppId);
     env.insert("SteamOverlayGameId", appId);
 
-    const QString preload32 =
-        steamPath + "/ubuntu12_32/gameoverlayrenderer.so";
-    const QString preload64 =
-        steamPath + "/ubuntu12_64/gameoverlayrenderer.so";
+    const QString preload32 = steamPath + "/ubuntu12_32/gameoverlayrenderer.so";
+    const QString preload64 = steamPath + "/ubuntu12_64/gameoverlayrenderer.so";
 
     QStringList preloads;
-    if (QFileInfo::exists(preload32)) preloads << preload32;
-    if (QFileInfo::exists(preload64)) preloads << preload64;
+    if (QFileInfo::exists(preload32))
+      preloads << preload32;
+    if (QFileInfo::exists(preload64))
+      preloads << preload64;
 
     if (preloads.isEmpty()) {
       MOBase::log::warn(
@@ -882,10 +857,9 @@ bool ProtonLauncher::launchWithProton(qint64& pid) const
       // Also clear the disable-flag in case a Proton wrapper script set it.
       env.remove("DISABLE_VK_LAYER_VALVE_steam_overlay_1");
 
-      MOBase::log::info(
-          "Steam overlay enabled (appid={}, LD_PRELOAD+={}, "
-          "ENABLE_VK_LAYER_VALVE_steam_overlay_1=1)",
-          appId, joined);
+      MOBase::log::info("Steam overlay enabled (appid={}, LD_PRELOAD+={}, "
+                        "ENABLE_VK_LAYER_VALVE_steam_overlay_1=1)",
+                        appId, joined);
     }
   } else if (m_useSteamOverlay && m_steamAppId == 0) {
     MOBase::log::warn(
@@ -949,13 +923,13 @@ bool ProtonLauncher::launchWithProton(qint64& pid) const
   // user's locale, so we override only if no UTF-8 locale is already set
   // — keeps de_DE.UTF-8, ja_JP.UTF-8 etc. intact for users who have them.
   {
-    const auto isUtf8 = [](const QString& v) {
+    const auto isUtf8 = [](const QString &v) {
       return v.contains("UTF-8", Qt::CaseInsensitive) ||
              v.contains("UTF8", Qt::CaseInsensitive);
     };
-    const QString lcAll   = env.value("LC_ALL");
+    const QString lcAll = env.value("LC_ALL");
     const QString lcCtype = env.value("LC_CTYPE");
-    const QString lang    = env.value("LANG");
+    const QString lang = env.value("LANG");
     const bool haveUtf8 =
         (!lcAll.isEmpty() && isUtf8(lcAll)) ||
         (lcAll.isEmpty() && !lcCtype.isEmpty() && isUtf8(lcCtype)) ||
@@ -985,7 +959,8 @@ bool ProtonLauncher::launchWithProton(qint64& pid) const
     }
   }
 
-  for (auto it = m_wrapperEnvVars.cbegin(); it != m_wrapperEnvVars.cend(); ++it) {
+  for (auto it = m_wrapperEnvVars.cbegin(); it != m_wrapperEnvVars.cend();
+       ++it) {
     env.insert(it.key(), it.value());
   }
 
@@ -1011,12 +986,9 @@ bool ProtonLauncher::launchWithProton(qint64& pid) const
     newArgs << "--user" << "--mount" << "-r" << "--"
             << "/bin/sh" << "-c"
             << R"(mount --bind "$1" "$2" && shift 2 && exec "$@")"
-            << "_mo2bind"
-            << m_bindMountSource
-            << m_bindMountTarget
-            << program;
+            << "_mo2bind" << m_bindMountSource << m_bindMountTarget << program;
     newArgs.append(arguments);
-    program   = unshareBin;
+    program = unshareBin;
     arguments = newArgs;
     MOBase::log::info("Saves bind mount: '{}' -> '{}'", m_bindMountSource,
                       m_bindMountTarget);
@@ -1029,7 +1001,7 @@ bool ProtonLauncher::launchWithProton(qint64& pid) const
 
   MOBase::log::info("Proton launch: '{}' run '{}'", protonScript, m_binary);
   MOBase::log::info("Final command: '{}' {}", program,
-      arguments.join(" ").toStdString());
+                    arguments.join(" ").toStdString());
 
   if (!m_workingDir.isEmpty()) {
     env.insert("PWD", m_workingDir);
@@ -1042,8 +1014,7 @@ bool ProtonLauncher::launchWithProton(qint64& pid) const
   return startWithEnv(program, arguments, m_workingDir, env, pid);
 }
 
-bool ProtonLauncher::launchDirect(qint64& pid) const
-{
+bool ProtonLauncher::launchDirect(qint64 &pid) const {
   if (m_binary.isEmpty()) {
     return false;
   }
@@ -1055,7 +1026,8 @@ bool ProtonLauncher::launchDirect(qint64& pid) const
   QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
   env.remove("PYTHONHOME");
   cleanFluorineEnv(env);
-  for (auto it = m_wrapperEnvVars.cbegin(); it != m_wrapperEnvVars.cend(); ++it) {
+  for (auto it = m_wrapperEnvVars.cbegin(); it != m_wrapperEnvVars.cend();
+       ++it) {
     env.insert(it.key(), it.value());
   }
   for (auto it = m_envVars.cbegin(); it != m_envVars.cend(); ++it) {
@@ -1088,8 +1060,7 @@ bool ProtonLauncher::launchDirect(qint64& pid) const
   return startWithEnv(program, arguments, m_workingDir, env, pid);
 }
 
-bool ProtonLauncher::ensureSteamRunning()
-{
+bool ProtonLauncher::ensureSteamRunning() {
   QProcess pgrep;
   pgrep.start("pgrep", {"-x", "steam"});
   if (pgrep.waitForFinished(2000) && pgrep.exitCode() == 0) {

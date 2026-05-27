@@ -5,12 +5,9 @@
 #include "prefixsetupdialog.h"
 #include "ui_settingsdialog.h"
 
-#include <QtConcurrent/QtConcurrentRun>
-#include <log.h>
-#include <uibase/utility.h>
-#include "steamdetection.h"
 #include "slrmanager.h"
-#include <atomic>
+#include "steamdetection.h"
+#include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDateTime>
@@ -18,70 +15,85 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFutureWatcher>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMessageBox>
-#include <QPushButton>
-#include <QtConcurrent/QtConcurrent>
-#include <QFutureWatcher>
 #include <QMetaObject>
 #include <QProcess>
 #include <QProgressDialog>
-#include <QSettings>
+#include <QPushButton>
 #include <QScopeGuard>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QVBoxLayout>
+#include <QtConcurrent/QtConcurrent>
+#include <QtConcurrent/QtConcurrentRun>
+#include <atomic>
+#include <log.h>
+#include <uibase/utility.h>
 
-namespace
-{
-std::atomic<ProtonSettingsTab*> g_activeInstallTab = nullptr;
+namespace {
+std::atomic<ProtonSettingsTab *> g_activeInstallTab = nullptr;
 }
 
-ProtonSettingsTab::ProtonSettingsTab(Settings& s, SettingsDialog& d)
-    : QObject(&d), SettingsTab(s, d)
-{
+ProtonSettingsTab::ProtonSettingsTab(Settings &s, SettingsDialog &d)
+    : QObject(&d), SettingsTab(s, d) {
   ui->protonProgressBar->setRange(0, 100);
   ui->protonProgressBar->setValue(0);
   ui->protonProgressBar->setVisible(false);
 
   ui->launchWrapperEdit->setPlaceholderText("mangohud --dlsym");
-  ui->launchWrapperEdit->setText(QSettings().value("fluorine/launch_wrapper").toString());
+  ui->launchWrapperEdit->setText(
+      QSettings().value("fluorine/launch_wrapper").toString());
+  const QSettings instanceSettings(settings().filename(), QSettings::IniFormat);
+  ui->usvfsWineBackendCheck->setChecked(
+      instanceSettings.value("fluorine/vfs_backend", "fuse")
+          .toString()
+          .trimmed()
+          .compare("usvfs-wine", Qt::CaseInsensitive) == 0);
+  ui->usvfsLauncherPathEdit->setText(QDir::fromNativeSeparators(
+      instanceSettings.value("fluorine/usvfs_launcher_path").toString()));
+  ui->usvfsLauncherPathEdit->setEnabled(ui->usvfsWineBackendCheck->isChecked());
+  ui->usvfsLauncherBrowseButton->setEnabled(
+      ui->usvfsWineBackendCheck->isChecked());
 
   populateProtons();
 
-  QObject::connect(ui->protonVersionCombo, &QComboBox::currentIndexChanged, this,
-                   [this](int index) {
-                     if (index < 0) {
-                       return;
-                     }
+  QObject::connect(
+      ui->protonVersionCombo, &QComboBox::currentIndexChanged, this,
+      [this](int index) {
+        if (index < 0) {
+          return;
+        }
 
-                     auto cfg = FluorineConfig::load();
-                     if (!cfg.has_value()) {
-                       return;
-                     }
+        auto cfg = FluorineConfig::load();
+        if (!cfg.has_value()) {
+          return;
+        }
 
-                     const QString protonName =
-                         ui->protonVersionCombo->currentText().trimmed();
-                     const QString protonPath = ui->protonVersionCombo
-                                                    ->itemData(index, Qt::UserRole + 1)
-                                                    .toString()
-                                                    .trimmed();
+        const QString protonName =
+            ui->protonVersionCombo->currentText().trimmed();
+        const QString protonPath =
+            ui->protonVersionCombo->itemData(index, Qt::UserRole + 1)
+                .toString()
+                .trimmed();
 
-                     if (protonName.isEmpty() || protonPath.isEmpty()) {
-                       MOBase::log::warn("Proton combo change: name='{}' path='{}' — "
-                                         "skipping save (empty)", protonName, protonPath);
-                       return;
-                     }
+        if (protonName.isEmpty() || protonPath.isEmpty()) {
+          MOBase::log::warn("Proton combo change: name='{}' path='{}' — "
+                            "skipping save (empty)",
+                            protonName, protonPath);
+          return;
+        }
 
-                     if (cfg->proton_name != protonName ||
-                         cfg->proton_path != protonPath) {
-                       cfg->proton_name = protonName;
-                       cfg->proton_path = protonPath;
-                       cfg->save();
-                       MOBase::log::info("Updated Proton config: {} ({})",
-                                         protonName, protonPath);
-                     }
-                   });
+        if (cfg->proton_name != protonName || cfg->proton_path != protonPath) {
+          cfg->proton_name = protonName;
+          cfg->proton_path = protonPath;
+          cfg->save();
+          MOBase::log::info("Updated Proton config: {} ({})", protonName,
+                            protonPath);
+        }
+      });
 
   QObject::connect(ui->createPrefixButton, &QPushButton::clicked, this,
                    &ProtonSettingsTab::onCreatePrefix);
@@ -95,45 +107,59 @@ ProtonSettingsTab::ProtonSettingsTab(Settings& s, SettingsDialog& d)
                    &ProtonSettingsTab::onWinetricks);
   QObject::connect(ui->prefixLocationBrowseButton, &QPushButton::clicked, this,
                    &ProtonSettingsTab::onBrowsePrefixLocation);
+  QObject::connect(ui->usvfsWineBackendCheck, &QCheckBox::toggled, this,
+                   [this](bool checked) {
+                     ui->usvfsLauncherPathEdit->setEnabled(checked);
+                     ui->usvfsLauncherBrowseButton->setEnabled(checked);
+                   });
+  QObject::connect(ui->usvfsLauncherBrowseButton, &QPushButton::clicked, this,
+                   &ProtonSettingsTab::onBrowseUsvfsLauncher);
   QObject::connect(ui->downloadSLRButton, &QPushButton::clicked, this,
                    &ProtonSettingsTab::onDownloadSLR);
 
-  QObject::connect(&m_installWatcher, &QFutureWatcher<InstallResult>::finished, this,
-                   &ProtonSettingsTab::onInstallFinished);
+  QObject::connect(&m_installWatcher, &QFutureWatcher<InstallResult>::finished,
+                   this, &ProtonSettingsTab::onInstallFinished);
 
   // install log viewer
   ui->nakInstallLog->setVisible(false);
-  QObject::connect(ui->toggleInstallLog, &QPushButton::toggled, this,
-                   [this](bool checked) {
-                     ui->nakInstallLog->setVisible(checked);
-                     ui->toggleInstallLog->setText(
-                         checked ? tr("Hide Install Log") : tr("Show Install Log"));
-                   });
+  QObject::connect(
+      ui->toggleInstallLog, &QPushButton::toggled, this, [this](bool checked) {
+        ui->nakInstallLog->setVisible(checked);
+        ui->toggleInstallLog->setText(checked ? tr("Hide Install Log")
+                                              : tr("Show Install Log"));
+      });
 
   refreshState();
 }
 
-void ProtonSettingsTab::update()
-{
-  QSettings().setValue("fluorine/launch_wrapper", ui->launchWrapperEdit->text());
+void ProtonSettingsTab::update() {
+  QSettings().setValue("fluorine/launch_wrapper",
+                       ui->launchWrapperEdit->text());
+  QSettings instanceSettings(settings().filename(), QSettings::IniFormat);
+  instanceSettings.setValue("fluorine/vfs_backend",
+                            ui->usvfsWineBackendCheck->isChecked()
+                                ? QStringLiteral("usvfs-wine")
+                                : QStringLiteral("fuse"));
+  instanceSettings.setValue(
+      "fluorine/usvfs_launcher_path",
+      QDir::fromNativeSeparators(ui->usvfsLauncherPathEdit->text().trimmed()));
 }
 
-void ProtonSettingsTab::populateProtons()
-{
+void ProtonSettingsTab::populateProtons() {
   ui->protonVersionCombo->clear();
 
   const auto protonList = findSteamProtons();
 
   for (int i = 0; i < protonList.size(); ++i) {
-    const SteamProtonInfo& proton = protonList[i];
+    const SteamProtonInfo &proton = protonList[i];
 
     if (proton.name.isEmpty() || proton.path.isEmpty()) {
       continue;
     }
 
     ui->protonVersionCombo->addItem(proton.name);
-    ui->protonVersionCombo->setItemData(ui->protonVersionCombo->count() - 1, proton.path,
-                                        Qt::UserRole + 1);
+    ui->protonVersionCombo->setItemData(ui->protonVersionCombo->count() - 1,
+                                        proton.path, Qt::UserRole + 1);
   }
 
   if (auto cfg = FluorineConfig::load(); cfg.has_value()) {
@@ -144,24 +170,24 @@ void ProtonSettingsTab::populateProtons()
       // Saved Proton version no longer exists — select first available and
       // update the config so the stale path doesn't cause launch failures.
       MOBase::log::warn("Saved Proton '{}' not found, defaulting to '{}'",
-                        cfg->proton_name,
-                        ui->protonVersionCombo->itemText(0));
+                        cfg->proton_name, ui->protonVersionCombo->itemText(0));
       ui->protonVersionCombo->setCurrentIndex(0);
       cfg->proton_name = ui->protonVersionCombo->itemText(0).trimmed();
       cfg->proton_path = ui->protonVersionCombo->itemData(0, Qt::UserRole + 1)
-                             .toString().trimmed();
+                             .toString()
+                             .trimmed();
       cfg->save();
     }
   }
 }
 
-void ProtonSettingsTab::refreshState()
-{
+void ProtonSettingsTab::refreshState() {
   const auto prefix = FluorineConfig::prefixPath();
   const bool active = prefix.has_value();
 
   if (!m_busy) {
-    ui->protonStatusLabel->setText(active ? tr("Prefix Active") : tr("No Prefix"));
+    ui->protonStatusLabel->setText(active ? tr("Prefix Active")
+                                          : tr("No Prefix"));
     ui->protonProgressBar->setVisible(false);
   }
 
@@ -171,8 +197,7 @@ void ProtonSettingsTab::refreshState()
   } else {
     ui->prefixLocationEdit->setReadOnly(false);
     if (ui->prefixLocationEdit->text().isEmpty()) {
-      ui->prefixLocationEdit->setText(
-          fluorineDataDir() + "/Prefix");
+      ui->prefixLocationEdit->setText(fluorineDataDir() + "/Prefix");
     }
   }
 
@@ -185,8 +210,7 @@ void ProtonSettingsTab::refreshState()
   ui->protonVersionCombo->setEnabled(!m_busy);
 }
 
-void ProtonSettingsTab::setBusy(bool busy)
-{
+void ProtonSettingsTab::setBusy(bool busy) {
   m_busy = busy;
   ui->protonProgressBar->setVisible(busy);
 
@@ -197,15 +221,16 @@ void ProtonSettingsTab::setBusy(bool busy)
   refreshState();
 }
 
-void ProtonSettingsTab::onCreatePrefix()
-{
+void ProtonSettingsTab::onCreatePrefix() {
   if (m_busy) {
     return;
   }
 
   const QString protonName = ui->protonVersionCombo->currentText().trimmed();
   const QString protonPath =
-      ui->protonVersionCombo->currentData(Qt::UserRole + 1).toString().trimmed();
+      ui->protonVersionCombo->currentData(Qt::UserRole + 1)
+          .toString()
+          .trimmed();
 
   if (protonName.isEmpty() || protonPath.isEmpty()) {
     ui->protonStatusLabel->setText(tr("Select a Proton version first"));
@@ -227,8 +252,7 @@ void ProtonSettingsTab::onCreatePrefix()
   runPrefixSetupDialog(0, pfxPath, protonName, protonPath);
 }
 
-void ProtonSettingsTab::onDeletePrefix()
-{
+void ProtonSettingsTab::onDeletePrefix() {
   if (m_busy) {
     return;
   }
@@ -246,8 +270,7 @@ void ProtonSettingsTab::onDeletePrefix()
   refreshState();
 }
 
-void ProtonSettingsTab::onRecreatePrefix()
-{
+void ProtonSettingsTab::onRecreatePrefix() {
   if (m_busy) {
     return;
   }
@@ -270,8 +293,7 @@ void ProtonSettingsTab::onRecreatePrefix()
                        cfg->proton_path);
 }
 
-void ProtonSettingsTab::onOpenPrefixFolder()
-{
+void ProtonSettingsTab::onOpenPrefixFolder() {
   auto path = FluorineConfig::prefixPath();
   if (!path.has_value()) {
     ui->protonStatusLabel->setText(tr("No Prefix"));
@@ -281,68 +303,80 @@ void ProtonSettingsTab::onOpenPrefixFolder()
   MOBase::shell::Explore(QDir(*path));
 }
 
-void ProtonSettingsTab::onDownloadSLR()
-{
+void ProtonSettingsTab::onDownloadSLR() {
   if (isSlrInstalled()) {
     QMessageBox::information(parentWidget(), tr("Steam Linux Runtime"),
-        tr("Steam Linux Runtime is already installed."));
+                             tr("Steam Linux Runtime is already installed."));
     return;
   }
 
   ui->downloadSLRButton->setEnabled(false);
-  auto* progress = new QProgressDialog(
-      tr("Downloading Steam Linux Runtime (~200 MB)...\n"
-         "Check the MO2 log for progress details."),
-      tr("Cancel"), 0, 0, parentWidget());
+  auto *progress =
+      new QProgressDialog(tr("Downloading Steam Linux Runtime (~200 MB)...\n"
+                             "Check the MO2 log for progress details."),
+                          tr("Cancel"), 0, 0, parentWidget());
   progress->setWindowTitle(tr("Steam Linux Runtime"));
   progress->setWindowModality(Qt::WindowModal);
   progress->setAttribute(Qt::WA_ShowWithoutActivating);
   progress->setMinimumDuration(0);
 
-  auto* cancelFlag = new int(0);
-  connect(progress, &QProgressDialog::canceled, this, [cancelFlag] {
-    *cancelFlag = 1;
-  });
+  auto *cancelFlag = new int(0);
+  connect(progress, &QProgressDialog::canceled, this,
+          [cancelFlag] { *cancelFlag = 1; });
 
-  auto* watcher = new QFutureWatcher<QString>(this);
+  auto *watcher = new QFutureWatcher<QString>(this);
   connect(watcher, &QFutureWatcher<QString>::finished, this,
-      [this, watcher, progress, cancelFlag] {
-        progress->close();
-        watcher->deleteLater();
-        progress->deleteLater();
-        ui->downloadSLRButton->setEnabled(true);
+          [this, watcher, progress, cancelFlag] {
+            progress->close();
+            watcher->deleteLater();
+            progress->deleteLater();
+            ui->downloadSLRButton->setEnabled(true);
 
-        const QString err = watcher->result();
-        if (!err.isEmpty()) {
-          MOBase::log::error("[SLR] Download failed: {}", err);
-          QMessageBox::warning(parentWidget(), tr("Steam Linux Runtime"),
-              tr("Download failed:\n%1").arg(err));
-        } else {
-          MOBase::log::info("[SLR] Steam Linux Runtime installed successfully");
-          QMessageBox::information(parentWidget(), tr("Steam Linux Runtime"),
-              tr("Steam Linux Runtime installed successfully."));
-        }
-        delete cancelFlag;
-      });
+            const QString err = watcher->result();
+            if (!err.isEmpty()) {
+              MOBase::log::error("[SLR] Download failed: {}", err);
+              QMessageBox::warning(parentWidget(), tr("Steam Linux Runtime"),
+                                   tr("Download failed:\n%1").arg(err));
+            } else {
+              MOBase::log::info(
+                  "[SLR] Steam Linux Runtime installed successfully");
+              QMessageBox::information(
+                  parentWidget(), tr("Steam Linux Runtime"),
+                  tr("Steam Linux Runtime installed successfully."));
+            }
+            delete cancelFlag;
+          });
 
-  int* cancelPtr = cancelFlag;
+  int *cancelPtr = cancelFlag;
   watcher->setFuture(QtConcurrent::run([cancelPtr]() -> QString {
     return downloadSlr(nullptr, nullptr, cancelPtr);
   }));
   progress->show();
 }
 
-void ProtonSettingsTab::onBrowsePrefixLocation()
-{
+void ProtonSettingsTab::onBrowsePrefixLocation() {
   const QString dir = QFileDialog::getExistingDirectory(
-      parentWidget(), tr("Select Prefix Location"), ui->prefixLocationEdit->text());
+      parentWidget(), tr("Select Prefix Location"),
+      ui->prefixLocationEdit->text());
   if (!dir.isEmpty()) {
     ui->prefixLocationEdit->setText(dir);
   }
 }
 
-QString ProtonSettingsTab::ensureWinetricks()
-{
+void ProtonSettingsTab::onBrowseUsvfsLauncher() {
+  const QString current = ui->usvfsLauncherPathEdit->text().trimmed();
+  const QString startDir = current.isEmpty()
+                               ? QCoreApplication::applicationDirPath()
+                               : QFileInfo(current).absolutePath();
+  const QString file = QFileDialog::getOpenFileName(
+      parentWidget(), tr("Select USVFS Wine Helper"), startDir,
+      tr("Windows executables (*.exe);;All files (*)"));
+  if (!file.isEmpty()) {
+    ui->usvfsLauncherPathEdit->setText(QDir::fromNativeSeparators(file));
+  }
+}
+
+QString ProtonSettingsTab::ensureWinetricks() {
   const QString nakWinetricks = fluorineDataDir() + "/bin/winetricks";
   if (QFileInfo::exists(nakWinetricks)) {
     return nakWinetricks;
@@ -361,14 +395,16 @@ QString ProtonSettingsTab::ensureWinetricks()
 
   if (!QStandardPaths::findExecutable("curl").isEmpty()) {
     downloadTool = "curl";
-    downloadArgs = {"-L", "-o", nakWinetricks,
-                    "https://raw.githubusercontent.com/Winetricks/winetricks/master/src/"
-                    "winetricks"};
+    downloadArgs = {
+        "-L", "-o", nakWinetricks,
+        "https://raw.githubusercontent.com/Winetricks/winetricks/master/src/"
+        "winetricks"};
   } else if (!QStandardPaths::findExecutable("wget").isEmpty()) {
     downloadTool = "wget";
-    downloadArgs = {"-O", nakWinetricks,
-                    "https://raw.githubusercontent.com/Winetricks/winetricks/master/src/"
-                    "winetricks"};
+    downloadArgs = {
+        "-O", nakWinetricks,
+        "https://raw.githubusercontent.com/Winetricks/winetricks/master/src/"
+        "winetricks"};
   } else {
     return {};
   }
@@ -390,8 +426,7 @@ QString ProtonSettingsTab::ensureWinetricks()
   return nakWinetricks;
 }
 
-QString ProtonSettingsTab::findProtonWine(const QString& protonPath)
-{
+QString ProtonSettingsTab::findProtonWine(const QString &protonPath) {
   QString wine = QDir(protonPath).filePath("files/bin/wine");
   if (QFileInfo::exists(wine)) {
     return wine;
@@ -405,8 +440,7 @@ QString ProtonSettingsTab::findProtonWine(const QString& protonPath)
   return {};
 }
 
-void ProtonSettingsTab::onWinetricks()
-{
+void ProtonSettingsTab::onWinetricks() {
   auto cfg = FluorineConfig::load();
   if (!cfg.has_value() || !cfg->prefixExists()) {
     ui->protonStatusLabel->setText(tr("No existing prefix"));
@@ -416,13 +450,12 @@ void ProtonSettingsTab::onWinetricks()
 
   const QString winetricksPath = ensureWinetricks();
   if (winetricksPath.isEmpty()) {
-    QMessageBox::warning(
-        parentWidget(), tr("Winetricks Not Found"),
-        tr("Could not find or download winetricks.\n\n"
-           "Please install winetricks manually:\n"
-           "  Arch: pacman -S winetricks\n"
-           "  Ubuntu: apt install winetricks\n"
-           "  Fedora: dnf install winetricks"));
+    QMessageBox::warning(parentWidget(), tr("Winetricks Not Found"),
+                         tr("Could not find or download winetricks.\n\n"
+                            "Please install winetricks manually:\n"
+                            "  Arch: pacman -S winetricks\n"
+                            "  Ubuntu: apt install winetricks\n"
+                            "  Fedora: dnf install winetricks"));
     return;
   }
 
@@ -450,7 +483,7 @@ void ProtonSettingsTab::onWinetricks()
   // GUI helpers it spawns, e.g. kdialog/zenity) don't pick up Fluorine's
   // bundled Qt libraries, which cause symbol-lookup errors.
   // Uses the same restore-or-strip logic as protonlauncher.cpp.
-  auto restoreOrStrip = [&](const QString& var, const QString& origVar) {
+  auto restoreOrStrip = [&](const QString &var, const QString &origVar) {
     if (env.contains(origVar)) {
       const QString orig = env.value(origVar);
       if (orig.isEmpty())
@@ -461,9 +494,10 @@ void ProtonSettingsTab::onWinetricks()
     } else {
       // Fallback: strip Fluorine's bundled library paths by pattern.
       const QString value = env.value(var);
-      if (value.isEmpty()) return;
+      if (value.isEmpty())
+        return;
       QStringList kept;
-      for (const QString& p : value.split(':')) {
+      for (const QString &p : value.split(':')) {
         if (p.contains("fluorine") || p.contains(".mount_Fluori")) {
           continue;
         }
@@ -481,7 +515,7 @@ void ProtonSettingsTab::onWinetricks()
   restoreOrStrip("QT_PLUGIN_PATH", "FLUORINE_ORIG_QT_PLUGIN_PATH");
   env.remove("QT_QPA_PLATFORM_PLUGIN_PATH");
 
-  for (const QString& flag : envFlags) {
+  for (const QString &flag : envFlags) {
     const int eq = flag.indexOf('=');
     if (eq > 0) {
       env.insert(flag.left(eq), flag.mid(eq + 1));
@@ -495,21 +529,20 @@ void ProtonSettingsTab::onWinetricks()
 }
 
 void ProtonSettingsTab::runPrefixSetupDialog(uint32_t appId,
-                                              const QString& prefixPath,
-                                              const QString& protonName,
-                                              const QString& protonPath)
-{
+                                             const QString &prefixPath,
+                                             const QString &protonName,
+                                             const QString &protonPath) {
   PrefixSetupDialog dialog(prefixPath, protonPath, appId, parentWidget());
   const int result = dialog.exec();
 
   if (result == QDialog::Accepted && dialog.succeeded()) {
     // All steps succeeded — save config to mark prefix as complete.
     FluorineConfig cfg;
-    cfg.app_id      = appId;
+    cfg.app_id = appId;
     cfg.prefix_path = prefixPath;
     cfg.proton_name = protonName;
     cfg.proton_path = protonPath;
-    cfg.created     = QDateTime::currentDateTime().toString(Qt::ISODate);
+    cfg.created = QDateTime::currentDateTime().toString(Qt::ISODate);
 
     if (!cfg.save()) {
       ui->protonStatusLabel->setText(tr("Error saving Fluorine config"));
@@ -523,29 +556,24 @@ void ProtonSettingsTab::runPrefixSetupDialog(uint32_t appId,
   refreshState();
 }
 
-void ProtonSettingsTab::appendInstallLog(const QString& message)
-{
+void ProtonSettingsTab::appendInstallLog(const QString &message) {
   ui->nakInstallLog->append(message);
 }
 
-void ProtonSettingsTab::logCallback(const char* message)
-{
+void ProtonSettingsTab::logCallback(const char *message) {
   if (message && *message) {
     MOBase::log::info("{}", message);
   }
 
-  if (auto* tab = g_activeInstallTab.load(); tab != nullptr && message && *message) {
+  if (auto *tab = g_activeInstallTab.load();
+      tab != nullptr && message && *message) {
     const QString msg = QString::fromUtf8(message);
-    QMetaObject::invokeMethod(tab,
-                              [tab, msg] {
-                                tab->appendInstallLog(msg);
-                              },
-                              Qt::QueuedConnection);
+    QMetaObject::invokeMethod(
+        tab, [tab, msg] { tab->appendInstallLog(msg); }, Qt::QueuedConnection);
   }
 }
 
-void ProtonSettingsTab::onInstallFinished()
-{
+void ProtonSettingsTab::onInstallFinished() {
   g_activeInstallTab.store(nullptr);
 
   const InstallResult result = m_installWatcher.result();
@@ -560,4 +588,3 @@ void ProtonSettingsTab::onInstallFinished()
   ui->protonStatusLabel->setText(tr("Done"));
   refreshState();
 }
-

@@ -7,18 +7,16 @@
 #include "settings.h"
 #include "settingsdialog.h"
 
-class ProtonSettingsTab : public QObject, public SettingsTab
-{
+class ProtonSettingsTab : public QObject, public SettingsTab {
   Q_OBJECT
 
 public:
-  ProtonSettingsTab(Settings& settings, SettingsDialog& dialog);
+  ProtonSettingsTab(Settings &settings, SettingsDialog &dialog);
 
   void update() override;
 
 private:
-  struct InstallResult
-  {
+  struct InstallResult {
     QString error;
   };
 
@@ -32,17 +30,19 @@ private:
   void onOpenPrefixFolder();
   void onWinetricks();
   void onBrowsePrefixLocation();
+  void onBrowseUsvfsLauncher();
   void onDownloadSLR();
 
   static QString ensureWinetricks();
-  static QString findProtonWine(const QString& protonPath);
+  static QString findProtonWine(const QString &protonPath);
 
-  void runPrefixSetupDialog(uint32_t appId, const QString& prefixPath,
-                            const QString& protonName, const QString& protonPath);
+  void runPrefixSetupDialog(uint32_t appId, const QString &prefixPath,
+                            const QString &protonName,
+                            const QString &protonPath);
 
-  void appendInstallLog(const QString& message);
+  void appendInstallLog(const QString &message);
 
-  static void logCallback(const char* message);
+  static void logCallback(const char *message);
 
 private slots:
   void onInstallFinished();
@@ -58,4 +58,4 @@ private:
   bool m_busy = false;
 };
 
-#endif  // SETTINGSDIALOGPROTON_H
+#endif // SETTINGSDIALOGPROTON_H

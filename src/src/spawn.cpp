@@ -45,19 +45,18 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <uibase/utility.h>
 
 #include <cerrno>
-#include <cstring>
 #include <csignal>
+#include <cstring>
 #include <sys/types.h>
 
 class QMessageBox;
 
 using namespace MOBase;
 
-namespace spawn::dialogs
-{
+namespace spawn::dialogs {
 
-QString makeDetails(const SpawnParameters& sp, int code, const QString& more = {})
-{
+QString makeDetails(const SpawnParameters &sp, int code,
+                    const QString &more = {}) {
   const bool cwdExists =
       (sp.currentDirectory.isEmpty() ? true : sp.currentDirectory.exists());
 
@@ -78,8 +77,7 @@ QString makeDetails(const SpawnParameters& sp, int code, const QString& more = {
       .arg(sp.hooked ? "yes" : "no");
 }
 
-QString makeContent(const SpawnParameters& sp, int code)
-{
+QString makeContent(const SpawnParameters &sp, int code) {
   if (code == ENOENT) {
     return QObject::tr("The file '%1' does not exist.")
         .arg(sp.binary.absoluteFilePath());
@@ -97,13 +95,13 @@ QString makeContent(const SpawnParameters& sp, int code)
   return QString::fromUtf8(strerror(code));
 }
 
-void spawnFailed(QWidget* parent, const SpawnParameters& sp, int code)
-{
+void spawnFailed(QWidget *parent, const SpawnParameters &sp, int code) {
   const auto details = makeDetails(sp, code);
   log::error("{}", details);
 
-  const auto title    = QObject::tr("Cannot launch program");
-  const auto mainText = QObject::tr("Cannot start %1").arg(sp.binary.fileName());
+  const auto title = QObject::tr("Cannot launch program");
+  const auto mainText =
+      QObject::tr("Cannot start %1").arg(sp.binary.fileName());
 
   MOBase::TaskDialog(parent, title)
       .main(mainText)
@@ -113,15 +111,14 @@ void spawnFailed(QWidget* parent, const SpawnParameters& sp, int code)
       .exec();
 }
 
-QMessageBox::StandardButton confirmStartSteam(QWidget* parent, const SpawnParameters& sp,
-                                              const QString& details)
-{
-  const auto title    = QObject::tr("Launch Steam");
+QMessageBox::StandardButton confirmStartSteam(QWidget *parent,
+                                              const SpawnParameters &sp,
+                                              const QString &details) {
+  const auto title = QObject::tr("Launch Steam");
   const auto mainText = QObject::tr("This program requires Steam");
-  const auto content =
-      QObject::tr("Mod Organizer has detected that this "
-                  "program likely requires Steam to be "
-                  "running to function properly.");
+  const auto content = QObject::tr("Mod Organizer has detected that this "
+                                   "program likely requires Steam to be "
+                                   "running to function properly.");
 
   return MOBase::TaskDialog(parent, title)
       .main(mainText)
@@ -136,10 +133,9 @@ QMessageBox::StandardButton confirmStartSteam(QWidget* parent, const SpawnParame
       .exec();
 }
 
-QMessageBox::StandardButton confirmBlacklisted(QWidget* parent,
-                                               const SpawnParameters& sp,
-                                               Settings& settings)
-{
+QMessageBox::StandardButton confirmBlacklisted(QWidget *parent,
+                                               const SpawnParameters &sp,
+                                               Settings &settings) {
   const auto title = QObject::tr("Blacklisted program");
   const auto mainText =
       QObject::tr("The program %1 is blacklisted").arg(sp.binary.fileName());
@@ -148,8 +144,9 @@ QMessageBox::StandardButton confirmBlacklisted(QWidget* parent,
       "filesystem. This will likely prevent it from seeing any mods, INI files "
       "or any other virtualized files.");
 
-  const auto details = "Executable: " + sp.binary.fileName() +
-                       "\nCurrent blacklist: " + settings.executablesBlacklist();
+  const auto details =
+      "Executable: " + sp.binary.fileName() +
+      "\nCurrent blacklist: " + settings.executablesBlacklist();
 
   return MOBase::TaskDialog(parent, title)
       .main(mainText)
@@ -163,13 +160,11 @@ QMessageBox::StandardButton confirmBlacklisted(QWidget* parent,
       .exec();
 }
 
-}  // namespace spawn::dialogs
+} // namespace spawn::dialogs
 
-namespace spawn
-{
+namespace spawn {
 
-void logSpawning(const SpawnParameters& sp, const QString& realCmd)
-{
+void logSpawning(const SpawnParameters &sp, const QString &realCmd) {
   log::debug("spawning binary:\n"
              " . exe: '{}'\n"
              " . args: '{}'\n"
@@ -185,16 +180,15 @@ void logSpawning(const SpawnParameters& sp, const QString& realCmd)
              realCmd);
 }
 
-uint32_t parseSteamAppId(const QString& steamAppId)
-{
-  bool ok      = false;
+uint32_t parseSteamAppId(const QString &steamAppId) {
+  bool ok = false;
   const auto n = steamAppId.toUInt(&ok);
   return (ok ? n : 0u);
 }
 
-QString firstExistingSetting(const QSettings& settings, const QStringList& keys)
-{
-  for (const QString& key : keys) {
+QString firstExistingSetting(const QSettings &settings,
+                             const QStringList &keys) {
+  for (const QString &key : keys) {
     const QString value = settings.value(key).toString().trimmed();
     if (!value.isEmpty()) {
       return value;
@@ -209,22 +203,23 @@ QString firstExistingSetting(const QSettings& settings, const QStringList& keys)
 // recreates pruned dosdevices symlinks at the next prefix start from the
 // registry, so the more-specific drive (e.g. X:\Games) keeps winning over
 // Z:\home\user\Games during path canonicalisation.
-static QStringList pruneDriveRegistry(const QString& prefixPath)
-{
+static QStringList pruneDriveRegistry(const QString &prefixPath) {
   const QString regPath = QDir(prefixPath).filePath("system.reg");
   QFile file(regPath);
   if (!file.exists()) {
     return {};
   }
   if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-    MOBase::log::warn("pruneDriveRegistry: cannot open '{}'", regPath.toStdString());
+    MOBase::log::warn("pruneDriveRegistry: cannot open '{}'",
+                      regPath.toStdString());
     return {};
   }
 
   static const QRegularExpression sectionRe(
       QStringLiteral(R"(^\[Software\\\\Wine\\\\Drives\])"),
       QRegularExpression::CaseInsensitiveOption);
-  static const QRegularExpression driveRe(QStringLiteral(R"(^"([A-Za-z]):"\s*=)"));
+  static const QRegularExpression driveRe(
+      QStringLiteral(R"(^"([A-Za-z]):"\s*=)"));
 
   QStringList lines;
   QStringList removed;
@@ -232,7 +227,7 @@ static QStringList pruneDriveRegistry(const QString& prefixPath)
 
   QTextStream in(&file);
   while (!in.atEnd()) {
-    const QString line    = in.readLine();
+    const QString line = in.readLine();
     const QString trimmed = line.trimmed();
 
     if (trimmed.startsWith('[')) {
@@ -260,12 +255,14 @@ static QStringList pruneDriveRegistry(const QString& prefixPath)
     return {};
   }
 
-  if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-    MOBase::log::warn("pruneDriveRegistry: cannot rewrite '{}'", regPath.toStdString());
+  if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate |
+                 QIODevice::Text)) {
+    MOBase::log::warn("pruneDriveRegistry: cannot rewrite '{}'",
+                      regPath.toStdString());
     return {};
   }
   QTextStream out(&file);
-  for (const QString& l : lines) {
+  for (const QString &l : lines) {
     out << l << "\n";
   }
   return removed;
@@ -279,9 +276,9 @@ static QStringList pruneDriveRegistry(const QString& prefixPath)
 // drive when canonicalising paths, which mangles binaries we passed in as
 // Z:\home\user\... into X:\....  Keeping the allowed list minimal means MO2
 // can rely on Z: being the only host-mapped drive.
-void pruneExtraDrives(const QString& prefixPath)
-{
-  static const QSet<QString> kept = {QStringLiteral("c:"), QStringLiteral("z:")};
+void pruneExtraDrives(const QString &prefixPath) {
+  static const QSet<QString> kept = {QStringLiteral("c:"),
+                                     QStringLiteral("z:")};
 
   const QString dosdevices = QDir(prefixPath).filePath("dosdevices");
   QDir dir(dosdevices);
@@ -290,10 +287,11 @@ void pruneExtraDrives(const QString& prefixPath)
   }
 
   QStringList removed;
-  for (const QString& entry :
+  for (const QString &entry :
        dir.entryList(QDir::NoDotAndDotDot | QDir::AllEntries)) {
     const QString lower = entry.toLower();
-    if (lower.length() != 2 || !lower.endsWith(':') || !lower.at(0).isLetter()) {
+    if (lower.length() != 2 || !lower.endsWith(':') ||
+        !lower.at(0).isLetter()) {
       continue;
     }
     if (kept.contains(lower)) {
@@ -307,10 +305,10 @@ void pruneExtraDrives(const QString& prefixPath)
   const QStringList regRemoved = pruneDriveRegistry(prefixPath);
 
   QSet<QString> all;
-  for (const QString& d : removed) {
+  for (const QString &d : removed) {
     all.insert(d);
   }
-  for (const QString& d : regRemoved) {
+  for (const QString &d : regRemoved) {
     all.insert(d);
   }
   if (!all.isEmpty()) {
@@ -325,18 +323,18 @@ void pruneExtraDrives(const QString& prefixPath)
   }
 }
 
-QString resolvePrefixPath()
-{
+QString resolvePrefixPath() {
   // The Fluorine config is authoritative: it's the prefix the user
   // explicitly created through Settings > Proton and that Fluorine itself
   // initialises with wineboot/DLL installs. Always prefer it.
-  if (auto cfg = FluorineConfig::load(); cfg.has_value() && cfg->prefixExists()) {
+  if (auto cfg = FluorineConfig::load();
+      cfg.has_value() && cfg->prefixExists()) {
     MOBase::log::debug("resolvePrefixPath: using Fluorine config prefix '{}'",
                        cfg->prefix_path);
     return cfg->prefix_path.trimmed();
   }
 
-  const Settings* settings = Settings::maybeInstance();
+  const Settings *settings = Settings::maybeInstance();
   if (settings == nullptr) {
     return {};
   }
@@ -352,8 +350,9 @@ QString resolvePrefixPath()
   const QString explicitPath =
       instanceSettings.value("fluorine/prefix_path").toString().trimmed();
   if (!explicitPath.isEmpty()) {
-    MOBase::log::debug("resolvePrefixPath: using explicit fluorine/prefix_path '{}'",
-                       explicitPath);
+    MOBase::log::debug(
+        "resolvePrefixPath: using explicit fluorine/prefix_path '{}'",
+        explicitPath);
     return explicitPath;
   }
 
@@ -370,8 +369,7 @@ QString resolvePrefixPath()
   return fallback;
 }
 
-QString resolveProtonPath()
-{
+QString resolveProtonPath() {
   if (auto cfg = FluorineConfig::load(); cfg.has_value()) {
     const QString protonPath = cfg->proton_path.trimmed();
     if (!protonPath.isEmpty()) {
@@ -379,7 +377,7 @@ QString resolveProtonPath()
     }
   }
 
-  const Settings* settings = Settings::maybeInstance();
+  const Settings *settings = Settings::maybeInstance();
   if (settings == nullptr) {
     return {};
   }
@@ -390,10 +388,11 @@ QString resolveProtonPath()
       {"Settings/proton_path", "Proton/path", "fluorine/proton_path"});
 }
 
-int spawn(const SpawnParameters& sp, pid_t& processId)
-{
-  const QString bin = MOBase::normalizePathForHost(sp.binary.absoluteFilePath());
-  QString cwd       = MOBase::normalizePathForHost(sp.currentDirectory.absolutePath());
+int spawn(const SpawnParameters &sp, pid_t &processId) {
+  const QString bin =
+      MOBase::normalizePathForHost(sp.binary.absoluteFilePath());
+  QString cwd =
+      MOBase::normalizePathForHost(sp.currentDirectory.absolutePath());
 
   QStringList argList;
   if (!sp.arguments.isEmpty()) {
@@ -406,23 +405,47 @@ int spawn(const SpawnParameters& sp, pid_t& processId)
 
   logSpawning(sp, bin + " " + sp.arguments);
 
+  QString launchBin = bin;
+  QStringList launchArgs = argList;
+  if (sp.useProton && !sp.usvfsManifestPath.isEmpty()) {
+    const QString helper = MOBase::normalizePathForHost(sp.usvfsLauncherPath);
+    if (helper.isEmpty() || !QFileInfo::exists(helper)) {
+      MOBase::log::error("USVFS Wine backend requested but helper executable "
+                         "was not found: '{}'",
+                         helper);
+      return ENOENT;
+    }
+
+    launchBin = helper;
+    launchArgs.clear();
+    launchArgs << "--manifest"
+               << MOBase::normalizePathForWine(sp.usvfsManifestPath) << "--"
+               << MOBase::normalizePathForWine(bin);
+    launchArgs.append(argList);
+    MOBase::log::info("USVFS Wine backend: launching helper '{}' for '{}'",
+                      helper, bin);
+  }
+
   ProtonLauncher launcher;
-  launcher.setBinary(bin)
-      .setArguments(argList)
+  launcher.setBinary(launchBin)
+      .setArguments(launchArgs)
       .setWorkingDir(cwd)
       .setSteamAppId(parseSteamAppId(sp.steamAppID));
 
   if (sp.useProton) {
-    // Read per-instance settings from the instance INI (not the global QSettings).
-    const Settings* instanceForLaunch = Settings::maybeInstance();
-    bool useSteamDrm                  = true;
-    bool useSteamOverlay              = false;
+    // Read per-instance settings from the instance INI (not the global
+    // QSettings).
+    const Settings *instanceForLaunch = Settings::maybeInstance();
+    bool useSteamDrm = true;
+    bool useSteamOverlay = false;
     QString storeVariant;
     if (instanceForLaunch) {
-      const QSettings instanceIni(instanceForLaunch->filename(), QSettings::IniFormat);
-      useSteamDrm     = instanceIni.value("fluorine/steam_drm", true).toBool();
-      useSteamOverlay = instanceIni.value("fluorine/steam_overlay", false).toBool();
-      storeVariant    = instanceIni.value("game_edition").toString().trimmed();
+      const QSettings instanceIni(instanceForLaunch->filename(),
+                                  QSettings::IniFormat);
+      useSteamDrm = instanceIni.value("fluorine/steam_drm", true).toBool();
+      useSteamOverlay =
+          instanceIni.value("fluorine/steam_overlay", false).toBool();
+      storeVariant = instanceIni.value("game_edition").toString().trimmed();
     }
 
     launcher.setSteamDrm(useSteamDrm)
@@ -436,8 +459,9 @@ int spawn(const SpawnParameters& sp, pid_t& processId)
                          "Configure a prefix in Settings > Proton.");
       return ENOENT;
     } else if (!QDir(QDir(prefixPath).filePath("drive_c")).exists()) {
-      MOBase::log::error("Wine prefix '{}' does not contain drive_c/ - prefix is invalid",
-                         prefixPath);
+      MOBase::log::error(
+          "Wine prefix '{}' does not contain drive_c/ - prefix is invalid",
+          prefixPath);
       return ENOENT;
     } else {
       MOBase::log::info("Using Wine prefix: {}", prefixPath);
@@ -456,8 +480,18 @@ int spawn(const SpawnParameters& sp, pid_t& processId)
       launcher.setWrapper(wrapper);
     }
 
-    if (!sp.saveBindMountSource.isEmpty() && !sp.saveBindMountTarget.isEmpty()) {
-      launcher.setSavesBindMount(sp.saveBindMountSource, sp.saveBindMountTarget);
+    if (!sp.saveBindMountSource.isEmpty() &&
+        !sp.saveBindMountTarget.isEmpty()) {
+      launcher.setSavesBindMount(sp.saveBindMountSource,
+                                 sp.saveBindMountTarget);
+    }
+
+    if (!sp.usvfsManifestPath.isEmpty()) {
+      launcher.addEnvVar("USVFS_WINE_MODE", "1")
+          .addEnvVar("USVFS_WINE_METRICS", "1")
+          .addEnvVar("FLUORINE_USVFS_MANIFEST",
+                     MOBase::normalizePathForWine(sp.usvfsManifestPath))
+          .addFilesystemPath(QFileInfo(sp.usvfsManifestPath).absolutePath());
     }
   } else {
     MOBase::log::info("Launching executable directly without Proton");
@@ -474,14 +508,12 @@ int spawn(const SpawnParameters& sp, pid_t& processId)
   return 0;
 }
 
-struct SteamStatus
-{
-  bool running    = false;
+struct SteamStatus {
+  bool running = false;
   bool accessible = false;
 };
 
-SteamStatus getSteamStatus()
-{
+SteamStatus getSteamStatus() {
   SteamStatus ss;
 
   QProcess pgrep;
@@ -489,7 +521,7 @@ SteamStatus getSteamStatus()
   pgrep.waitForFinished(3000);
 
   if (pgrep.exitCode() == 0) {
-    ss.running    = true;
+    ss.running = true;
     ss.accessible = true;
     log::debug("steam is running");
   }
@@ -497,8 +529,7 @@ SteamStatus getSteamStatus()
   return ss;
 }
 
-QString makeSteamArguments(const QString& username, const QString& password)
-{
+QString makeSteamArguments(const QString &username, const QString &password) {
   QString args;
 
   if (username != "") {
@@ -512,8 +543,7 @@ QString makeSteamArguments(const QString& username, const QString& password)
   return args;
 }
 
-bool startSteam(QWidget* parent)
-{
+bool startSteam(QWidget *parent) {
   QString steamPath;
 
   // Prefer ~/.steam/root/steam.sh, fall back to PATH.
@@ -535,7 +565,8 @@ bool startSteam(QWidget* parent)
                              "Make sure Steam is installed."))
         .icon(QMessageBox::Critical)
         .button({QObject::tr("Continue without starting Steam"),
-                 QObject::tr("The program may fail to launch."), QMessageBox::Yes})
+                 QObject::tr("The program may fail to launch."),
+                 QMessageBox::Yes})
         .button({QObject::tr("Cancel"), QMessageBox::Cancel})
         .exec();
 
@@ -545,7 +576,7 @@ bool startSteam(QWidget* parent)
   SpawnParameters sp;
   sp.binary = QFileInfo(steamPath);
 
-  pid_t pid    = -1;
+  pid_t pid = -1;
   const auto e = spawn(sp, pid);
 
   if (e != 0) {
@@ -560,9 +591,9 @@ bool startSteam(QWidget* parent)
   return true;
 }
 
-bool checkSteam(QWidget* parent, const SpawnParameters& sp, const QDir& gameDirectory,
-                const QString& steamAppID, const Settings& settings)
-{
+bool checkSteam(QWidget *parent, const SpawnParameters &sp,
+                const QDir &gameDirectory, const QString &steamAppID,
+                const Settings &settings) {
   static const std::vector<QString> steamFiles = {"libsteam_api.so"};
 
   log::debug("checking steam");
@@ -576,7 +607,7 @@ bool checkSteam(QWidget* parent, const SpawnParameters& sp, const QDir& gameDire
   bool steamRequired = false;
   QString details;
 
-  for (const auto& file : steamFiles) {
+  for (const auto &file : steamFiles) {
     const QFileInfo fi(gameDirectory.absoluteFilePath(file));
     if (fi.exists()) {
       details = QString("managed game is located at '%1' and file '%2' exists")
@@ -626,8 +657,8 @@ bool checkSteam(QWidget* parent, const SpawnParameters& sp, const QDir& gameDire
   return true;
 }
 
-bool checkBlacklist(QWidget* parent, const SpawnParameters& sp, Settings& settings)
-{
+bool checkBlacklist(QWidget *parent, const SpawnParameters &sp,
+                    Settings &settings) {
   for (;;) {
     if (!settings.isExecutableBlacklisted(sp.binary.fileName())) {
       return true;
@@ -641,22 +672,22 @@ bool checkBlacklist(QWidget* parent, const SpawnParameters& sp, Settings& settin
   }
 }
 
-pid_t startBinary(QWidget* parent, const SpawnParameters& sp)
-{
-  pid_t pid    = -1;
+pid_t startBinary(QWidget *parent, const SpawnParameters &sp) {
+  pid_t pid = -1;
   const auto e = spawn::spawn(sp, pid);
 
   if (e != 0) {
     if (e == ENOENT && sp.useProton && !FluorineConfig::isSetup()) {
       QMessageBox::critical(
           parent, QObject::tr("No Wine Prefix"),
-          QObject::tr("No Wine prefix has been configured for this instance.\n\n"
-                      "A Wine prefix is required to run Windows games through "
-                      "Proton.\n\n"
-                      "To create one, go to:\n"
-                      "  Settings → Wine/Proton\n\n"
-                      "Set the prefix location, then click \"Create Prefix\" "
-                      "to generate a new prefix."));
+          QObject::tr(
+              "No Wine prefix has been configured for this instance.\n\n"
+              "A Wine prefix is required to run Windows games through "
+              "Proton.\n\n"
+              "To create one, go to:\n"
+              "  Settings → Wine/Proton\n\n"
+              "Set the prefix location, then click \"Create Prefix\" "
+              "to generate a new prefix."));
     } else {
       dialogs::spawnFailed(parent, sp, e);
     }
@@ -666,8 +697,7 @@ pid_t startBinary(QWidget* parent, const SpawnParameters& sp)
   return pid;
 }
 
-QString findJavaInstallation(const QString& jarFile)
-{
+QString findJavaInstallation(const QString &jarFile) {
   Q_UNUSED(jarFile);
 
   const auto javaPath = QStandardPaths::findExecutable("java");
@@ -678,12 +708,11 @@ QString findJavaInstallation(const QString& jarFile)
   return {};
 }
 
-bool isBatchFile(const QFileInfo& target)
-{
+bool isBatchFile(const QFileInfo &target) {
   const auto batchExtensions = {"sh"};
 
   const QString extension = target.suffix();
-  for (auto&& e : batchExtensions) {
+  for (auto &&e : batchExtensions) {
     if (extension.compare(e, Qt::CaseInsensitive) == 0) {
       return true;
     }
@@ -692,18 +721,15 @@ bool isBatchFile(const QFileInfo& target)
   return false;
 }
 
-bool isExeFile(const QFileInfo& target)
-{
+bool isExeFile(const QFileInfo &target) {
   return target.isExecutable() && target.isFile();
 }
 
-bool isJavaFile(const QFileInfo& target)
-{
+bool isJavaFile(const QFileInfo &target) {
   return (target.suffix().compare("jar", Qt::CaseInsensitive) == 0);
 }
 
-QFileInfo getCmdPath()
-{
+QFileInfo getCmdPath() {
   const auto p = env::get("SHELL");
   if (!p.isEmpty()) {
     return QFileInfo(p);
@@ -712,8 +738,7 @@ QFileInfo getCmdPath()
   return QFileInfo("/bin/bash");
 }
 
-FileExecutionTypes getFileExecutionType(const QFileInfo& target)
-{
+FileExecutionTypes getFileExecutionType(const QFileInfo &target) {
   if (isExeFile(target) || isBatchFile(target) || isJavaFile(target)) {
     return FileExecutionTypes::Executable;
   }
@@ -721,15 +746,18 @@ FileExecutionTypes getFileExecutionType(const QFileInfo& target)
   return FileExecutionTypes::Other;
 }
 
-FileExecutionContext getFileExecutionContext(QWidget* parent, const QFileInfo& target)
-{
+FileExecutionContext getFileExecutionContext(QWidget *parent,
+                                             const QFileInfo &target) {
   if (isExeFile(target)) {
-    return {.binary=target, .arguments="", .type=FileExecutionTypes::Executable};
+    return {.binary = target,
+            .arguments = "",
+            .type = FileExecutionTypes::Executable};
   }
 
   if (isBatchFile(target)) {
-    return {.binary=getCmdPath(), .arguments=QString("\"%1\"").arg(target.absoluteFilePath()),
-            .type=FileExecutionTypes::Executable};
+    return {.binary = getCmdPath(),
+            .arguments = QString("\"%1\"").arg(target.absoluteFilePath()),
+            .type = FileExecutionTypes::Executable};
   }
 
   if (isJavaFile(target)) {
@@ -737,18 +765,20 @@ FileExecutionContext getFileExecutionContext(QWidget* parent, const QFileInfo& t
 
     if (java.isEmpty()) {
       java = QFileDialog::getOpenFileName(parent, QObject::tr("Select binary"),
-                                          QString(), QObject::tr("Binary") + " (*)");
+                                          QString(),
+                                          QObject::tr("Binary") + " (*)");
     }
 
     if (!java.isEmpty()) {
-      return {.binary=QFileInfo(java),
-              .arguments=QString("-jar \"%1\"")
-                  .arg(QDir::toNativeSeparators(target.absoluteFilePath())),
-              .type=FileExecutionTypes::Executable};
+      return {.binary = QFileInfo(java),
+              .arguments =
+                  QString("-jar \"%1\"")
+                      .arg(QDir::toNativeSeparators(target.absoluteFilePath())),
+              .type = FileExecutionTypes::Executable};
     }
   }
 
-  return {.binary={}, .arguments={}, .type=FileExecutionTypes::Other};
+  return {.binary = {}, .arguments = {}, .type = FileExecutionTypes::Other};
 }
 
-}  // namespace spawn
+} // namespace spawn

@@ -68,9 +68,24 @@ echo "=== Starting build (mode: ${BUILD_MODE}) ==="
 # Defaults to all available cores; set to 4 by default for the in-progress
 # code-review pass to keep the host responsive.
 BUILD_JOBS="${BUILD_JOBS:-4}"
+USVFS_HELPER_ARGS=()
+if [ -n "${FLUORINE_USVFS_LAUNCHER_PATH:-}" ]; then
+    USVFS_HELPER_PATH="$(readlink -f "${FLUORINE_USVFS_LAUNCHER_PATH}")"
+    if [ ! -f "${USVFS_HELPER_PATH}" ]; then
+        echo "ERROR: FLUORINE_USVFS_LAUNCHER_PATH does not exist: ${FLUORINE_USVFS_LAUNCHER_PATH}"
+        exit 1
+    fi
+    USVFS_HELPER_DIR="$(dirname "${USVFS_HELPER_PATH}")"
+    USVFS_HELPER_FILE="$(basename "${USVFS_HELPER_PATH}")"
+    USVFS_HELPER_ARGS=(
+        -v "${USVFS_HELPER_DIR}:/usvfs-helper-src:ro"
+        -e "FLUORINE_USVFS_LAUNCHER=/usvfs-helper-src/${USVFS_HELPER_FILE}"
+    )
+fi
 ${DOCKER} run --rm \
     -v "${SCRIPT_DIR}:/src:rw" \
     -v "${CCACHE_DIR}:/ccache:rw" \
+    "${USVFS_HELPER_ARGS[@]}" \
     -e CCACHE_DIR=/ccache \
     -e BUILD_MODE="${BUILD_MODE}" \
     -e BUILD_JOBS="${BUILD_JOBS}" \
