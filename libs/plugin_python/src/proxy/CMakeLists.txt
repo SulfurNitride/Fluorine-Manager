@@ -49,8 +49,6 @@ if(WIN32)
   file(GLOB dlls_to_install
 	  ${Python_HOME}/dlls/libffi*.dll
 	  ${Python_HOME}/dlls/sqlite*.dll
-	  ${Python_HOME}/dlls/libssl*.dll
-	  ${Python_HOME}/dlls/libcrypto*.dll
 	  ${Python_HOME}/python${Python_VERSION_MAJOR}*.dll)
   install(FILES ${dlls_to_install} DESTINATION ${DLL_DIRS})
 endif()

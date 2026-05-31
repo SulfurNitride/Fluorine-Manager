@@ -538,6 +538,8 @@ private:
                                    const MOShared::DirectoryEntry* directoryEntry,
                                    int createDestination);
 
+  void movePGPatcherLogsToLogsFolder();
+
 private slots:
 
   void onDirectoryRefreshed();

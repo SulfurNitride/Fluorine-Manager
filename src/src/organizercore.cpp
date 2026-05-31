@@ -52,9 +52,12 @@
 #include <thread>
 #include <QApplication>
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDirIterator>
 #include <QFile>
+#include <QFileInfo>
 #include <QMessageBox>
 #include <QNetworkInterface>
 #include <QProcess>
@@ -90,6 +93,41 @@ using namespace MOShared;
 using namespace MOBase;
 
 static env::CoreDumpTypes g_coreDumpType = env::CoreDumpTypes::Mini;
+
+namespace
+{
+
+QString uniqueFilePath(const QDir& dir, const QString& fileName)
+{
+  QString candidate = dir.filePath(fileName);
+  if (!QFileInfo::exists(candidate)) {
+    return candidate;
+  }
+
+  const QFileInfo info(fileName);
+  const QString base = info.completeBaseName();
+  const QString suffix = info.suffix();
+  const QString timestamp =
+      QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_hhmmss"));
+
+  for (int i = 1; i < 1000; ++i) {
+    const QString numbered =
+        suffix.isEmpty()
+            ? QStringLiteral("%1_%2_%3").arg(base, timestamp).arg(i)
+            : QStringLiteral("%1_%2_%3.%4").arg(base, timestamp).arg(i).arg(suffix);
+    candidate = dir.filePath(numbered);
+    if (!QFileInfo::exists(candidate)) {
+      return candidate;
+    }
+  }
+
+  return dir.filePath(
+      suffix.isEmpty()
+          ? QStringLiteral("%1_%2").arg(base, timestamp)
+          : QStringLiteral("%1_%2.%3").arg(base, timestamp, suffix));
+}
+
+}  // namespace
 
 template <typename InputIterator>
 QStringList toStringList(InputIterator current, InputIterator end)
@@ -756,6 +794,58 @@ void OrganizerCore::prepareVFS()
 void OrganizerCore::unmountVFS()
 {
   m_USVFS.unmount();
+  movePGPatcherLogsToLogsFolder();
+}
+
+void OrganizerCore::movePGPatcherLogsToLogsFolder()
+{
+  const QString dataPath = qApp->property("dataPath").toString();
+  if (dataPath.isEmpty()) {
+    log::warn("PGPatcher log cleanup skipped: dataPath is not set");
+    return;
+  }
+
+  QDir logsDir(QDir(dataPath).filePath(QString::fromStdWString(AppConfig::logPath())));
+  if (!logsDir.exists() && !QDir().mkpath(logsDir.absolutePath())) {
+    log::warn("PGPatcher log cleanup skipped: failed to create '{}'",
+              logsDir.absolutePath());
+    return;
+  }
+
+  const QStringList roots = {
+      QDir::fromNativeSeparators(m_Settings.paths().overwrite()),
+      QDir::fromNativeSeparators(m_Settings.paths().mods()),
+  };
+
+  int moved = 0;
+  for (const QString& root : roots) {
+    if (root.isEmpty() || !QDir(root).exists()) {
+      continue;
+    }
+
+    QDirIterator it(root, QStringList{QStringLiteral("PGPatcher.log")},
+                    QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot,
+                    QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+      const QString source = it.next();
+      const QString destination =
+          uniqueFilePath(logsDir, QFileInfo(source).fileName());
+
+      if (QFile::rename(source, destination) ||
+          (QFile::copy(source, destination) && QFile::remove(source))) {
+        ++moved;
+        log::info("Moved PGPatcher log '{}' -> '{}'", source, destination);
+      } else {
+        log::warn("Failed to move PGPatcher log '{}' -> '{}'", source,
+                  destination);
+      }
+    }
+  }
+
+  if (moved > 0) {
+    log::info("PGPatcher log cleanup moved {} file(s) to '{}'", moved,
+              logsDir.absolutePath());
+  }
 }
 
 void OrganizerCore::trackOverwriteMove(const QString& relativePath,
@@ -2770,6 +2860,7 @@ void OrganizerCore::afterRun(const QFileInfo& binary, DWORD exitCode)
   // and tears down the FUSE session. This mirrors Windows behaviour where
   // USVFS is only active while a hooked process is running.
   m_USVFS.unmount();
+  movePGPatcherLogsToLogsFolder();
 
   // Restore write permissions on the game directory.  In rare cases
   // (crashes, unclean Wine shutdown) file permissions can be changed to

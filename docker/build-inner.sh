@@ -173,6 +173,8 @@ SKIP_PATTERN="linux-vdso|ld-linux|libc\.so|libm\.so|libdl\.so|librt\.so|libpthre
 SKIP_PATTERN="${SKIP_PATTERN}|libGL\.so|libEGL|libGLX|libGLdispatch|libdrm|libvulkan|libX11|libxcb|libwayland-client|libwayland-server|libwayland-cursor|libwayland-egl|libxkbcommon"
 # libpython — user provides via system Python; do not bundle.
 SKIP_PATTERN="${SKIP_PATTERN}|libpython"
+# OpenSSL should come from the host so we don't pin users to a stale TLS stack.
+SKIP_PATTERN="${SKIP_PATTERN}|libssl\.so|libcrypto\.so"
 
 collect_deps() {
     ldd "$1" 2>/dev/null | grep "=>" | awk '{print $3}' | grep "^/" | sort -u
@@ -209,6 +211,31 @@ for _xcb_cursor in /lib/x86_64-linux-gnu/libxcb-cursor.so* \
                    /usr/lib/x86_64-linux-gnu/libxcb-cursor.so*; do
     [ -f "${_xcb_cursor}" ] && cp -Lf "${_xcb_cursor}" "${OUT_DIR}/lib/" && \
         echo "Bundled ${_xcb_cursor}"
+done
+
+# xdg-mime's KDE path calls an unversioned `qtpaths` helper. Bundle it so
+# users do not need distro Qt tools packages just to register nxm:// links.
+QT6_BIN_DIR=""
+for _candidate in \
+    "${Qt6_DIR:-}/bin" \
+    "/opt/qt6/6.11.1/gcc_64/bin" \
+    "/usr/lib/qt6/bin"; do
+    if [ -d "${_candidate}" ]; then
+        QT6_BIN_DIR="${_candidate}"
+        break
+    fi
+done
+for _qtpaths in \
+    "${QT6_BIN_DIR}/qtpaths" \
+    "${QT6_BIN_DIR}/qtpaths6" \
+    "$(command -v qtpaths 2>/dev/null || true)" \
+    "$(command -v qtpaths6 2>/dev/null || true)"; do
+    if [ -n "${_qtpaths}" ] && [ -x "${_qtpaths}" ]; then
+        cp -Lf "${_qtpaths}" "${OUT_DIR}/lib/qtpaths"
+        chmod +x "${OUT_DIR}/lib/qtpaths"
+        echo "Bundled qtpaths from ${_qtpaths}"
+        break
+    fi
 done
 
 # ── Qt6 platform plugins ──
@@ -530,6 +557,11 @@ if [ "${HERE_REAL}" != "${DST_REAL}" ]; then
             exit 1
         fi
 
+        # Do not retain stale bundled OpenSSL runtimes from older releases.
+        # TLS should resolve against the host so certificate handling can be
+        # updated by the OS instead of being pinned to our old package.
+        rm -f "${BIN_DST}"/lib/libssl.so* "${BIN_DST}"/lib/libcrypto.so* 2>/dev/null || true
+
         # Refresh the manifest at the destination so the next update has it.
         cp -af "${MANIFEST}" "${BIN_DST}/fluorine-manifest.txt"
         echo "${CURRENT_VER}" > "${MARKER}"
@@ -560,7 +592,7 @@ fi
 # Run from the synced location.
 RUN="${BIN_DST}"
 
-export PATH="${RUN}:${PATH}"
+export PATH="${RUN}/lib:${RUN}:${PATH}"
 # Steam game mode injects its scout/soldier runtime into LD_LIBRARY_PATH.
 # Those old libraries (libssl, libz, etc.) break Python extension modules
 # and Qt internals that don't have RPATH pointing to our bundled libs.

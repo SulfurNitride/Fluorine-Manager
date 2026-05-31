@@ -1457,6 +1457,8 @@ void MainWindow::paintEvent(QPaintEvent* event)
 void MainWindow::onBeforeClose()
 {
   storeSettings();
+  m_ArchiveListWriter.writeImmediately(true);
+  m_OrganizerCore.pluginsWriter().writeImmediately(true);
 }
 
 void MainWindow::closeEvent(QCloseEvent* event)

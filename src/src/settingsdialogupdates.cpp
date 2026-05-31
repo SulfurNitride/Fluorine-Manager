@@ -2,6 +2,7 @@
 
 #include "fluorineupdater.h"
 #include "settings.h"
+#include "shared/util.h"
 #include "ui_settingsdialog.h"
 
 #include <fluorine_build_info.h>
@@ -10,7 +11,6 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
-#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -35,6 +35,17 @@
 #include <unistd.h>
 
 #include <algorithm>
+
+namespace
+{
+
+bool isLauncherFile(const QString& path)
+{
+  const QFileInfo info(path);
+  return info.isFile();
+}
+
+}  // namespace
 
 UpdatesSettingsTab::UpdatesSettingsTab(Settings& s, SettingsDialog& d)
     : SettingsTab(s, d)
@@ -324,22 +335,29 @@ void UpdatesSettingsTab::onInstall()
               QDir extract(extractDir);
               QString newLauncher =
                   extract.absoluteFilePath(QStringLiteral("fluorine-manager"));
-              if (!QFileInfo::exists(newLauncher)) {
+              if (!isLauncherFile(newLauncher)) {
                 const QStringList tops = extract.entryList(
                     QDir::Dirs | QDir::NoDotAndDotDot);
                 for (const QString& top : tops) {
                   const QString candidate = extract.absoluteFilePath(
                       top + QStringLiteral("/fluorine-manager"));
-                  if (QFileInfo::exists(candidate)) {
+                  if (isLauncherFile(candidate)) {
                     newLauncher = candidate;
                     break;
                   }
                 }
               }
-              if (!QFileInfo::exists(newLauncher)) {
+              if (isLauncherFile(newLauncher)) {
+                QFile::setPermissions(
+                    newLauncher,
+                    QFile::permissions(newLauncher) | QFile::ExeOwner |
+                        QFile::ExeGroup | QFile::ExeOther);
+              }
+              if (!isLauncherFile(newLauncher) ||
+                  !QFileInfo(newLauncher).isExecutable()) {
                 m_statusLabel->setText(
                     tr("<i>Install failed:</i> launcher not found in "
-                       "extracted archive"));
+                       "extracted archive, or it is not executable"));
                 m_progressBar->setVisible(false);
                 m_installButton->setEnabled(true);
                 m_checkNowButton->setEnabled(true);
@@ -367,14 +385,13 @@ void UpdatesSettingsTab::onInstall()
                   QStringLiteral(
                       "#!/usr/bin/env bash\n"
                       "set -u\n"
-                      "OLD_PID=%1\n"
-                      "NEW_LAUNCHER=%2\n"
+                      "OLD_PID=\"$1\"\n"
+                      "NEW_LAUNCHER=\"$2\"\n"
                       "for _ in $(seq 1 200); do\n"
                       "  if ! kill -0 \"$OLD_PID\" 2>/dev/null; then break; fi\n"
                       "  sleep 0.1\n"
                       "done\n"
-                      "exec \"$NEW_LAUNCHER\"\n")
-                      .arg(QString::number(currentPid), newLauncher);
+                      "exec \"$NEW_LAUNCHER\"\n");
               helper.write(script.toUtf8());
               helper.close();
               QFile::setPermissions(
@@ -388,7 +405,9 @@ void UpdatesSettingsTab::onInstall()
 
               // Detach the helper so it survives our exit.
               QProcess::startDetached(QStringLiteral("/usr/bin/env"),
-                                      {QStringLiteral("bash"), helperPath});
+                                      {QStringLiteral("bash"), helperPath,
+                                       QString::number(currentPid),
+                                       newLauncher});
 
               MOBase::log::info(
                   "update installer: spawned helper to restart into {}",
@@ -396,7 +415,7 @@ void UpdatesSettingsTab::onInstall()
 
               // Give the signal a beat to propagate, then quit cleanly.
               QTimer::singleShot(250, qApp,
-                                 []() { QCoreApplication::quit(); });
+                                 []() { ExitModOrganizer(Exit::Force); });
             });
         extractor->start();
       });
