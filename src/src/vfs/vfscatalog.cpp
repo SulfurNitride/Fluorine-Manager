@@ -347,9 +347,7 @@ VfsTree VfsCatalog::reconcileAndBuild(
           reuseHash = sqlite3_column_int64(find.get(), 0) == st.st_dev &&
                       sqlite3_column_int64(find.get(), 1) == st.st_ino &&
                       sqlite3_column_int64(find.get(), 2) == st.st_size &&
-                      sqlite3_column_int64(find.get(), 3) == (st.st_mode & 07777) &&
                       sqlite3_column_int64(find.get(), 4) == mtimeNs &&
-                      sqlite3_column_int64(find.get(), 5) == ctimeNs &&
                       blob != nullptr && bytes == BLAKE3_OUT_LEN;
           if (reuseHash) std::memcpy(digest.data(), blob, digest.size());
         }
