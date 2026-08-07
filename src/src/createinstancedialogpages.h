@@ -574,6 +574,12 @@ public:
   bool ready() const override;
 
   CreateInstanceDialog::ProfileSettings profileSettings() const override;
+
+protected:
+  // updates the profile-saves checkbox based on the selected game's features;
+  // games that register ProfileDirectories always use profile-specific saves
+  //
+  void doActivated(bool firstTime) override;
 };
 
 // nexus connection page; this reuses the ui found in the settings dialog and

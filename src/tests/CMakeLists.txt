@@ -303,6 +303,34 @@ target_link_libraries(test_game_save_migration PRIVATE
 add_test(NAME test_game_save_migration COMMAND test_game_save_migration)
 
 # ---------------------------------------------------------------------------
+# Recursive captureNode / uncaptureNode tests
+# ---------------------------------------------------------------------------
+add_executable(test_capture_node EXCLUDE_FROM_ALL
+    test_capture_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/wineprefix.cpp
+)
+set_target_properties(test_capture_node PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_compile_options(test_capture_node PRIVATE
+    -include ${CMAKE_CURRENT_SOURCE_DIR}/capture_node_pch.h
+)
+target_include_directories(test_capture_node PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/libs/uibase/include
+)
+target_link_libraries(test_capture_node PRIVATE
+    Qt6::Core
+    mo2::uibase
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_capture_node COMMAND test_capture_node)
+
+# ---------------------------------------------------------------------------
 # Crash-safe consumer-facing VFS publication/validation contract tests
 # ---------------------------------------------------------------------------
 add_executable(test_vfs_index EXCLUDE_FROM_ALL
@@ -422,6 +450,6 @@ add_custom_target(fluorine-tests
             test_heroicjson test_protondetection
             test_external_dir_mapping test_vfs_file_ops
             test_vfs_descriptor_cleanup test_vfs_runtime_index
-            test_game_save_migration
+            test_game_save_migration test_capture_node
             test_vfs_catalog test_vfs_index
             test_staging_promotion test_python_module_switch)

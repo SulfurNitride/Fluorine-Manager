@@ -1,7 +1,9 @@
 #include "createinstancedialogpages.h"
 #include "filesystemutilities.h"
 #include "instancemanager.h"
+#include "localsavegames.h"
 #include "plugincontainer.h"
+#include "profiledirectories.h"
 #include "settings.h"
 #include "settingsdialognexus.h"
 #include "shared/appconfig.h"
@@ -979,6 +981,41 @@ ProfilePage::ProfilePage(CreateInstanceDialog& dlg) : Page(dlg) {}
 bool ProfilePage::ready() const
 {
   return true;
+}
+
+void ProfilePage::doActivated(bool /*firstTime*/)
+{
+  const auto* game = m_dlg.rawCreationInfo().game;
+  if (game == nullptr) {
+    return;
+  }
+
+  const auto& features = m_pc.gameFeatures();
+  const auto localSaves =
+      features.gameFeatureFor<LocalSavegames>(game->gameName());
+  const auto profileDirs =
+      features.gameFeatureFor<ProfileDirectories>(game->gameName());
+
+  if (localSaves == nullptr && profileDirs != nullptr) {
+    // This game captures %LOCALAPPDATA% per profile (including saves) via
+    // ProfileDirectories, so saves are always profile-specific.  Show the
+    // checkbox as checked + disabled with an explanatory note.
+    ui->profileSavesCheckbox->setChecked(true);
+    ui->profileSavesCheckbox->setEnabled(false);
+    ui->profileSavesCheckbox->setToolTip(
+        QObject::tr("This plugin only supports profile-specific save games."));
+  } else if (localSaves == nullptr) {
+    ui->profileSavesCheckbox->setChecked(false);
+    ui->profileSavesCheckbox->setEnabled(false);
+    ui->profileSavesCheckbox->setToolTip(
+        QObject::tr("This game does not support profile-specific game saves."));
+  } else {
+    // the selected game supports profile-specific saves; restore a normal,
+    // enabled checkbox in case a previous selection forced it
+    ui->profileSavesCheckbox->setChecked(false);
+    ui->profileSavesCheckbox->setEnabled(true);
+    ui->profileSavesCheckbox->setToolTip("");
+  }
 }
 
 CreateInstanceDialog::ProfileSettings ProfilePage::profileSettings() const

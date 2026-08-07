@@ -348,3 +348,33 @@ std::shared_ptr<GameFeature> GameFeatures::gameFeature(std::type_info const& inf
 
   return it->second.front();
 }
+
+std::shared_ptr<GameFeature> GameFeatures::gameFeatureFor(std::type_info const& info,
+                                                          QString const& gameName) const
+{
+  // the combined checkers are only meaningful for the managed game
+  if (info == ModDataCheckerIndex || info == ModDataContentIndex) {
+    return nullptr;
+  }
+
+  auto it = m_allFeatures.find(info);
+  if (it == m_allFeatures.end()) {
+    return nullptr;
+  }
+
+  // features are sorted by priority, pick the highest-priority feature that
+  // is enabled and applies to the requested game
+  for (const auto& data : it->second) {
+    if (!m_pluginContainer.isEnabled(data.plugin())) {
+      continue;
+    }
+
+    if (!data.games().isEmpty() && !data.games().contains(gameName)) {
+      continue;
+    }
+
+    return data.feature();
+  }
+
+  return nullptr;
+}

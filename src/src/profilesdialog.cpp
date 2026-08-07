@@ -26,6 +26,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "iplugingame.h"
 #include "localsavegames.h"
 #include "organizercore.h"
+#include "profiledirectories.h"
 #include "profile.h"
 #include "profileinputdialog.h"
 #include "report.h"
@@ -77,7 +78,17 @@ ProfilesDialog::ProfilesDialog(const QString& profileName, OrganizerCore& organi
     ui->invalidationBox->setEnabled(false);
   }
 
-  if (!m_GameFeatures.gameFeature<LocalSavegames>()) {
+  auto localSaves  = m_GameFeatures.gameFeature<LocalSavegames>();
+  auto profileDirs = m_GameFeatures.gameFeature<ProfileDirectories>();
+  if (localSaves == nullptr && profileDirs != nullptr) {
+    // This game captures %LOCALAPPDATA% per profile (including saves) via
+    // ProfileDirectories, so saves are always profile-specific.  Show the
+    // checkbox as checked + disabled with an explanatory note.
+    ui->localSavesBox->setChecked(true);
+    ui->localSavesBox->setEnabled(false);
+    ui->localSavesBox->setToolTip(
+        tr("This plugin only supports profile-specific save games."));
+  } else if (localSaves == nullptr) {
     ui->localSavesBox->setToolTip(
         tr("This game does not support profile-specific game saves."));
     ui->localSavesBox->setEnabled(false);

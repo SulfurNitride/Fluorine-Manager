@@ -328,6 +328,119 @@ bool WinePrefix::deployProfileIni(const QString& sourceIniPath,
   return true;
 }
 
+bool WinePrefix::captureNode(const QString& hostPath,
+                             const QString& profilePath) const
+{
+  if (!isValid()) {
+    MOBase::log::error("captureNode: prefix '{}' is not valid", m_prefixPath);
+    return false;
+  }
+
+  MOBase::log::debug("captureNode: host='{}', profile='{}'", hostPath, profilePath);
+
+  if (!QDir().mkpath(profilePath)) {
+    MOBase::log::error("captureNode: cannot create profile dir '{}'", profilePath);
+    return false;
+  }
+
+  const QFileInfo hostInfo(hostPath);
+  const QString hostParent = hostInfo.dir().absolutePath();
+  const QString leafName = hostInfo.fileName();
+  const QString lowerHostPath = QDir(hostParent).filePath(leafName.toLower());
+
+  if (!QDir().mkpath(hostParent)) {
+    return false;
+  }
+
+  // Recurse into subdirectories BEFORE relinking the parent. If we relink
+  // first, hostPath becomes a symlink and QDir(hostPath) iterates the profile
+  // contents, causing re-symlinking into the same profile tree (infinite
+  // recursion / self-linking). By enumerating children while hostPath is still
+  // a real directory, each child is independently captured: its contents are
+  // seeded into the profile and it gets its own proper + lowercase aliases.
+  if (hostInfo.isDir() && !hostInfo.isSymLink()) {
+    QDir hostDir(hostPath);
+    const QStringList children =
+        hostDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    for (const QString& child : children) {
+      const QString childHost = hostDir.filePath(child);
+      const QString childProfile = QDir(profilePath).filePath(child);
+      if (!captureNode(childHost, childProfile)) {
+        MOBase::log::warn("captureNode: failed to recurse into child '{}'",
+                          childHost);
+      }
+    }
+  }
+
+  // Symlink both the proper-case and lowercase variants straight to the
+  // profile path. Writes land in the profile immediately — no copy-in /
+  // copy-out dance, crash-safe, and profile switches only swap the link.
+  auto relink = [&profilePath](const QString& linkPath) -> bool {
+    QFileInfo fi(linkPath);
+    if (fi.isSymLink()) {
+      QFile::remove(linkPath);
+    } else if (QDir(linkPath).exists()) {
+      // Existing real directory from a pre-symlink install. Preserve any
+      // contents by copying into the profile, then remove so we can link.
+      copyTreeContents(linkPath, profilePath);
+      QDir(linkPath).removeRecursively();
+    } else if (fi.exists()) {
+      QFile::remove(linkPath);
+    }
+    if (!QFile::link(profilePath, linkPath)) {
+      MOBase::log::warn("captureNode: failed to symlink '{}' -> '{}'",
+                        linkPath, profilePath);
+      return false;
+    }
+    return true;
+  };
+
+  if (!relink(hostPath))
+    return false;
+  if (hostPath != lowerHostPath && !relink(lowerHostPath))
+    return false;
+
+  return true;
+}
+
+void WinePrefix::uncaptureNode(const QString& hostPath) const
+{
+  if (!isValid())
+    return;
+
+  const QFileInfo hostInfo(hostPath);
+  const QString hostParent = hostInfo.dir().absolutePath();
+  const QString leafName = hostInfo.fileName();
+  const QString lowerHostPath = QDir(hostParent).filePath(leafName.toLower());
+
+  auto unlinkIfSymlink = [](const QString& path) {
+    if (QFileInfo(path).isSymLink()) {
+      QFile::remove(path);
+    }
+  };
+
+  // If hostPath is a symlink (top-level capture), resolve the profile target
+  // and recurse into its children so that per-child symlinks are cleaned up
+  // before the parent link is removed. Children that are real directories are
+  // left as-is (their data persists in the profile for the next deploy).
+  if (hostInfo.isSymLink()) {
+    const QString profilePath = hostInfo.symLinkTarget();
+    if (QDir().mkpath(profilePath)) {
+      QDir profileDir(profilePath);
+      const QStringList children =
+          profileDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+      for (const QString& child : children) {
+        const QString childHost = QDir(hostPath).filePath(child);
+        uncaptureNode(childHost);
+      }
+    }
+  }
+
+  unlinkIfSymlink(hostPath);
+  if (hostPath != lowerHostPath)
+    unlinkIfSymlink(lowerHostPath);
+}
+
 bool WinePrefix::deployProfileSaves(const QString& profileSaveDir,
                                     const QString& absoluteSaveDir,
                                     bool /*clearDestination*/) const
@@ -348,66 +461,12 @@ bool WinePrefix::deployProfileSaves(const QString& profileSaveDir,
     return false;
   }
 
-  const QFileInfo saveDirInfo(absoluteSaveDir);
-  const QString parentDir = saveDirInfo.dir().absolutePath();
-  const QString leafName = saveDirInfo.fileName();
-  const QString lowerSaveDir =
-      QDir(parentDir).filePath(leafName.toLower());
-
-  if (!QDir().mkpath(parentDir)) {
-    return false;
-  }
-
-  // Symlink both the proper-case and lowercase save dirs straight to the
-  // profile saves dir. Writes land in the profile immediately — no copy-in
-  // / copy-out dance, crash-safe, and profile switches only swap the link.
-  auto relink = [&profileSaveDir](const QString& linkPath) -> bool {
-    QFileInfo fi(linkPath);
-    if (fi.isSymLink()) {
-      QFile::remove(linkPath);
-    } else if (QDir(linkPath).exists()) {
-      // Existing real directory from a pre-symlink install. Preserve any
-      // contents by copying into the profile, then remove so we can link.
-      copyTreeContents(linkPath, profileSaveDir);
-      QDir(linkPath).removeRecursively();
-    } else if (fi.exists()) {
-      QFile::remove(linkPath);
-    }
-    if (!QFile::link(profileSaveDir, linkPath)) {
-      MOBase::log::warn("deployProfileSaves: failed to symlink '{}' -> '{}'",
-                        linkPath, profileSaveDir);
-      return false;
-    }
-    return true;
-  };
-
-  if (!relink(absoluteSaveDir))
-    return false;
-  if (absoluteSaveDir != lowerSaveDir && !relink(lowerSaveDir))
-    return false;
-
-  return true;
+  return captureNode(absoluteSaveDir, profileSaveDir);
 }
 
 void WinePrefix::undeployProfileSaves(const QString& absoluteSaveDir) const
 {
-  if (!isValid())
-    return;
-
-  const QFileInfo saveDirInfo(absoluteSaveDir);
-  const QString parentDir = saveDirInfo.dir().absolutePath();
-  const QString leafName = saveDirInfo.fileName();
-  const QString lowerSaveDir =
-      QDir(parentDir).filePath(leafName.toLower());
-
-  auto unlinkIfSymlink = [](const QString& path) {
-    if (QFileInfo(path).isSymLink()) {
-      QFile::remove(path);
-    }
-  };
-  unlinkIfSymlink(absoluteSaveDir);
-  if (absoluteSaveDir != lowerSaveDir)
-    unlinkIfSymlink(lowerSaveDir);
+  uncaptureNode(absoluteSaveDir);
 }
 
 bool WinePrefix::syncSavesBack(const QString& profileSaveDir,

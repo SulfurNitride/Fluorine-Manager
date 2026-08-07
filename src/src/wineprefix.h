@@ -44,11 +44,28 @@ public:
   bool syncSavesBack(const QString& profileSaveDir,
                      const QString& absoluteSaveDir) const;
 
-  /// Remove the __MO_Saves symlink(s) deployed by deployProfileSaves so a
-  /// vanilla game launch outside MO2 uses the prefix's default Saves dir.
-  /// Only removes entries that are actually symlinks — real directories
-  /// from a pre-symlink install are left alone.
-  void undeployProfileSaves(const QString& absoluteSaveDir) const;
+   /// Remove the __MO_Saves symlink(s) deployed by deployProfileSaves so a
+   /// vanilla game launch outside MO2 uses the prefix's default Saves dir.
+   /// Only removes entries that are actually symlinks — real directories
+   /// from a pre-symlink install are left alone.
+   void undeployProfileSaves(const QString& absoluteSaveDir) const;
+
+   /// Relink a host directory into the profile tree so that writes to the host
+   /// path are captured per profile.
+   ///
+   /// - On first use (real directory at hostPath), seeds the profile path by
+   ///   copying existing contents, then relinks.
+   /// - Symlinks hostPath (and its lowercase alias) to profilePath.
+   /// - Idempotent: a prior symlink is just re-pointed.
+   /// Returns true on success.
+   bool captureNode(const QString& hostPath, const QString& profilePath) const;
+
+    /// Remove symlinks deployed by captureNode for the given host path.  Only
+    /// symlinks are removed; real directories from a pre-symlink install are
+    /// left alone.  Recursively descends through symlinked subtrees (resolved
+    /// via the profile target) so per-child links are cleaned up before the
+    /// parent is removed.
+   void uncaptureNode(const QString& hostPath) const;
 
   bool syncProfileInisBack(
       const QList<QPair<QString, QString>>& iniMappings) const;

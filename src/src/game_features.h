@@ -55,6 +55,16 @@ public:
     return std::dynamic_pointer_cast<T>(gameFeature(typeid(T)));
   }
 
+  // retrieve a game feature registered for the given game, regardless of the
+  // currently managed game; used by the instance wizard to check the selected
+  // game's features
+  //
+  template <class T>
+  std::shared_ptr<T> gameFeatureFor(const QString& gameName) const
+  {
+    return std::dynamic_pointer_cast<T>(gameFeatureFor(typeid(T), gameName));
+  }
+
 signals:
   void modDataCheckerUpdated(const MOBase::ModDataChecker* check);
   void modDataContentUpdated(const MOBase::ModDataContent* content);
@@ -91,6 +101,11 @@ private:
   // retrieve a game feature from info
   //
   std::shared_ptr<MOBase::GameFeature> gameFeature(std::type_info const& index) const;
+
+  // retrieve a game feature registered for the given game from info
+  //
+  std::shared_ptr<MOBase::GameFeature> gameFeatureFor(std::type_info const& index,
+                                                      QString const& gameName) const;
 
   // update current features by filtering
   //

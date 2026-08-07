@@ -43,6 +43,7 @@
 #include <questionboxmemory.h>
 #include <uibase/game_features/dataarchives.h>
 #include <uibase/game_features/localsavegames.h>
+#include <uibase/game_features/profiledirectories.h>
 #include <uibase/game_features/scriptextender.h>
 #include <uibase/registry.h>
 #include <uibase/report.h>
@@ -2941,6 +2942,67 @@ bool OrganizerCore::beforeRun(
     m_CurrentProfile->writeModlistNow(true);
   }
 
+  // ProfileDirectories games capture profile-specific host directories (e.g.
+  // %LOCALAPPDATA%) into the profile folder.  This must complete before the
+  // plugin's about-to-run hooks and before the VFS mappings are consumed, so
+  // any write performed during launch (preferences.json, modsettings.lsx,
+  // saves, ...) lands in the captured profile tree.
+  if (m_CurrentProfile != nullptr) {
+    const auto profileDirectories =
+        gameFeatures().gameFeature<ProfileDirectories>();
+    if (profileDirectories) {
+      const QString prefixPathStr = resolveWinePrefixPath(m_Settings, managedGame());
+
+      if (!prefixPathStr.isEmpty()) {
+        WinePrefix const prefix(prefixPathStr);
+        if (prefix.isValid()) {
+          const QString profileLocalDir =
+              QDir(m_CurrentProfile->absolutePath()).filePath("Local");
+          // the plugin's returned roots are absolute host directories under
+          // %LOCALAPPDATA%; each is captured into <profile>/Local/<leaf>
+          if (const QString appDataLocal = prefix.appdataLocal();
+              !appDataLocal.isEmpty()) {
+            for (const auto& root : profileDirectories->directories()) {
+              const QString rootPath = root.absolutePath();
+
+              // Guard against a plugin resolving a *different* prefix than the
+              // core: a root outside %LOCALAPPDATA% would spray ../ segments
+              // through the profile tree and relocate the wrong data.
+              if (rootPath != appDataLocal &&
+                  !rootPath.startsWith(appDataLocal + '/')) {
+                log::warn("Profile-directory root '{}' lies outside the Wine "
+                          "prefix's %LOCALAPPDATA% ('{}'), skipping capture",
+                          rootPath, appDataLocal);
+                continue;
+              }
+
+              const QString leaf =
+                  QDir(appDataLocal).relativeFilePath(rootPath);
+              // relativeFilePath() yields "." when the root is %LOCALAPPDATA%
+              // itself; map that to the profile's Local dir.
+              const QString profileRoot =
+                  (leaf.isEmpty() || leaf == QStringLiteral("."))
+                      ? profileLocalDir
+                      : QDir(profileLocalDir).filePath(leaf);
+              if (prefix.captureNode(rootPath, profileRoot)) {
+                log::info("Captured profile directories: '{}' -> '{}'",
+                          rootPath, profileRoot);
+              } else {
+                log::warn("Failed to capture profile directories: '{}' -> '{}'",
+                          rootPath, profileRoot);
+              }
+            }
+          }
+        } else {
+          log::warn("Wine prefix at '{}' is not valid (no drive_c)",
+                     prefixPathStr);
+        }
+      } else {
+        log::debug("No Wine prefix configured, skipping profile-directory capture");
+      }
+    }
+  }
+
   if (!m_AboutToRun(binary.absoluteFilePath(), cwd, arguments)) {
     log::debug("start of \"{}\" cancelled by plugin", binary.absoluteFilePath());
     return false;
@@ -3206,6 +3268,10 @@ bool OrganizerCore::beforeRun(
             resolveAbsoluteSaveDir(prefix, managedGame(),
                                    localSavesFeature.get(), m_CurrentProfile);
         log::info("Wine prefix save target: '{}'", absoluteSaveDir);
+        // Saves are handled by the %LOCALAPPDATA% capture for
+        // ProfileDirectories games, so skip the dedicated save deploy below.
+        const auto profileDirectories =
+            gameFeatures().gameFeature<ProfileDirectories>();
 
         // If the prefix's plugin-list file is newer than the profile's
         // (e.g. LOOT ran outside MO2 and edited it), sync back first so
@@ -3318,10 +3384,10 @@ bool OrganizerCore::beforeRun(
         } else {
           log::debug("Profile local settings not enabled, skipping INI deployment. "
                      "documentsDirectory='{}'",
-                     managedGame()->documentsDirectory().absolutePath());
+                      managedGame()->documentsDirectory().absolutePath());
         }
 
-        if (m_CurrentProfile->localSavesEnabled()) {
+        if (!profileDirectories && m_CurrentProfile->localSavesEnabled()) {
           const QString profileSavesDir =
               QDir(m_CurrentProfile->absolutePath()).filePath("saves");
 
@@ -3377,7 +3443,7 @@ bool OrganizerCore::beforeRun(
             log::debug("Patched prefix INI '{}': sLocalSavePath=__MO_Saves\\",
                        prefixIni);
           }
-        } else {
+        } else if (!profileDirectories) {
           // Local saves disabled — restore default sLocalSavePath in prefix INI
           const QStringList iniFiles = managedGame()->iniFiles();
           if (!iniFiles.isEmpty()) {
@@ -3456,7 +3522,12 @@ void OrganizerCore::afterRun(const QFileInfo& binary, DWORD exitCode)
             resolveAbsoluteSaveDir(prefix, managedGame(),
                                    localSavesFeature.get(), m_CurrentProfile);
 
-        if (m_CurrentProfile->localSavesEnabled()) {
+        // Saves are handled by the %LOCALAPPDATA% capture for
+        // ProfileDirectories games, so skip the dedicated save cleanup below.
+        const auto profileDirectories =
+            gameFeatures().gameFeature<ProfileDirectories>();
+
+        if (!profileDirectories && m_CurrentProfile->localSavesEnabled()) {
           const QString profileSavesDir =
               QDir(m_CurrentProfile->absolutePath()).filePath("saves");
 
@@ -3552,6 +3623,19 @@ void OrganizerCore::afterRun(const QFileInfo& binary, DWORD exitCode)
                                             wineMech)) {
           log::warn("Failed to sync plugins.txt back from prefix '{}'",
                     prefixPathStr);
+        }
+
+        // Undeploy the per-profile %LOCALAPPDATA% capture: remove the
+        // symlinks captureNode pointed at the profile (real directories are
+        // left alone and their contents stay in the profile).  The next
+        // beforeRun re-captures for the active profile, so switching profiles
+        // leaves no stale link pointing at the previous one.
+        if (profileDirectories) {
+          for (const auto& root : profileDirectories->directories()) {
+            log::debug("Undeploying profile-directories capture at '{}'",
+                       root.absolutePath());
+            prefix.uncaptureNode(root.absolutePath());
+          }
         }
       }
     }

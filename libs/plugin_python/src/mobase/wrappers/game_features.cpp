@@ -13,6 +13,7 @@
 #include <uibase/game_features/igamefeatures.h>
 #include <uibase/game_features/localsavegames.h>
 #include <uibase/game_features/moddatachecker.h>
+#include <uibase/game_features/profiledirectories.h>
 #include <uibase/game_features/moddatacontent.h>
 #include <uibase/game_features/savegameinfo.h>
 #include <uibase/game_features/scriptextender.h>
@@ -111,6 +112,15 @@ namespace mo2::python {
         bool prepareProfile(MOBase::IProfile* profile) override
         {
             PYBIND11_OVERRIDE_PURE(bool, LocalSavegames, prepareProfile, profile);
+        }
+    };
+
+    class PyProfileDirectories : public ProfileDirectories {
+    public:
+        QList<QDir> directories() const override
+        {
+            PYBIND11_OVERRIDE_PURE(QList<QDir>, ProfileDirectories, directories,
+                                 );
         }
     };
 
@@ -274,6 +284,13 @@ namespace mo2::python {
             .def(py::init<>())
             .def("mappings", &LocalSavegames::mappings, "profile_save_dir"_a)
             .def("prepareProfile", &LocalSavegames::prepareProfile, "profile"_a);
+
+        // ProfileDirectories
+
+        py::class_<ProfileDirectories, GameFeature, PyProfileDirectories,
+                   std::shared_ptr<ProfileDirectories>>(m, "ProfileDirectories")
+            .def(py::init<>())
+            .def("directories", &ProfileDirectories::directories);
 
         // ModDataChecker
 
