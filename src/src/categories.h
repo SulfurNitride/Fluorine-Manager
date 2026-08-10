@@ -20,6 +20,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #ifndef CATEGORIES_H
 #define CATEGORIES_H
 
+#include <QByteArray>
 #include <QString>
 #include <functional>
 #include <map>
@@ -125,12 +126,24 @@ public:
   /**
    * @brief read categories from file
    */
-  void loadCategories();
+  bool loadCategories(bool allowCreate = false);
+
+  // False when an interrupted category transaction could not be restored.
+  // Callers must not normalize or persist mod category assignments then.
+  bool categoriesLoaded() const { return m_CategoriesLoaded; }
+
+  quint64 saveGeneration() const { return m_SaveGeneration; }
 
   /**
    * @brief save the categories to the categories.dat file
    **/
-  void saveCategories();
+  bool saveCategories();
+
+  // Replaces the complete Nexus category inventory and writes it once. The
+  // caller may acknowledge an asynchronous migration only after this returns
+  // true.
+  bool replaceCategoriesFromNexus(const std::vector<NexusCategory>& nexusCats,
+                                  quint64 expectedSaveGeneration);
 
   void setNexusCategories(const std::vector<CategoryFactory::NexusCategory>& nexusCats);
 
@@ -243,6 +256,10 @@ public:
    */
   static QString nexusMappingFilePath();
 
+  // Moves unavailable/malformed category storage to recovery backups so an
+  // explicit startup repair can safely create a fresh pair.
+  static bool resetCategoryStorage(QStringList* backupPaths = nullptr);
+
 signals:
   void nexusCategoryRefresh(CategoriesDialog*);
   void categoriesSaved();
@@ -266,6 +283,9 @@ private:
   std::vector<Category> m_Categories;
   std::map<int, unsigned int> m_IDMap;
   std::map<int, NexusCategory> m_NexusMap;
+  bool m_CategoriesLoaded{false};
+  quint64 m_SaveGeneration{0};
+  QByteArray m_StorageVersion;
 
 private:
   // called by isDescendantOf()

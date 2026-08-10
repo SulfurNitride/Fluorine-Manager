@@ -239,6 +239,9 @@ int run(int argc, char* argv[])
       }
 
       if (auto r = cl.runPostOrganizer(app.core())) {
+        if (!app.finishCommandLineSetup()) {
+          return 1;
+        }
         return *r;
       }
 

@@ -19,6 +19,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "settings.h"
 #include <fluorine_build_info.h>
+#include "categoryassignmentpolicy.h"
 #include "env.h"
 #include "envmetrics.h"
 #include "executableslist.h"
@@ -26,6 +27,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "modelutils.h"
 #include "nxmhandler_linux.h"
 #include "serverinfo.h"
+#include "settingsmigration.h"
 #include "settingsutilities.h"
 #include "shared/appconfig.h"
 #include <QJsonDocument>
@@ -65,6 +67,42 @@ QString storePathForIni(const QString& path)
 
   return MOBase::normalizePathForWine(path);
 }
+
+std::unique_ptr<QSettings> openSettingsBackend(
+    const QString& path, QSettings::Status& initialStatus)
+{
+  QLockFile lock(SettingsMigration::settingsLockPath(path));
+  lock.setStaleLockTime(SettingsMigration::SettingsLockStaleMs);
+  if (!lock.tryLock(SettingsMigration::SettingsLockTimeoutMs)) {
+    initialStatus = QSettings::AccessError;
+    return std::make_unique<QSettings>(path, QSettings::IniFormat);
+  }
+
+  const auto inspection = SettingsMigration::inspectSettingsFile(path);
+  initialStatus         = inspection.status;
+  if (inspection.status == QSettings::FormatError) {
+    const auto backup =
+        SettingsMigration::quarantineCorruptSettingsFileUnlocked(
+            path, inspection.bytes);
+    if (backup) {
+      log::error("settings file '{}' is malformed; the original was quarantined "
+                 "at '{}' and a clean settings file will be created",
+                 path, *backup);
+      initialStatus = QSettings::NoError;
+      return std::make_unique<QSettings>(path, QSettings::IniFormat);
+    }
+    log::error("settings file '{}' is malformed and could not be safely "
+               "quarantined",
+               path);
+  }
+
+  auto settings = std::make_unique<QSettings>(path, QSettings::IniFormat);
+  settings->allKeys();
+  if (initialStatus == QSettings::NoError) {
+    initialStatus = settings->status();
+  }
+  return settings;
+}
 }  // namespace
 
 EndorsementState endorsementStateFromString(const QString& s)
@@ -96,7 +134,9 @@ QString toString(EndorsementState s)
 Settings* Settings::s_Instance = nullptr;
 
 Settings::Settings(const QString& path, bool globalInstance)
-    : m_Settings(path, QSettings::IniFormat), m_Game(m_Settings),
+    : m_SettingsOwner(openSettingsBackend(path, m_InitialStatus)),
+      m_Settings(*m_SettingsOwner),
+      m_Game(m_Settings),
       m_Geometry(m_Settings), m_Widgets(m_Settings, globalInstance),
       m_Colors(m_Settings), m_Plugins(m_Settings), m_Paths(m_Settings),
       m_Network(m_Settings, globalInstance), m_Nexus(*this, m_Settings),
@@ -113,10 +153,50 @@ Settings::Settings(const QString& path, bool globalInstance)
 
 Settings::~Settings()
 {
+  if (m_UpdateLock) {
+    restoreUpdateSnapshot();
+  }
   if (s_Instance == this) {
     MOBase::QuestionBoxMemory::setCallbacks({}, {}, {});
     s_Instance = nullptr;
   }
+}
+
+bool Settings::beginUpdates()
+{
+  if (m_UpdateLock) {
+    return true;
+  }
+
+  auto lock = std::make_unique<QLockFile>(
+      SettingsMigration::settingsLockPath(m_Settings.fileName()));
+  lock->setStaleLockTime(SettingsMigration::SettingsLockStaleMs);
+  if (!lock->tryLock(SettingsMigration::SettingsLockTimeoutMs)) {
+    return false;
+  }
+
+  // Refresh while holding the interprocess lock, before any migration mutates
+  // the live backend. The snapshot is the rollback state for every failure or
+  // incomplete startup.
+  m_Settings.sync();
+  if (m_Settings.status() != QSettings::NoError) {
+    return false;
+  }
+  m_UpdateSnapshot = SettingsMigration::captureSettingsSnapshot(m_Settings);
+  m_UpdateLock = std::move(lock);
+  m_UpdateProcessingStarted = false;
+  return true;
+}
+
+bool Settings::restoreUpdateSnapshot()
+{
+  if (!m_UpdateLock) {
+    return true;
+  }
+  const auto rejected =
+      SettingsMigration::captureSettingsSnapshot(m_Settings);
+  return SettingsMigration::restoreSettingsSnapshot(
+      m_Settings, m_UpdateSnapshot, rejected);
 }
 
 Settings& Settings::instance()
@@ -133,29 +213,45 @@ Settings* Settings::maybeInstance()
   return s_Instance;
 }
 
-void Settings::processUpdates(const QVersionNumber& currentVersion,
-                              const QVersionNumber& lastVersion)
+void Settings::processUpdates(const QVersionNumber& currentProductVersion,
+                              const QVersionNumber& lastProductVersion,
+                              int lastSchemaVersion)
 {
-  if (firstStart()) {
-    set(m_Settings, "General", "version", currentVersion.toString());
+  m_UpdateProcessingStarted = true;
+  if (isNewInstance()) {
     return;
   }
 
-  if (currentVersion == lastVersion) {
-    return;
+  const bool productChanged = currentProductVersion != lastProductVersion;
+  const bool schemaChanged  = SettingsMigration::requiresMigration(
+      lastSchemaVersion, SettingsMigration::CurrentSchema);
+
+  if (productChanged) {
+    const bool importingUpstream = lastProductVersion.majorVersion() >= 2 &&
+                                   currentProductVersion.majorVersion() == 0;
+    if (importingUpstream) {
+      log::info("adopting Fluorine {} for instance last used by MO2 {}",
+                currentProductVersion.toString(), lastProductVersion.toString());
+    } else {
+      log::info("updating product version from {} to {}",
+                lastProductVersion.toString(), currentProductVersion.toString());
+    }
   }
 
-  log::info("updating from {} to {}", lastVersion.toString(),
-            currentVersion.toString());
+  if (schemaChanged) {
+    log::info("updating settings schema from {} to {}", lastSchemaVersion,
+              SettingsMigration::CurrentSchema);
+  }
 
-  auto version = [&](const QVersionNumber& v, auto&& f) {
-    if (lastVersion < v) {
-      log::debug("processing updates for {}", v.toString());
+  auto schema = [&](int target, const char* inheritedVersion, auto&& f) {
+    if (SettingsMigration::requiresMigration(lastSchemaVersion, target)) {
+      log::debug("processing settings schema {} (inherited from MO2 {})", target,
+                 inheritedVersion);
       f();
     }
   };
 
-  version({2, 2, 0}, [&] {
+  schema(SettingsMigration::Schema2_2_0, "2.2.0", [&] {
     remove(m_Settings, "Settings", "steam_password");
     remove(m_Settings, "Settings", "nexus_username");
     remove(m_Settings, "Settings", "nexus_password");
@@ -167,7 +263,7 @@ void Settings::processUpdates(const QVersionNumber& currentVersion,
     removeSection(m_Settings, "Servers");
   });
 
-  version({2, 2, 1}, [&] {
+  schema(SettingsMigration::Schema2_2_1, "2.2.1", [&] {
     remove(m_Settings, "General", "mod_info_tabs");
     remove(m_Settings, "General", "mod_info_conflict_expanders");
     remove(m_Settings, "General", "mod_info_conflicts");
@@ -177,7 +273,7 @@ void Settings::processUpdates(const QVersionNumber& currentVersion,
     remove(m_Settings, "General", "mod_info_conflicts_overwritten");
   });
 
-  version({2, 2, 2}, [&] {
+  schema(SettingsMigration::Schema2_2_2, "2.2.2", [&] {
     // log splitter is gone, it's a dock now
     remove(m_Settings, "General", "log_split");
 
@@ -211,16 +307,76 @@ void Settings::processUpdates(const QVersionNumber& currentVersion,
     m_Network.updateFromOldMap();
   });
 
-  version({2, 4, 0}, [&] {
+  schema(SettingsMigration::Schema2_4_0, "2.4.0", [&] {
     // removed
     remove(m_Settings, "Settings", "hide_unchecked_plugins");
     remove(m_Settings, "Settings", "load_mechanism");
   });
 
-  // save version in all case
-  set(m_Settings, "General", "version", currentVersion.toString());
+  if (lastSchemaVersion == SettingsMigration::UnknownSchema) {
+    log::warn("settings schema value is invalid; migrations and schema update "
+              "were skipped");
+  } else if (lastSchemaVersion > SettingsMigration::CurrentSchema) {
+    log::warn("settings schema {} is newer than supported schema {}; migrations "
+              "were skipped",
+              lastSchemaVersion, SettingsMigration::CurrentSchema);
+  }
+}
 
-  log::debug("updating done");
+QSettings::Status Settings::completeUpdates(
+    const QVersionNumber& currentProductVersion, int lastSchemaVersion)
+{
+  if (!m_UpdateLock) {
+    return QSettings::AccessError;
+  }
+
+  auto rejected = SettingsMigration::captureSettingsSnapshot(m_Settings);
+  if (lastSchemaVersion <= SettingsMigration::CurrentSchema) {
+    rejected.insert(SettingsMigration::SettingsSchemaKey,
+                    SettingsMigration::CurrentSchema);
+  }
+  rejected.insert(SettingsMigration::ProductVersionKey,
+                  currentProductVersion.toString());
+
+  const auto result = SettingsMigration::writeCompletedUpdatesUnderLock(
+      m_Settings, currentProductVersion, lastSchemaVersion);
+
+  if (result == QSettings::NoError) {
+    log::debug("settings update completed");
+    m_UpdateSnapshot.clear();
+    m_UpdateLock.reset();
+    m_UpdateProcessingStarted = false;
+  } else {
+    // QSettings may flush again later or from its destructor. Restore the
+    // complete pre-migration value set now so a rejected transaction can
+    // never persist only its destructive removals.
+    if (!SettingsMigration::finishSettingsRollback(
+            m_Settings, m_UpdateSnapshot, rejected, m_UpdateLock)) {
+      log::error("failed to restore the pre-migration settings snapshot; "
+                 "the application cannot safely continue");
+    } else {
+      m_UpdateProcessingStarted = false;
+    }
+  }
+  return result;
+}
+
+QSettings::Status Settings::finishUpdatesWithoutMigration()
+{
+  if (!SettingsMigration::mayFinishWithoutMigration(
+          m_UpdateLock != nullptr, m_UpdateProcessingStarted)) {
+    return QSettings::AccessError;
+  }
+
+  const auto status =
+      SettingsMigration::syncAndVerifySettingsUnderLock(m_Settings);
+  if (status != QSettings::NoError) {
+    return status;
+  }
+
+  m_UpdateSnapshot.clear();
+  m_UpdateLock.reset();
+  return QSettings::NoError;
 }
 
 QString Settings::filename() const
@@ -336,21 +492,115 @@ void Settings::setRefreshThreadCount(std::size_t n) const
 
 std::optional<QVersionNumber> Settings::version() const
 {
-  if (auto v = getOptional<QString>(m_Settings, "General", "version")) {
-    return QVersionNumber::fromString(*v).normalized();
+  const auto& key = SettingsMigration::ProductVersionKey;
+  if (m_Settings.contains(key)) {
+    const auto parsed =
+        SettingsMigration::parseProductVersion(m_Settings.value(key));
+    if (!parsed) {
+      log::warn("ignoring invalid {} value '{}'", key,
+                m_Settings.value(key).toString());
+    }
+    return parsed;
   }
 
   return {};
 }
 
+int Settings::settingsSchemaVersion() const
+{
+  if (iniStatus() != QSettings::NoError) {
+    return SettingsMigration::UnknownSchema;
+  }
+
+  const auto& schemaKey  = SettingsMigration::SettingsSchemaKey;
+  const auto& productKey = SettingsMigration::ProductVersionKey;
+  const std::optional<QVariant> storedSchema =
+      m_Settings.contains(schemaKey)
+          ? std::optional<QVariant>(m_Settings.value(schemaKey))
+          : std::nullopt;
+  const std::optional<QVariant> storedProduct =
+      m_Settings.contains(productKey)
+          ? std::optional<QVariant>(m_Settings.value(productKey))
+          : std::nullopt;
+  const int schema = SettingsMigration::resolveStoredSettingsSchema(
+      storedSchema, storedProduct);
+  if (schema == SettingsMigration::UnknownSchema) {
+    const auto key   = storedSchema ? schemaKey : productKey;
+    const auto value = storedSchema ? storedSchema : storedProduct;
+    log::warn("ignoring invalid {} value '{}'", key,
+              value ? value->toString() : QString());
+  }
+  return schema;
+}
+
+bool Settings::categoryMigrationPending(int previousSchema) const
+{
+  const auto key = settingName("General", "category_migration_version");
+  const std::optional<QVariant> stored =
+      m_Settings.contains(key) ? std::optional<QVariant>(m_Settings.value(key))
+                               : std::nullopt;
+  return SettingsMigration::categoryMigrationPending(stored, previousSchema);
+}
+
+void Settings::setCategoryMigrationCompleted(bool completed)
+{
+  set(m_Settings, "General", "category_migration_version",
+      completed ? SettingsMigration::CurrentCategoryMigration : 0);
+}
+
+int Settings::categoryLocalIdHighWater() const
+{
+  const auto key = settingName("General", "category_local_id_high_water");
+  if (!m_Settings.contains(key)) {
+    return 0;
+  }
+  bool ok          = false;
+  const int stored = m_Settings.value(key).toString().trimmed().toInt(&ok, 10);
+  if (!ok || stored < 0 ||
+      stored >= CategoryAssignmentPolicy::ImportedCategoryIdBase) {
+    log::error("invalid durable category ID high-water value '{}'; local "
+               "category allocation is disabled",
+               m_Settings.value(key).toString());
+    return CategoryAssignmentPolicy::ImportedCategoryIdBase - 1;
+  }
+  return stored;
+}
+
+bool Settings::advanceCategoryLocalIdHighWater(int id)
+{
+  if (id < 0 || id >= CategoryAssignmentPolicy::ImportedCategoryIdBase) {
+    return false;
+  }
+  if (id <= categoryLocalIdHighWater()) {
+    return true;
+  }
+  set(m_Settings, "General", "category_local_id_high_water", id);
+  return sync() == QSettings::NoError;
+}
+
 bool Settings::firstStart() const
 {
-  return get<bool>(m_Settings, "General", "first_start", true);
+  return m_Settings.value(SettingsMigration::FirstStartKey, true).toBool();
 }
 
 void Settings::setFirstStart(bool b)
 {
-  set(m_Settings, "General", "first_start", b);
+  if (b) {
+    SettingsMigration::markNewInstance(m_Settings);
+  } else {
+    m_Settings.setValue(SettingsMigration::FirstStartKey, false);
+    m_Settings.remove(SettingsMigration::NewInstanceProvenanceKey);
+  }
+}
+
+bool Settings::isNewInstance() const
+{
+  return SettingsMigration::isNewInstance(
+      firstStart(),
+      m_Settings.value(SettingsMigration::NewInstanceProvenanceKey)
+              .toInt() == SettingsMigration::NewInstanceProvenance,
+      m_Settings.contains(SettingsMigration::SettingsSchemaKey),
+      m_Settings.contains(SettingsMigration::ProductVersionKey));
 }
 
 QString Settings::executablesBlacklist() const
@@ -578,40 +828,17 @@ const DiagnosticsSettings& Settings::diagnostics() const
 
 QSettings::Status Settings::sync() const
 {
-  m_Settings.sync();
-
-  const auto s = m_Settings.status();
-
-  // there's a bug in Qt at least until 5.15.0 where a utf-8 bom in the ini is
-  // handled correctly but still sets FormatError
-  //
-  // see qsettings.cpp, in QConfFileSettingsPrivate::readIniFile(), there's a
-  // specific check for utf-8, which adjusts `dataPos` so it's skipped, but
-  // the FLUSH_CURRENT_SECTION() macro uses `currentSectionStart`, and that one
-  // isn't adjusted when changing `dataPos` on the first line and so stays 0
-  //
-  // this puts the bom in `unparsedIniSections` and eventually sets FormatError
-  // somewhere
-  //
-  //
-  // the other problem is that the status is never reset, not even when calling
-  // sync(), so the FormatError that's returned here is actually from reading
-  // the ini, not writing it
-  //
-  //
-  // since it's impossible to get a FormatError on write, it's considered to
-  // be a NoError here
-
-  if (s == QSettings::FormatError) {
-    return QSettings::NoError;
-  } else {
-    return s;
+  if (m_InitialStatus != QSettings::NoError) {
+    return m_InitialStatus;
   }
+  m_Settings.sync();
+  return m_Settings.status();
 }
 
 QSettings::Status Settings::iniStatus() const
 {
-  return m_Settings.status();
+  return m_InitialStatus == QSettings::NoError ? m_Settings.status()
+                                                : m_InitialStatus;
 }
 
 void Settings::dump() const

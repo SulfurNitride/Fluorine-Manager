@@ -26,6 +26,10 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <uibase/filterwidget.h>
 #include <uibase/log.h>
 
+#include <QLockFile>
+#include <QMap>
+#include <memory>
+
 #ifdef interface
 #undef interface
 #endif
@@ -773,19 +777,47 @@ public:
   //
   QString filename() const;
 
-  // version of MO stored in the ini; this may be different from the current
-  // version if the user just updated
+  // Fluorine product version stored in the ini; this may be different from the
+  // current version if the user just updated
   //
   std::optional<QVersionNumber> version() const;
 
+  // monotonic settings schema stored independently from the product version;
+  // legacy instances without the key are mapped from General/version
+  //
+  int settingsSchemaVersion() const;
+
   // updates the settings to bring them up to date
   //
-  void processUpdates(const QVersionNumber& current, const QVersionNumber& last);
+  bool beginUpdates();
+  void processUpdates(const QVersionNumber& currentProductVersion,
+                      const QVersionNumber& lastProductVersion,
+                      int lastSchemaVersion);
+
+  // Marks a completed migration only after the caller has staged any related
+  // UI state, then synchronously commits both to the instance INI.
+  QSettings::Status completeUpdates(
+      const QVersionNumber& currentProductVersion, int lastSchemaVersion);
+  // Commits ordinary setup/command-line writes and releases the transaction
+  // without writing migration markers. Valid only before processUpdates().
+  QSettings::Status finishUpdatesWithoutMigration();
+  bool updateTransactionActive() const { return m_UpdateLock != nullptr; }
+
+  // The interactive category migration is tracked separately because an
+  // asynchronous import may outlive the settings-schema transition.
+  bool categoryMigrationPending(int previousSchema) const;
+  void setCategoryMigrationCompleted(bool completed);
+  int categoryLocalIdHighWater() const;
+  bool advanceCategoryLocalIdHighWater(int id);
 
   // whether MO has been started for the first time
   //
   bool firstStart() const;
   void setFirstStart(bool b);
+
+  // True only for a blank first-run INI. A legacy INI with migration
+  // provenance must still run migrations if first_start is absent.
+  bool isNewInstance() const;
 
   // configured executables
   //
@@ -920,8 +952,17 @@ signals:
   void styleChanged(const QString& newStyle);
 
 private:
+  bool restoreUpdateSnapshot();
+
   static Settings* s_Instance;
-  mutable QSettings m_Settings;
+  QSettings::Status m_InitialStatus{QSettings::NoError};
+  // Declared before the backend so it is destroyed after QSettings has flushed
+  // or discarded its pending state.
+  std::unique_ptr<QLockFile> m_UpdateLock;
+  QMap<QString, QVariant> m_UpdateSnapshot;
+  bool m_UpdateProcessingStarted{false};
+  std::unique_ptr<QSettings> m_SettingsOwner;
+  QSettings& m_Settings;
 
   GameSettings m_Game;
   GeometrySettings m_Geometry;

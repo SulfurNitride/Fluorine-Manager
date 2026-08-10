@@ -84,6 +84,7 @@ class DirectoryEntry;
 #include <QTime>
 #include <QTimer>
 #include <QVariant>
+#include <QVersionNumber>
 #include <Qt>
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -130,6 +131,7 @@ public:
   ~MainWindow() override;
 
   void processUpdates();
+  bool startupFailed() const { return m_StartupFailed; }
 
   QMainWindow* mainWindow() override;
 
@@ -330,7 +332,15 @@ private:
   std::atomic<bool> m_ProblemsCheckRequired;
   std::mutex m_CheckForProblemsMutex;
 
-  QVersionNumber m_LastVersion;
+  int m_PreviousSettingsSchemaVersion{0};
+  QVersionNumber m_CurrentProductVersion;
+  bool m_NewInstance{false};
+  bool m_SettingsUpdatesPending{false};
+  bool m_SettingsUiMigrationApplied{false};
+  bool m_StartupFailed{false};
+  int m_CategoryMigrationRequestId{-1};
+  quint64 m_CategoryMigrationRequestGeneration{0};
+  bool m_HideCategoryReminderAfterImport{false};
 
   Executable* getSelectedExecutable();
 
@@ -392,7 +402,8 @@ private slots:
   void nxmTrackedModsAvailable(QVariant userData, QVariant resultData, int);
   void nxmDownloadURLs(QString, int modID, int fileID, QVariant userData,
                        QVariant resultData, int requestID);
-  static void nxmGameInfoAvailable(QString gameName, QVariant, QVariant resultData, int);
+  void nxmGameInfoAvailable(QString gameName, QVariant userData,
+                            QVariant resultData, int requestID);
   void nxmRequestFailed(QString gameName, int modID, int fileID, QVariant userData,
                         int requestID, int errorCode, const QString& errorString);
 
@@ -492,6 +503,9 @@ private slots:  // ui slots
   void onPluginRegistrationChanged();
 
   void storeSettings();
+  bool applySettingsMigrations();
+  void storeMigratedSettings();
+  bool completeSettingsUpdates();
   void readSettings();
 
   void setupModList();

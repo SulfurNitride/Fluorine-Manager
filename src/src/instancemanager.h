@@ -103,6 +103,7 @@ public:
   // returns false if the ini couldn't be read from
   //
   bool readFromIni();
+  bool readFromIni(Settings& settings);
 
   // finds the appropriate game plugin and sets it up so MO can use it; this
   // calls readFromIni() first
@@ -110,7 +111,7 @@ public:
   // setup() tries to recover from some errors, but can fail for a variety of
   // reasons, see SetupResults
   //
-  SetupResults setup(PluginContainer& plugins);
+  SetupResults setup(PluginContainer& plugins, Settings& settings);
 
   // overrides the game name and directory
   //
@@ -207,7 +208,7 @@ private:
 
   // updates the ini with the given values and the ones found by setup()
   //
-  void updateIni();
+  void updateIni(Settings& settings);
 };
 
 // manages global and portable instances
@@ -366,6 +367,7 @@ std::unique_ptr<Instance> selectInstance();
 //
 //  - if the instance has been set up correctly, returns Okay
 //
-SetupInstanceResults setupInstance(Instance& instance, PluginContainer& pc);
+SetupInstanceResults setupInstance(Instance& instance, PluginContainer& pc,
+                                   Settings& settings);
 
 #endif  // MODORGANIZER_INSTANCEMANAGER_INCLUDED

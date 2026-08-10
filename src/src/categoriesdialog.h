@@ -23,6 +23,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "categories.h"
 #include "plugincontainer.h"
 #include "tutorabledialog.h"
+#include <optional>
 #include <set>
 
 namespace Ui
@@ -49,7 +50,7 @@ public:
    * @brief store changes here to the global categories store (categories.h)
    *
    **/
-  void commitChanges();
+  bool commitChanges();
 
 public slots:
   void nxmGameInfoAvailable(QString gameName, QVariant, QVariant resultData, int);
@@ -66,6 +67,7 @@ private slots:
   void cellChanged(int row, int column);
 
 private:
+  std::optional<int> allocateCategoryID();
   void refreshIDs();
   void fillTable();
 

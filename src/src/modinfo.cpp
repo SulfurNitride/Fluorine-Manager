@@ -509,7 +509,9 @@ void ModInfo::addCategory(const QString& categoryName)
     id = CategoryFactory::instance().addCategory(
         categoryName, std::vector<CategoryFactory::NexusCategory>(), 0);
   }
-  setCategory(id, true);
+  if (id >= 0) {
+    setCategory(id, true);
+  }
 }
 
 bool ModInfo::removeCategory(const QString& categoryName)

@@ -29,6 +29,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "organizercore.h"
 #include "sanitychecks.h"
 #include "settings.h"
+#include "settingsmigration.h"
 #include "fluorineconfig.h"
 #include "fluorinepaths.h"
 #include "fuseconnector.h"
@@ -47,6 +48,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <QFile>
 #include <QFont>
 #include <QFontDatabase>
+#include <QMessageBox>
 #include <QPainter>
 #include <QProxyStyle>
 #include <QRegularExpression>
@@ -291,6 +293,21 @@ OrganizerCore& MOApplication::core()
   return *m_core;
 }
 
+bool MOApplication::finishCommandLineSetup()
+{
+  if (!m_settings) {
+    return false;
+  }
+
+  const auto status = m_settings->finishUpdatesWithoutMigration();
+  if (status != QSettings::NoError) {
+    log::error("failed to durably finish command-line setup for '{}': status {}",
+               m_settings->filename(), static_cast<int>(status));
+    return false;
+  }
+  return true;
+}
+
 void MOApplication::firstTimeSetup(MOMultiProcess& multiProcess)
 {
   connect(
@@ -351,6 +368,23 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
 
   // loading settings
   m_settings.reset(new Settings(m_instance->iniPath(), true));
+  if (m_settings->iniStatus() != QSettings::NoError) {
+    reportError(tr("Cannot open the settings file for instance '%1'. Select "
+                   "another instance or repair its INI file.")
+                    .arg(m_instance->displayName()));
+    InstanceManager::singleton().clearCurrentInstance();
+    return ReselectExitCode;
+  }
+  if (!SettingsMigration::startupMayContinue(m_settings->beginUpdates())) {
+    reportError(
+        tr("Cannot acquire the settings migration transaction for instance "
+           "'%1'. Another Fluorine Manager process may still be starting, or "
+           "the settings file could not be synchronized. This process will "
+           "exit without loading plugins or instance data; try again after "
+           "the other process finishes.")
+            .arg(m_instance->displayName()));
+    return 1;
+  }
   log::getDefault().setLevel(m_settings->diagnostics().logLevel());
   log::debug("using ini at '{}'", m_settings->filename());
 
@@ -403,7 +437,7 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
 
   // instance
   log::debug("entering setupInstanceLoop...");
-  if (auto r = setupInstanceLoop(*m_instance, *m_plugins)) {
+  if (auto r = setupInstanceLoop(*m_instance, *m_plugins, *m_settings)) {
     log::debug("setupInstanceLoop returned {}", *r);
     return *r;
   }
@@ -465,7 +499,27 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
               m_instance->gamePlugin()->gameDirectory().absolutePath());
   }
 
-  CategoryFactory::instance().loadCategories();
+  auto& categories = CategoryFactory::instance();
+  if (!categories.loadCategories(m_settings->isNewInstance())) {
+    const auto reset = QMessageBox::question(
+        nullptr, tr("Category Recovery Required"),
+        tr("The category files for this instance cannot be loaded safely. "
+           "Fluorine will not load mod metadata because doing so could erase "
+           "category assignments.\n\n"
+           "Reset the category inventory now? Every existing category and "
+           "transaction file will first be moved to a recovery backup."),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    QStringList recoveryBackups;
+    if (reset != QMessageBox::Yes ||
+        !CategoryFactory::resetCategoryStorage(&recoveryBackups) ||
+        !categories.loadCategories(true)) {
+      log::error("category data is unavailable; refusing to load mod metadata");
+      InstanceManager::singleton().clearCurrentInstance();
+      return ReselectExitCode;
+    }
+    log::warn("category storage was explicitly reset; recovery backups: {}",
+              recoveryBackups.join(QStringLiteral(", ")));
+  }
   m_core->updateExecutablesList();
   m_core->updateModInfoFromDisc();
   m_core->setCurrentProfile(m_instance->profileName());
@@ -512,50 +566,67 @@ int MOApplication::run(MOMultiProcess& multiProcess)
   }
 
   int res = 1;
+  bool mainWindowStartupFailed = false;
 
   {
     tt.start("MOApplication::doOneRun() MainWindow setup");
     log::debug("creating MainWindow...");
     MainWindow mainWindow(*m_settings, *m_core, *m_plugins);
-    log::debug("MainWindow created, showing...");
+    log::debug("MainWindow created");
 
-    // the nexus interface can show dialogs, make sure they're parented to the
-    // main window
-    m_nexus->getAccessManager()->setTopLevelWidget(&mainWindow);
+    // A settings transaction failure is known during construction. Do not
+    // show the window or attach services in that state. Failures discovered
+    // by first-show migrations are still caught by the check below.
+    if (!mainWindow.startupFailed()) {
+      // the nexus interface can show dialogs, make sure they're parented to the
+      // main window
+      m_nexus->getAccessManager()->setTopLevelWidget(&mainWindow);
 
-    connect(
-        &mainWindow, &MainWindow::styleChanged, this,
-        [this](auto&& file) {
-          setStyleFile(file);
-        },
-        Qt::QueuedConnection);
+      connect(
+          &mainWindow, &MainWindow::styleChanged, this,
+          [this](auto&& file) {
+            setStyleFile(file);
+          },
+          Qt::QueuedConnection);
 
-    log::debug("displaying main window");
-    mainWindow.show();
-    mainWindow.activateWindow();
+      log::debug("displaying main window");
+      mainWindow.show();
+    }
     splash.close();
 
     tt.stop();
 
-    res = exec();
-    mainWindow.close();
+    if (mainWindow.startupFailed()) {
+      mainWindowStartupFailed = true;
+      log::error("main window startup failed; the event loop will not be started");
+      mainWindow.hide();
+    } else {
+      mainWindow.activateWindow();
+      res = exec();
+      mainWindow.close();
+    }
 
     // main window is about to be destroyed
     m_nexus->getAccessManager()->setTopLevelWidget(nullptr);
 
-    try {
-      if (m_core != nullptr) {
-        m_core->saveCurrentProfileForShutdown();
+    if (!mainWindowStartupFailed) {
+      try {
+        if (m_core != nullptr) {
+          m_core->saveCurrentProfileForShutdown();
+        }
+      } catch (const std::exception& e) {
+        log::error("failed to save current profile during shutdown: {}", e.what());
+      } catch (...) {
+        log::error(
+            "failed to save current profile during shutdown: unknown exception");
       }
-    } catch (const std::exception& e) {
-      log::error("failed to save current profile during shutdown: {}", e.what());
-    } catch (...) {
-      log::error("failed to save current profile during shutdown: unknown exception");
     }
   }
 
   // reset geometry if the flag was set from the settings dialog
-  m_settings->geometry().resetIfNeeded();
+  if (!mainWindowStartupFailed) {
+    m_settings->geometry().resetIfNeeded();
+  }
 
   return res;
 }
@@ -672,10 +743,11 @@ std::unique_ptr<Instance> MOApplication::getCurrentInstance(bool forceSelect)
 }
 
 std::optional<int> MOApplication::setupInstanceLoop(Instance& currentInstance,
-                                                    PluginContainer& pc)
+                                                    PluginContainer& pc,
+                                                    Settings& settings)
 {
   for (;;) {
-    const auto setupResult = setupInstance(currentInstance, pc);
+    const auto setupResult = setupInstance(currentInstance, pc, settings);
 
     if (setupResult == SetupInstanceResults::Okay) {
       return {};

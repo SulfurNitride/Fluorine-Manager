@@ -119,6 +119,27 @@ target_link_libraries(test_pluginrefreshcoalescing PRIVATE
 add_test(NAME test_pluginrefreshcoalescing COMMAND test_pluginrefreshcoalescing)
 
 # ---------------------------------------------------------------------------
+# Product-independent settings migration schema tests
+# ---------------------------------------------------------------------------
+add_executable(test_settingsmigration EXCLUDE_FROM_ALL
+    test_settingsmigration.cpp
+)
+set_target_properties(test_settingsmigration PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_settingsmigration PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_settingsmigration PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_settingsmigration COMMAND test_settingsmigration)
+
+# ---------------------------------------------------------------------------
 # Per-instance FUSE/USVFS selection and Wine launch-request serialization
 # ---------------------------------------------------------------------------
 add_executable(test_vfs_backend EXCLUDE_FROM_ALL
@@ -437,7 +458,7 @@ set_tests_properties(test_python_module_switch PROPERTIES
 add_custom_target(fluorine-tests
     DEPENDS test_esptk_tes3 test_bsatk_extraction
             test_plugincompatibility test_pluginrefreshcoalescing
-            test_metainiutils
+            test_settingsmigration test_metainiutils
             test_vfs_backend
             test_fluorineconfigownership
             test_heroicjson test_protondetection

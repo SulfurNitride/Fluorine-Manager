@@ -329,6 +329,9 @@ void CreateInstanceDialog::finish()
 
     // creating ini
     Settings s(ci.iniPath);
+    // This writes first_start plus dedicated creation provenance, distinguishing
+    // a new instance from an established or recovered versionless INI.
+    s.setFirstStart(true);
     s.game().setName(ci.game->gameName());
     s.game().setDirectory(ci.gameLocation);
 

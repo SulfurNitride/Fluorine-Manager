@@ -428,8 +428,9 @@ void FilterList::editCategories()
   CategoriesDialog dialog(qApp->activeWindow());
 
   if (dialog.exec() == QDialog::Accepted) {
-    dialog.commitChanges();
-    refresh();
+    if (dialog.commitChanges()) {
+      refresh();
+    }
   }
 }
 

@@ -18,6 +18,10 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include "categories.h"
+#include "categoryassignmentpolicy.h"
+#include "categoryfileparser.h"
+#include "categorypersistence.h"
+#include "settings.h"
 
 #include <log.h>
 #include <report.h>
@@ -33,6 +37,30 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 
 using namespace MOBase;
 
+namespace
+{
+int localCategoryHighWater(
+    const std::vector<CategoryFactory::Category>& categories)
+{
+  int highWater = 0;
+  for (const auto& category : categories) {
+    if (category.ID() > highWater &&
+        category.ID() < CategoryAssignmentPolicy::ImportedCategoryIdBase) {
+      highWater = category.ID();
+    }
+  }
+  return highWater;
+}
+
+bool reserveLocalCategoryIds(
+    const std::vector<CategoryFactory::Category>& categories)
+{
+  auto* settings = Settings::maybeInstance();
+  return settings == nullptr || settings->advanceCategoryLocalIdHighWater(
+                                    localCategoryHighWater(categories));
+}
+}  // namespace
+
 CategoryFactory* CategoryFactory::s_Instance = nullptr;
 
 QString CategoryFactory::categoriesFilePath()
@@ -43,6 +71,8 @@ QString CategoryFactory::categoriesFilePath()
 CategoryFactory::CategoryFactory()
 {
   atexit(&cleanup);
+  reset();
+  m_CategoriesLoaded = false;
 }
 
 QString CategoryFactory::nexusMappingFilePath()
@@ -50,102 +80,100 @@ QString CategoryFactory::nexusMappingFilePath()
   return qApp->property("dataPath").toString() + "/nexuscatmap.dat";
 }
 
-void CategoryFactory::loadCategories()
+bool CategoryFactory::resetCategoryStorage(QStringList* backupPaths)
 {
-  reset();
+  return CategoryPersistence::resetFiles(
+      categoriesFilePath(), nexusMappingFilePath(), backupPaths);
+}
 
-  QFile categoryFile(categoriesFilePath());
-  bool needLoad = false;
-
-  if (!categoryFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-    needLoad = true;
-  } else {
-    const auto lines = categoryFile.readAll().split('\n');
-    categoryFile.close();
-    for (int lineNum = 0; lineNum < lines.size(); ++lineNum) {
-      const auto& line = lines[lineNum];
-      if (line.isEmpty()) {
-        continue;
-      }
-
-      QList<QByteArray> cells = line.split('|');
-      if (cells.count() == 4) {
-        std::vector<NexusCategory> nexusCats;
-        if (cells[2].length() > 0) {
-          QList<QByteArray> nexusIDStrings = cells[2].split(',');
-          for (QList<QByteArray>::iterator iter = nexusIDStrings.begin();
-               iter != nexusIDStrings.end(); ++iter) {
-            bool ok  = false;
-            int const temp = iter->toInt(&ok);
-            if (!ok) {
-              log::error(tr("invalid category id {0}"), iter->constData());
-            }
-            nexusCats.emplace_back("Unknown", temp);
-          }
-        }
-        bool cell0Ok = true;
-        bool cell3Ok = true;
-        int const id       = cells[0].toInt(&cell0Ok);
-        int const parentID = cells[3].trimmed().toInt(&cell3Ok);
-        if (!cell0Ok || !cell3Ok) {
-          log::error(tr("invalid category line {0}: {1}"), lineNum, line.constData());
-        }
-        addCategory(id, QString::fromUtf8(cells[1].constData()), nexusCats, parentID);
-      } else if (cells.count() == 3) {
-        bool cell0Ok = true;
-        bool cell3Ok = true;
-        int const id       = cells[0].toInt(&cell0Ok);
-        int const parentID = cells[2].trimmed().toInt(&cell3Ok);
-        if (!cell0Ok || !cell3Ok) {
-          log::error(tr("invalid category line {0}: {1}"), lineNum, line.constData());
-        }
-
-        addCategory(id, QString::fromUtf8(cells[1].constData()),
-                    std::vector<NexusCategory>(), parentID);
-      } else {
-        log::error(tr("invalid category line {0}: {1} ({2} cells)"), lineNum,
-                   line.constData(), cells.count());
-      }
-    }
-
-    QFile nexusMapFile(nexusMappingFilePath());
-    if (!nexusMapFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-      needLoad = true;
+bool CategoryFactory::loadCategories(bool allowCreate)
+{
+  m_CategoriesLoaded = false;
+  m_StorageVersion.clear();
+  QString quarantinedJournal;
+  const auto files = CategoryPersistence::readFiles(
+      categoriesFilePath(), nexusMappingFilePath(), &quarantinedJournal);
+  if (!files) {
+    m_CategoriesLoaded = false;
+    if (!quarantinedJournal.isEmpty()) {
+      reportError(
+          tr("A damaged category transaction was preserved at %1. Category "
+             "data will remain unavailable until the preserved transaction "
+             "and category files are explicitly repaired or reset.")
+              .arg(quarantinedJournal));
     } else {
-      const auto nexLines = nexusMapFile.readAll().split('\n');
-      nexusMapFile.close();
-      for (int nexLineNum = 0; nexLineNum < nexLines.size(); ++nexLineNum) {
-        const auto& nexLine = nexLines[nexLineNum];
-        if (nexLine.isEmpty()) {
-          continue;
-        }
-
-        QList<QByteArray> nexCells = nexLine.split('|');
-        if (nexCells.count() == 3) {
-          std::vector<NexusCategory> const nexusCats;
-          QString const nexName = nexCells[1];
-          bool ok         = false;
-          int const nexID       = nexCells[2].toInt(&ok);
-          if (!ok) {
-            log::error(tr("invalid nexus ID {}"), nexCells[2].constData());
-          }
-          int const catID = nexCells[0].toInt(&ok);
-          if (!ok) {
-            log::error(tr("invalid category id {}"), nexCells[0].constData());
-          }
-          m_NexusMap.insert_or_assign(nexID, NexusCategory(nexName, nexID));
-          m_NexusMap.at(nexID).setCategoryID(catID);
-        } else {
-          log::error(tr("invalid nexus category line {0}: {1} ({2} cells)"), nexLineNum,
-                     nexLine.constData(), nexCells.count());
-        }
-      }
+      reportError(tr("Failed to read or recover the category files"));
     }
+    return false;
+  }
+
+  const auto& [categorySnapshot, nexusMapSnapshot] = *files;
+  const QByteArray loadedVersion = CategoryPersistence::storageVersion(
+      categorySnapshot, nexusMapSnapshot);
+  if (loadedVersion.isEmpty()) {
+    reportError(tr("Failed to identify the loaded category files"));
+    return false;
+  }
+  if (categorySnapshot.existed != nexusMapSnapshot.existed) {
+    m_CategoriesLoaded = false;
+    reportError(tr("The category and Nexus mapping files are incomplete; both "
+                   "files must be repaired or reset together"));
+    return false;
+  }
+
+  if (!categorySnapshot.existed) {
+    if (!allowCreate) {
+      m_CategoriesLoaded = false;
+      reportError(tr("The category files are missing from an established "
+                     "instance; use category recovery to reset them"));
+      return false;
+    }
+
+    reset();
+    loadDefaultCategories();
+    m_CategoriesLoaded = true;
+    m_StorageVersion   = loadedVersion;
+    if (!saveCategories()) {
+      m_CategoriesLoaded = false;
+      return false;
+    }
+    return true;
+  }
+
+  const auto parsed = CategoryFileParser::parse(categorySnapshot.data,
+                                                nexusMapSnapshot.data);
+  if (!parsed) {
+    m_CategoriesLoaded = false;
+    reportError(tr("The category files are malformed: %1").arg(parsed.error));
+    return false;
+  }
+
+  reset();
+  m_CategoriesLoaded = false;
+  for (const auto& category : parsed.inventory->categories) {
+    std::vector<NexusCategory> nexusCategories;
+    nexusCategories.reserve(category.nexusIds.size());
+    for (const int nexusId : category.nexusIds) {
+      nexusCategories.emplace_back(QStringLiteral("Unknown"), nexusId);
+    }
+    addCategory(category.id, category.name, nexusCategories,
+                category.parentId);
+  }
+  for (const auto& mapping : parsed.inventory->nexusMappings) {
+    m_NexusMap.insert_or_assign(
+        mapping.nexusId, NexusCategory(mapping.name, mapping.nexusId));
+    m_NexusMap.at(mapping.nexusId).setCategoryID(mapping.categoryId);
   }
   std::sort(m_Categories.begin(), m_Categories.end());
   setParents();
-  if (needLoad)
-    loadDefaultCategories();
+  m_CategoriesLoaded = true;
+  m_StorageVersion   = loadedVersion;
+  if (!reserveLocalCategoryIds(m_Categories)) {
+    m_CategoriesLoaded = false;
+    reportError(tr("Failed to reserve local category identifiers"));
+    return false;
+  }
+  return true;
 }
 
 CategoryFactory& CategoryFactory::instance()
@@ -185,49 +213,148 @@ void CategoryFactory::cleanup()
   s_Instance = nullptr;
 }
 
-void CategoryFactory::saveCategories()
+bool CategoryFactory::saveCategories()
 {
-  QFile categoryFile(categoriesFilePath());
-
-  if (!categoryFile.open(QIODevice::WriteOnly)) {
-    reportError(tr("Failed to save custom categories"));
-    return;
+  if (!m_CategoriesLoaded) {
+    reportError(tr("Categories are unavailable because recovery did not "
+                   "complete; reload them before saving"));
+    return false;
+  }
+  if (!reserveLocalCategoryIds(m_Categories)) {
+    reportError(tr("Failed to reserve local category identifiers"));
+    return false;
   }
 
-  categoryFile.resize(0);
+  QByteArray categoriesData;
   for (const auto& category : m_Categories) {
     if (category.ID() == 0) {
       continue;
     }
-    QByteArray line;
-    line.append(QByteArray::number(category.ID()))
+    categoriesData.append(QByteArray::number(category.ID()))
         .append("|")
         .append(category.name().toUtf8())
         .append("|")
         .append(QByteArray::number(category.parentID()))
         .append("\n");
-    categoryFile.write(line);
-  }
-  categoryFile.close();
-
-  QFile nexusMapFile(nexusMappingFilePath());
-
-  if (!nexusMapFile.open(QIODevice::WriteOnly)) {
-    reportError(tr("Failed to save nexus category mappings"));
-    return;
   }
 
-  nexusMapFile.resize(0);
+  QByteArray nexusMapData;
   for (const auto& nexMap : m_NexusMap) {
-    QByteArray line;
-    line.append(QByteArray::number(nexMap.second.categoryID())).append("|");
-    line.append(nexMap.second.name().toUtf8()).append("|");
-    line.append(QByteArray::number(nexMap.second.ID())).append("\n");
-    nexusMapFile.write(line);
+    nexusMapData.append(QByteArray::number(nexMap.second.categoryID())).append("|");
+    nexusMapData.append(nexMap.second.name().toUtf8()).append("|");
+    nexusMapData.append(QByteArray::number(nexMap.second.ID())).append("\n");
   }
-  nexusMapFile.close();
 
+  const auto validation =
+      CategoryFileParser::parse(categoriesData, nexusMapData);
+  if (!validation) {
+    reportError(tr("Cannot save invalid category data: %1")
+                    .arg(validation.error));
+    return false;
+  }
+
+  if (m_StorageVersion.isEmpty()) {
+    reportError(tr("Cannot save categories without a loaded storage generation"));
+    return false;
+  }
+
+  const QByteArray newStorageVersion = CategoryPersistence::storageVersion(
+      {true, categoriesData}, {true, nexusMapData});
+  if (newStorageVersion.isEmpty()) {
+    reportError(tr("Failed to identify the new category files"));
+    return false;
+  }
+
+  const auto result = CategoryPersistence::writeFiles(
+      categoriesFilePath(), categoriesData, nexusMappingFilePath(), nexusMapData,
+      m_StorageVersion);
+  if (result == CategoryPersistence::WriteResult::Conflict) {
+    reportError(tr("Categories changed in another process; reload the instance "
+                   "before saving category edits"));
+    return false;
+  }
+  if (result == CategoryPersistence::WriteResult::CategoriesFailed) {
+    reportError(tr("Failed to save custom categories"));
+    return false;
+  }
+  if (result == CategoryPersistence::WriteResult::NexusMapFailed) {
+    reportError(tr("Failed to save nexus category mappings"));
+    return false;
+  }
+
+  m_StorageVersion = newStorageVersion;
+  ++m_SaveGeneration;
   emit categoriesSaved();
+  return true;
+}
+
+bool CategoryFactory::replaceCategoriesFromNexus(
+    const std::vector<NexusCategory>& nexusCats,
+    quint64 expectedSaveGeneration)
+{
+  if (m_SaveGeneration != expectedSaveGeneration) {
+    reportError(tr("Categories changed while the Nexus inventory was being "
+                   "downloaded; the import was cancelled"));
+    return false;
+  }
+  if (nexusCats.empty()) {
+    reportError(tr("The imported category inventory is empty"));
+    return false;
+  }
+  if (!reserveLocalCategoryIds(m_Categories)) {
+    reportError(tr("Failed to reserve retired local category identifiers"));
+    return false;
+  }
+
+  std::vector<std::pair<int, NexusCategory>> importedCategories;
+  importedCategories.reserve(nexusCats.size());
+  std::set<int> seenNexusIds;
+  for (const auto& nexusCategory : nexusCats) {
+    const auto localId = CategoryAssignmentPolicy::importedCategoryId(
+        nexusCategory.ID());
+    if (!localId ||
+        !CategoryAssignmentPolicy::isSafeSerializedName(
+            nexusCategory.name()) ||
+        !seenNexusIds.insert(nexusCategory.ID()).second) {
+      reportError(tr("The imported category inventory contains invalid data"));
+      return false;
+    }
+
+    // A manually assigned local ID in the imported namespace is not safe to
+    // reinterpret. Reuse is allowed only when the existing Nexus mapping
+    // proves that the ID already has the same stable identity.
+    if (m_IDMap.contains(*localId)) {
+      const auto existing = m_NexusMap.find(nexusCategory.ID());
+      if (existing == m_NexusMap.end() ||
+          existing->second.categoryID() != *localId) {
+        reportError(tr("Imported category ID %1 conflicts with an existing "
+                       "custom category")
+                        .arg(*localId));
+        return false;
+      }
+    }
+    importedCategories.emplace_back(*localId, nexusCategory);
+  }
+
+  const auto previousCategories = m_Categories;
+  const auto previousNexusMap   = m_NexusMap;
+  const auto previousIDMap      = m_IDMap;
+  const bool previousLoaded     = m_CategoriesLoaded;
+
+  reset();
+  for (const auto& [localId, nexusCategory] : importedCategories) {
+    addCategory(localId, nexusCategory.name(), {nexusCategory}, 0);
+  }
+
+  if (saveCategories()) {
+    return true;
+  }
+
+  m_Categories = previousCategories;
+  m_NexusMap   = previousNexusMap;
+  m_IDMap      = previousIDMap;
+  m_CategoriesLoaded = previousLoaded;
+  return false;
 }
 
 unsigned int
@@ -246,14 +373,28 @@ int CategoryFactory::addCategory(const QString& name,
                                  const std::vector<NexusCategory>& nexusCats,
                                  int parentID)
 {
-  int id = 1;
-  while (m_IDMap.contains(id)) {
-    ++id;
+  const auto previousCategories = m_Categories;
+  const auto previousNexusMap   = m_NexusMap;
+  const auto previousIDMap      = m_IDMap;
+  std::set<int> usedIds;
+  for (const auto& category : m_Categories) {
+    usedIds.insert(category.ID());
   }
-  addCategory(id, name, nexusCats, parentID);
+  const auto id = CategoryAssignmentPolicy::nextLocalCategoryId(
+      Settings::instance().categoryLocalIdHighWater(), usedIds);
+  if (!id || !Settings::instance().advanceCategoryLocalIdHighWater(*id)) {
+    reportError(tr("Failed to reserve a new local category identifier"));
+    return -1;
+  }
+  addCategory(*id, name, nexusCats, parentID);
 
-  saveCategories();
-  return id;
+  if (saveCategories()) {
+    return *id;
+  }
+  m_Categories = previousCategories;
+  m_NexusMap   = previousNexusMap;
+  m_IDMap      = previousIDMap;
+  return -1;
 }
 
 void CategoryFactory::addCategory(int id, const QString& name, int parentID)
@@ -282,8 +423,6 @@ void CategoryFactory::setNexusCategories(
   for (const auto& nexusCat : nexusCats) {
     m_NexusMap.emplace(nexusCat.ID(), nexusCat);
   }
-
-  saveCategories();
 }
 
 void CategoryFactory::refreshNexusCategories(CategoriesDialog* dialog)
@@ -301,7 +440,7 @@ void CategoryFactory::loadDefaultCategories()
   addCategory(53, "Power Armor", 2);
   addCategory(3, "Audio", 0);
   addCategory(38, "Music", 0);
-  addCategory(39, "Voice", 0);
+  addCategory(59, "Voice", 0);
   addCategory(5, "Clothing", 0);
   addCategory(41, "Jewelry", 5);
   addCategory(42, "Backpacks", 5);

@@ -27,6 +27,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "browserdialog.h"
 #endif
 #include "categories.h"
+#include "categoryassignmentpolicy.h"
 #include "categoriesdialog.h"
 #include "datatab.h"
 #include "filetree.h"
@@ -71,6 +72,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "selectiondialog.h"
 #include "serverinfo.h"
 #include "settingsdialog.h"
+#include "settingsmigration.h"
 #include "shared/appconfig.h"
 #include "spawn.h"
 #include "statusbar.h"
@@ -305,8 +307,6 @@ MainWindow::MainWindow(Settings& settings, OrganizerCore& organizerCore,
     ui->statusBar->setAPI(ni.getAPIStats(), ni.getAPIUserAccount());
   }
 
-  m_CategoryFactory.loadCategories();
-
   ui->logList->setCore(m_OrganizerCore);
 
   setupToolbar();
@@ -487,11 +487,8 @@ MainWindow::MainWindow(Settings& settings, OrganizerCore& organizerCore,
 
   m_SaveMetaTimer.setSingleShot(false);
   connect(&m_SaveMetaTimer, SIGNAL(timeout()), this, SLOT(saveModMetas()));
-  m_SaveMetaTimer.start(5000);
 
   FileDialogMemory::restore(settings);
-
-  fixCategories();
 
   m_StartTime = QTime::currentTime();
 
@@ -696,8 +693,10 @@ void MainWindow::resetButtonIcons()
 MainWindow::~MainWindow()
 {
   try {
-    m_ArchiveListWriter.writeImmediately(true);
-    m_OrganizerCore.pluginsWriter().writeImmediately(true);
+    if (!m_StartupFailed) {
+      m_ArchiveListWriter.writeImmediately(true);
+      m_OrganizerCore.pluginsWriter().writeImmediately(true);
+    }
     cleanup();
 
     m_OrganizerCore.setUserInterface(nullptr);
@@ -1324,6 +1323,7 @@ void MainWindow::showEvent(QShowEvent* event)
   if (!m_WasVisible) {
     ui->modList->refreshFilters();
     readSettings();
+    m_SettingsUiMigrationApplied = applySettingsMigrations();
 
     // this needs to be connected here instead of in the constructor because the
     // actual changing of the stylesheet is done by MOApplication, which
@@ -1339,7 +1339,7 @@ void MainWindow::showEvent(QShowEvent* event)
     m_Tutorial.registerControl();
 
     hookUpWindowTutorials();
-    if (m_OrganizerCore.settings().firstStart()) {
+    if (m_NewInstance) {
       QString firstStepsTutorial = ToQString(AppConfig::firstStepsTutorial());
       if (TutorialManager::instance().hasTutorial(firstStepsTutorial)) {
         if (shouldStartTutorial()) {
@@ -1381,29 +1381,29 @@ void MainWindow::showEvent(QShowEvent* event)
       }
       newCatDialog.addButton(&defaultBtn, QMessageBox::ButtonRole::AcceptRole);
       newCatDialog.addButton(&cancelBtn, QMessageBox::ButtonRole::RejectRole);
+      m_OrganizerCore.settings().setCategoryMigrationCompleted(false);
       newCatDialog.exec();
       if (newCatDialog.clickedButton() == &importBtn) {
         importCategories(false);
-      } else if (newCatDialog.clickedButton() == &cancelBtn) {
-        m_CategoryFactory.reset();
-      } else if (newCatDialog.clickedButton() == &defaultBtn) {
-        m_CategoryFactory.loadCategories();
+      } else {
+        if (newCatDialog.clickedButton() == &cancelBtn) {
+          m_CategoryFactory.reset();
+        }
+        if (m_CategoryFactory.saveCategories()) {
+          m_OrganizerCore.settings().setCategoryMigrationCompleted(true);
+        }
       }
-      m_CategoryFactory.saveCategories();
 
       m_OrganizerCore.settings().setFirstStart(false);
     } else {
       auto& settings = m_OrganizerCore.settings();
-      // The category migration dialog was meant to fire once per upgrade
-      // across the upstream MO2 2.4 -> 2.5 cut. Fluorine now stores its own
-      // 0.x.y version in the same slot, so lastVersion < 2.5 is true on
-      // every Fluorine launch and the dialog would nag forever. Skip it
-      // when lastVersion looks like a Fluorine build.
-      const bool fluorineVersionScheme =
-          m_LastVersion.majorVersion() == 0;
-      if (!fluorineVersionScheme &&
-          m_LastVersion < QVersionNumber(2, 5) &&
+      if (settings.categoryMigrationPending(
+              m_PreviousSettingsSchemaVersion) &&
           !GlobalSettings::hideCategoryReminder()) {
+        // Persist an explicit pending marker before advancing the general
+        // settings schema. An asynchronous import must not be acknowledged by
+        // the schema transition itself.
+        settings.setCategoryMigrationCompleted(false);
         QMessageBox migrateCatDialog;
         migrateCatDialog.setWindowTitle("Category Migration");
         migrateCatDialog.setText(
@@ -1434,18 +1434,46 @@ void MainWindow::showEvent(QShowEvent* event)
         migrateCatDialog.addButton(&closeBtn, QMessageBox::ButtonRole::RejectRole);
         migrateCatDialog.setCheckBox(&dontShow);
         migrateCatDialog.exec();
+        bool importRequested = false;
         if (migrateCatDialog.clickedButton() == &importBtn) {
+          importRequested = true;
           importCategories(dontShow.isChecked());
-        } else if (migrateCatDialog.clickedButton() == &openSettingsBtn) {
-          this->ui->filtersEdit->click();
-        } else if (migrateCatDialog.clickedButton() == &disableBtn) {
-          Settings::instance().nexus().setCategoryMappings(false);
+        } else {
+          if (migrateCatDialog.clickedButton() == &openSettingsBtn) {
+            const auto saveGeneration = m_CategoryFactory.saveGeneration();
+            this->ui->filtersEdit->click();
+            if (m_CategoryFactory.saveGeneration() != saveGeneration) {
+              settings.setCategoryMigrationCompleted(true);
+            }
+          } else if (migrateCatDialog.clickedButton() == &disableBtn) {
+            Settings::instance().nexus().setCategoryMappings(false);
+            settings.setCategoryMigrationCompleted(true);
+          } else if (dontShow.isChecked()) {
+            // Closing or cancelling normally keeps the migration pending. An
+            // explicit "don't show" acknowledgement is the only dismissal
+            // that completes it without changing the category inventory.
+            settings.setCategoryMigrationCompleted(true);
+          }
         }
-        if (dontShow.isChecked()) {
+        if (dontShow.isChecked() && !importRequested) {
           GlobalSettings::setHideCategoryReminder(true);
         }
       }
     }
+
+    // Only migration-owned header state is staged here. Full window geometry
+    // is restored by a timer and must not be captured during the first show.
+    if (m_SettingsUiMigrationApplied) {
+      storeMigratedSettings();
+    }
+    if (!completeSettingsUpdates()) {
+      return;
+    }
+
+    // Do not mutate mod metadata until the settings transaction has committed;
+    // a failed startup must leave category assignments untouched.
+    fixCategories();
+    m_SaveMetaTimer.start(5000);
 
     m_OrganizerCore.settings().widgets().restoreIndex(ui->groupCombo);
 
@@ -1484,6 +1512,7 @@ void MainWindow::paintEvent(QPaintEvent* event)
 void MainWindow::onBeforeClose()
 {
   storeSettings();
+  completeSettingsUpdates();
   m_ArchiveListWriter.writeImmediately(true);
   m_OrganizerCore.pluginsWriter().writeImmediately(true);
 }
@@ -2223,6 +2252,9 @@ void MainWindow::checkBSAList()
 
 void MainWindow::saveModMetas()
 {
+  if (!m_CategoryFactory.categoriesLoaded()) {
+    return;
+  }
   if (m_MetaSave.isFinished()) {
     m_MetaSave = QtConcurrent::run([this]() {
       for (unsigned int i = 0; i < ModInfo::getNumMods(); ++i) {
@@ -2235,6 +2267,11 @@ void MainWindow::saveModMetas()
 
 void MainWindow::fixCategories()
 {
+  if (!m_CategoryFactory.categoriesLoaded()) {
+    log::warn("category inventory is unavailable; preserving existing mod "
+              "category assignments");
+    return;
+  }
   for (unsigned int i = 0; i < ModInfo::getNumMods(); ++i) {
     ModInfo::Ptr const modInfo     = ModInfo::getByIndex(i);
     std::set<int> const categories = modInfo->getCategories();
@@ -2330,41 +2367,39 @@ void MainWindow::processUpdates()
   auto& settings      = m_OrganizerCore.settings();
   const auto earliest = QVersionNumber::fromString("2.1.2").normalized();
 
-  const auto lastVersion = settings.version().value_or(earliest);
   const auto currentVersion =
       QVersionNumber::fromString(m_OrganizerCore.getVersion().string()).normalized();
-
-  m_LastVersion = lastVersion;
-
-  settings.processUpdates(currentVersion, lastVersion);
-
-  if (!settings.firstStart()) {
-    if (lastVersion < QVersionNumber(2, 1, 6)) {
-      ui->modList->header()->setSectionHidden(ModList::COL_NOTES, true);
-    }
-
-    if (lastVersion < QVersionNumber(2, 2, 1)) {
-      // hide new columns by default
-      for (int i = DownloadList::COL_MODNAME; i < DownloadList::COL_COUNT; ++i) {
-        ui->downloadView->header()->hideSection(i);
-      }
-    }
-
-    if (lastVersion < QVersionNumber(2, 3)) {
-      for (int i = 1; i < ui->dataTree->header()->count(); ++i)
-        ui->dataTree->setColumnWidth(i, 150);
-    }
+  m_CurrentProductVersion = currentVersion;
+  if (!SettingsMigration::startupMayContinue(settings.beginUpdates())) {
+    m_PreviousSettingsSchemaVersion = SettingsMigration::UnknownSchema;
+    m_NewInstance                   = false;
+    m_SettingsUpdatesPending        = false;
+    m_StartupFailed                 = true;
+    log::error("could not acquire the settings migration transaction lock; "
+               "Fluorine Manager cannot safely continue and will retry on "
+               "the next launch");
+    return;
   }
+
+  const auto lastVersion = settings.version().value_or(earliest);
+  const auto lastSchemaVersion = settings.settingsSchemaVersion();
+
+  m_PreviousSettingsSchemaVersion = lastSchemaVersion;
+  m_CurrentProductVersion         = currentVersion;
+  m_NewInstance                   = settings.isNewInstance();
+  m_SettingsUpdatesPending        = true;
+
+  settings.processUpdates(currentVersion, lastVersion, lastSchemaVersion);
 
   if (currentVersion < lastVersion) {
     // Fluorine Manager versions its own 0.x.y releases separately from the
     // embedded MO2 engine. Instances created under upstream MO2 (or an
     // earlier Fluorine build that echoed the engine version) will have
-    // a stored 2.x.y — the "2 → 0" drop isn't a downgrade, it's a schema
-    // change. Detect that and suppress the warning.
-    const bool schemaTransition =
+    // a stored 2.x.y — the "2 -> 0" change moves between product-version
+    // namespaces rather than downgrading Fluorine. Suppress that warning.
+    const bool productNamespaceTransition =
         lastVersion.majorVersion() >= 2 && currentVersion.majorVersion() == 0;
-    if (!schemaTransition) {
+    if (!productNamespaceTransition) {
       const auto text =
           tr("Notice: Your current Fluorine Manager version (%1) is lower than "
              "the previously used one (%2). The GUI may not downgrade "
@@ -2376,10 +2411,82 @@ void MainWindow::processUpdates()
       log::warn("{}", text);
     } else {
       log::debug(
-          "skipping downgrade warning: {} -> {} is MO2->Fluorine schema change",
+          "skipping downgrade warning: {} -> {} is an MO2-to-Fluorine product "
+          "version transition",
           lastVersion.toString(), currentVersion.toString());
     }
   }
+}
+
+bool MainWindow::applySettingsMigrations()
+{
+  auto& settings = m_OrganizerCore.settings();
+  if (m_NewInstance) {
+    return false;
+  }
+
+  bool applied = false;
+
+  if (SettingsMigration::requiresMigration(
+          m_PreviousSettingsSchemaVersion, SettingsMigration::Schema2_1_6)) {
+    ui->modList->header()->setSectionHidden(ModList::COL_NOTES, true);
+    applied = true;
+  }
+
+  if (SettingsMigration::requiresMigration(
+          m_PreviousSettingsSchemaVersion, SettingsMigration::Schema2_2_1)) {
+    // Hide new columns by default after restoring the old header state.
+    for (int i = DownloadList::COL_MODNAME; i < DownloadList::COL_COUNT; ++i) {
+      ui->downloadView->header()->hideSection(i);
+    }
+    applied = true;
+  }
+
+  if (SettingsMigration::requiresMigration(
+          m_PreviousSettingsSchemaVersion, SettingsMigration::Schema2_3_0)) {
+    for (int i = 1; i < ui->dataTree->header()->count(); ++i) {
+      ui->dataTree->setColumnWidth(i, 150);
+    }
+    applied = true;
+  }
+
+  return applied;
+}
+
+void MainWindow::storeMigratedSettings()
+{
+  auto& settings = m_OrganizerCore.settings();
+  settings.geometry().saveState(ui->modList->header());
+  settings.geometry().saveState(ui->downloadView->header());
+  settings.geometry().saveState(ui->dataTree->header());
+}
+
+bool MainWindow::completeSettingsUpdates()
+{
+  if (!m_SettingsUpdatesPending) {
+    return !m_StartupFailed;
+  }
+
+  const auto status = m_OrganizerCore.settings().completeUpdates(
+      m_CurrentProductVersion, m_PreviousSettingsSchemaVersion);
+  if (status == QSettings::NoError) {
+    m_SettingsUpdatesPending = false;
+  } else {
+    log::error("failed to durably commit settings migration to '{}': status {}",
+               m_OrganizerCore.settings().filename(), static_cast<int>(status));
+    if (m_OrganizerCore.settings().updateTransactionActive()) {
+      log::error("the pre-migration settings snapshot could not be restored; "
+                 "Fluorine Manager will exit to avoid further settings writes");
+    } else {
+      log::error("the pre-migration settings snapshot was restored, but the "
+                 "live settings backend is no longer safe to use; Fluorine "
+                 "Manager will exit and retry on the next launch");
+    }
+    m_SettingsUpdatesPending = false;
+    m_StartupFailed          = true;
+    return false;
+  }
+  return true;
 }
 
 void MainWindow::storeSettings()
@@ -2675,12 +2782,21 @@ void MainWindow::modInstalled(const QString& modName)
       {m_OrganizerCore.modList()->index(index, 0)});
 }
 
-void MainWindow::importCategories(bool)
+void MainWindow::importCategories(bool hideReminderAfterImport)
 {
+  m_OrganizerCore.settings().setCategoryMigrationCompleted(false);
+  m_HideCategoryReminderAfterImport = hideReminderAfterImport;
+  m_CategoryMigrationRequestGeneration = m_CategoryFactory.saveGeneration();
   NexusInterface& nexus = NexusInterface::instance();
   nexus.setPluginContainer(&m_OrganizerCore.pluginContainer());
-  nexus.requestGameInfo(Settings::instance().game().plugin()->gameShortName(), this,
-                        QVariant(), QString());
+  m_CategoryMigrationRequestId = nexus.requestGameInfo(
+      Settings::instance().game().plugin()->gameShortName(), this,
+      SettingsMigration::CategoryMigrationRequestTag, QString());
+  if (m_CategoryMigrationRequestId < 0) {
+    m_CategoryMigrationRequestGeneration = 0;
+    m_HideCategoryReminderAfterImport = false;
+    log::warn("category migration import could not be queued; it remains pending");
+  }
 }
 
 void MainWindow::showMessage(const QString& message)
@@ -3094,11 +3210,17 @@ void MainWindow::refreshNexusCategories(CategoriesDialog* dialog)
 
 void MainWindow::categoriesSaved()
 {
+  if (!m_CategoryFactory.categoriesLoaded()) {
+    return;
+  }
   for (const auto& modName : m_OrganizerCore.modList()->allMods()) {
     auto mod = ModInfo::getByName(modName);
-    for (auto category : mod->getCategories()) {
-      if (!m_CategoryFactory.categoryExists(category))
+    const auto categories = mod->getCategories();
+    for (auto category : categories) {
+      if (CategoryAssignmentPolicy::shouldRemove(
+              m_CategoryFactory.categoryExists(category))) {
         mod->setCategory(category, false);
+      }
     }
   }
 }
@@ -3835,25 +3957,87 @@ void MainWindow::nxmDownloadURLs(QString, int, int, QVariant, QVariant resultDat
   m_OrganizerCore.settings().network().updateServers(servers);
 }
 
-void MainWindow::nxmGameInfoAvailable(QString gameName, QVariant, QVariant resultData,
-                                      int)
+void MainWindow::nxmGameInfoAvailable(QString, QVariant userData,
+                                      QVariant resultData, int requestID)
 {
-  QVariantMap result          = resultData.toMap();
-  QVariantList const categories     = result["categories"].toList();
-  CategoryFactory& catFactory = CategoryFactory::instance();
-  catFactory.reset();
+  if (!SettingsMigration::isExpectedCategoryMigrationResponse(
+          requestID, m_CategoryMigrationRequestId, userData)) {
+    return;
+  }
+
+  m_CategoryMigrationRequestId = -1;
+  const quint64 requestGeneration =
+      std::exchange(m_CategoryMigrationRequestGeneration, 0);
+  const bool hideReminder = std::exchange(m_HideCategoryReminderAfterImport, false);
+  const QVariantMap result      = resultData.toMap();
+  if (!result.contains("categories") ||
+      result.value("categories").metaType().id() != QMetaType::QVariantList) {
+    log::error("category migration returned an invalid category inventory; it "
+               "remains pending");
+    return;
+  }
+
+  const QVariantList categories = result.value("categories").toList();
+  if (categories.isEmpty()) {
+    log::error("category migration returned an empty category inventory; it "
+               "remains pending");
+    return;
+  }
+  std::vector<CategoryFactory::NexusCategory> nexusCategories;
+  nexusCategories.reserve(categories.size());
+  std::set<int> seenCategoryIDs;
   for (const auto& category : categories) {
-    auto catMap = category.toMap();
-    std::vector<CategoryFactory::NexusCategory> nexusCat;
-    nexusCat.emplace_back(catMap["name"].toString(),
-                                                      catMap["category_id"].toInt());
-    catFactory.addCategory(catMap["name"].toString(), nexusCat, 0);
+    const auto catMap = category.toMap();
+    bool validID      = false;
+    const int id      = catMap.value("category_id").toInt(&validID);
+    const QString name = catMap.value("name").toString().trimmed();
+    if (!validID || !CategoryAssignmentPolicy::importedCategoryId(id) ||
+        !CategoryAssignmentPolicy::isSafeSerializedName(name) ||
+        !seenCategoryIDs.insert(id).second) {
+      log::error("category migration returned an invalid category entry; it "
+                 "remains pending");
+      return;
+    }
+    nexusCategories.emplace_back(name, id);
+  }
+
+  if (!m_CategoryFactory.replaceCategoriesFromNexus(nexusCategories,
+                                                     requestGeneration)) {
+    log::error("category migration could not be saved; it remains pending");
+    return;
+  }
+
+  auto& settings = m_OrganizerCore.settings();
+  settings.setCategoryMigrationCompleted(true);
+  if (hideReminder) {
+    GlobalSettings::setHideCategoryReminder(true);
+  }
+  if (settings.sync() != QSettings::NoError) {
+    log::error("category migration succeeded, but its completion marker could "
+               "not be written to '{}'",
+               settings.filename());
   }
 }
 
-void MainWindow::nxmRequestFailed(QString gameName, int modID, int, QVariant, int,
-                                  int errorCode, const QString& errorString)
+void MainWindow::nxmRequestFailed(QString gameName, int modID, int,
+                                  QVariant userData, int requestID, int errorCode,
+                                  const QString& errorString)
 {
+  if (SettingsMigration::isCategoryMigrationResponse(userData)) {
+    if (SettingsMigration::isExpectedCategoryMigrationResponse(
+            requestID, m_CategoryMigrationRequestId, userData)) {
+      m_CategoryMigrationRequestId = -1;
+      m_CategoryMigrationRequestGeneration = 0;
+      m_HideCategoryReminderAfterImport = false;
+      log::warn("category migration import failed and remains pending: {}",
+                errorString);
+    } else {
+      log::debug("ignored failure from stale category migration request {}",
+                 requestID);
+    }
+    return;
+  }
+
   if (errorCode == QNetworkReply::ContentAccessDenied ||
       errorCode == QNetworkReply::ContentNotFoundError ||
       errorCode == QNetworkReply::ServiceUnavailableError) {

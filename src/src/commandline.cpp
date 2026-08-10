@@ -5,6 +5,7 @@
 #include "messagedialog.h"
 #include "multiprocess.h"
 #include "organizercore.h"
+#include "settingsmigration.h"
 #include "shared/appconfig.h"
 #include "shared/util.h"
 #include <log.h>
@@ -974,6 +975,7 @@ std::optional<int> CreatePortableCommand::runEarly()
       ini.setValue("General/gamePath", QString::fromStdString(vm()["game-path"].as<std::string>()));
     }
     ini.setValue("General/portable", true);
+    SettingsMigration::markNewInstance(ini);
 
     ini.setValue("Settings/download_directory", "%BASE_DIR%/downloads");
     ini.setValue("Settings/mod_directory", "%BASE_DIR%/mods");
@@ -987,6 +989,10 @@ std::optional<int> CreatePortableCommand::runEarly()
       ini.setValue("fluorine/proton_path", QString::fromStdString(vm()["proton"].as<std::string>()));
     }
     ini.sync();
+    if (ini.status() != QSettings::NoError) {
+      std::cerr << "Error: failed to write ModOrganizer.ini\n";
+      return 1;
+    }
   }
 
   // Generate ModOrganizer.sh

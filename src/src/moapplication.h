@@ -67,6 +67,10 @@ public:
   //
   OrganizerCore& core();
 
+  // Completes setup-only settings writes for a terminal command-line run
+  // without recording migration completion markers.
+  bool finishCommandLineSetup();
+
   // wraps QApplication::notify() in a catch, reports errors and ignores them
   //
   bool notify(QObject* receiver, QEvent* event) override;
@@ -94,7 +98,9 @@ private:
   void externalMessage(const QString& message);
   void processPendingExternalLinks();
   static std::unique_ptr<Instance> getCurrentInstance(bool forceSelect);
-  static std::optional<int> setupInstanceLoop(Instance& currentInstance, PluginContainer& pc);
+  static std::optional<int> setupInstanceLoop(Instance& currentInstance,
+                                              PluginContainer& pc,
+                                              Settings& settings);
   static void purgeOldFiles();
 };
 

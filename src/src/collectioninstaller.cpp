@@ -4,6 +4,7 @@
 #include "instancemanager.h"
 #include "nexusinterface.h"
 #include "nxmaccessmanager.h"
+#include "settingsmigration.h"
 
 #include <QDir>
 #include <QDirIterator>
@@ -800,7 +801,7 @@ void CollectionInstaller::finalise()
     ini.setValue("General/gameName",         NexusCollections::gameNameForDomain(m_config.gameDomain));
     ini.setValue("General/selectedProfileName", "Default");
     ini.setValue("General/gamePath",         m_config.gamePath);
-    ini.setValue("General/firstStart",       false);
+    SettingsMigration::markNewInstance(ini);
 
     // [Paths]
     ini.setValue("Settings/mod_directory",
@@ -812,6 +813,10 @@ void CollectionInstaller::finalise()
                  m_config.instanceDir + "/overwrite");
 
     ini.sync();
+    if (ini.status() != QSettings::NoError) {
+      emit failed(QString("Failed to write instance settings at %1").arg(iniPath));
+      return;
+    }
   }
 
   // ── overwrite dir ────────────────────────────────────────────────────────

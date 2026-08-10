@@ -1512,8 +1512,9 @@ OrganizerCore::doInstall(const QString& archivePath, GuessedValue<QString> modNa
       CategoriesDialog dialog(qApp->activeWindow());
 
       if (dialog.exec() == QDialog::Accepted) {
-        dialog.commitChanges();
-        refresh();
+        if (dialog.commitChanges()) {
+          refresh();
+        }
       }
     } else {
       m_InstallationManager.notifyInstallationEnd(result, nullptr);

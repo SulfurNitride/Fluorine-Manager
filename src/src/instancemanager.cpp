@@ -143,8 +143,12 @@ bool Instance::isActive() const
 
 bool Instance::readFromIni()
 {
-  Settings s(iniPath());
+  Settings settings(iniPath());
+  return readFromIni(settings);
+}
 
+bool Instance::readFromIni(Settings& s)
+{
   if (s.iniStatus() != QSettings::NoError) {
     log::error("can't read ini {}", iniPath());
     return false;
@@ -177,11 +181,12 @@ bool Instance::readFromIni()
   return true;
 }
 
-Instance::SetupResults Instance::setup(PluginContainer& plugins)
+Instance::SetupResults Instance::setup(PluginContainer& plugins,
+                                       Settings& settings)
 {
   // read initial values from the ini
   log::debug("reading instance ini from '{}'", iniPath());
-  if (!readFromIni()) {
+  if (!readFromIni(settings)) {
     log::error("readFromIni() failed for '{}'", iniPath());
     return SetupResults::BadIni;
   }
@@ -206,7 +211,7 @@ Instance::SetupResults Instance::setup(PluginContainer& plugins)
 
   // update the ini in case anything was missing
   log::debug("updating ini");
-  updateIni();
+  updateIni(settings);
 
   // the game directory may be different than what the plugin detected, the user
   // can change it in the settings and might have multiple versions of the game
@@ -217,10 +222,8 @@ Instance::SetupResults Instance::setup(PluginContainer& plugins)
   return SetupResults::Okay;
 }
 
-void Instance::updateIni()
+void Instance::updateIni(Settings& s)
 {
-  Settings s(iniPath());
-
   if (s.iniStatus() != QSettings::NoError) {
     log::error("can't open ini {}", iniPath());
     return;
@@ -881,12 +884,13 @@ SetupInstanceResults selectVariant(Instance& instance, PluginContainer& pc)
   return SetupInstanceResults::TryAgain;
 }
 
-SetupInstanceResults setupInstance(Instance& instance, PluginContainer& pc)
+SetupInstanceResults setupInstance(Instance& instance, PluginContainer& pc,
+                                   Settings& settings)
 {
   // set up the instance
   log::debug("setupInstance() called for '{}', ini='{}'",
              instance.displayName(), instance.iniPath());
-  const auto setupResult = instance.setup(pc);
+  const auto setupResult = instance.setup(pc, settings);
   log::debug("instance.setup() returned {}", static_cast<int>(setupResult));
 
   switch (setupResult) {

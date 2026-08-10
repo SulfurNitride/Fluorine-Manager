@@ -19,6 +19,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "categoriesdialog.h"
 #include "categories.h"
+#include "categoryassignmentpolicy.h"
 #include "categoryimportdialog.h"
 #include "messagedialog.h"
 #include "nexusinterface.h"
@@ -34,14 +35,18 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 class NewIDValidator : public QIntValidator
 {
 public:
-  NewIDValidator(const std::set<int>& ids) : m_UsedIDs(ids) {}
+  NewIDValidator(const std::set<int>& ids, const int& durableHighWater)
+      : m_UsedIDs(ids), m_DurableHighWater(durableHighWater)
+  {}
   State validate(QString& input, int& pos) const override
   {
     State const intRes = QIntValidator::validate(input, pos);
     if (intRes == Acceptable) {
       bool ok = false;
       int const id  = input.toInt(&ok);
-      if (m_UsedIDs.contains(id)) {
+      if (m_UsedIDs.contains(id) ||
+          !CategoryAssignmentPolicy::mayAssignCategoryId(
+              m_DurableHighWater, id, std::nullopt)) {
         return QValidator::Intermediate;
       }
     }
@@ -50,6 +55,7 @@ public:
 
 private:
   const std::set<int>& m_UsedIDs;
+  const int& m_DurableHighWater;
 };
 
 class ExistingIDValidator : public QIntValidator
@@ -142,14 +148,42 @@ int CategoriesDialog::exec()
 void CategoriesDialog::cellChanged(int row, int)
 {
   int const currentID = ui->categoriesTable->item(row, 0)->text().toInt();
-  if (currentID > m_HighestID) {
+  if (currentID > m_HighestID &&
+      currentID < CategoryAssignmentPolicy::ImportedCategoryIdBase) {
     m_HighestID = currentID;
   }
+  m_IDs.insert(currentID);
 }
 
-void CategoriesDialog::commitChanges()
+bool CategoriesDialog::commitChanges()
 {
   CategoryFactory& categories = CategoryFactory::instance();
+  const int durableHighWater =
+      Settings::instance().categoryLocalIdHighWater();
+  for (int row = 0; row < ui->categoriesTable->rowCount(); ++row) {
+    const auto* idItem = ui->categoriesTable->item(row, 0);
+    bool originalOk    = false;
+    const int original = idItem->data(Qt::UserRole).toInt(&originalOk);
+    const int requested = idItem->text().toInt();
+    if (!CategoryAssignmentPolicy::mayAssignCategoryId(
+            durableHighWater, requested,
+            originalOk ? std::optional<int>(original) : std::nullopt)) {
+      MessageDialog::showMessage(
+          tr("Category ID %1 is retired or reserved and cannot be reused.")
+              .arg(requested),
+          this);
+      return false;
+    }
+  }
+  if (!Settings::instance().advanceCategoryLocalIdHighWater(m_HighestID)) {
+    MessageDialog::showMessage(
+        tr("Category IDs could not be reserved. The changes were not saved."),
+        this);
+    return false;
+  }
+  const auto previousCategories = categories.m_Categories;
+  const auto previousNexusMap   = categories.m_NexusMap;
+  const auto previousIDMap      = categories.m_IDMap;
   categories.reset();
 
   for (int i = 0; i < ui->categoriesTable->rowCount(); ++i) {
@@ -179,15 +213,46 @@ void CategoriesDialog::commitChanges()
 
   categories.setNexusCategories(nexusCats);
 
-  categories.saveCategories();
+  if (categories.saveCategories()) {
+    return true;
+  }
+
+  categories.m_Categories = previousCategories;
+  categories.m_NexusMap   = previousNexusMap;
+  categories.m_IDMap      = previousIDMap;
+  return false;
+}
+
+std::optional<int> CategoriesDialog::allocateCategoryID()
+{
+  const auto id = CategoryAssignmentPolicy::nextLocalCategoryId(
+      std::max(m_HighestID,
+               Settings::instance().categoryLocalIdHighWater()),
+      m_IDs);
+  if (!id) {
+    MessageDialog::showMessage(
+        tr("No category IDs remain in the local category namespace."), this);
+    return std::nullopt;
+  }
+  if (!Settings::instance().advanceCategoryLocalIdHighWater(*id)) {
+    MessageDialog::showMessage(
+        tr("The new category ID could not be saved. No category was added."),
+        this);
+    return std::nullopt;
+  }
+  m_HighestID = *id;
+  m_IDs.insert(*id);
+  return id;
 }
 
 void CategoriesDialog::refreshIDs()
 {
-  m_HighestID = 0;
+  m_HighestID = Settings::instance().categoryLocalIdHighWater();
+  m_IDs.clear();
   for (int i = 0; i < ui->categoriesTable->rowCount(); ++i) {
     int const id = ui->categoriesTable->item(i, 0)->text().toInt();
-    if (id > m_HighestID) {
+    if (id > m_HighestID &&
+        id < CategoryAssignmentPolicy::ImportedCategoryIdBase) {
       m_HighestID = id;
     }
     m_IDs.insert(id);
@@ -207,7 +272,8 @@ void CategoriesDialog::fillTable()
   table->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
   table->verticalHeader()->setVisible(false);
   table->setItemDelegateForColumn(
-      0, new ValidatingDelegate(this, new NewIDValidator(m_IDs)));
+      0, new ValidatingDelegate(
+             this, new NewIDValidator(m_IDs, m_HighestID)));
   table->setItemDelegateForColumn(
       2, new ValidatingDelegate(this, new ExistingIDValidator(m_IDs)));
   table->setItemDelegateForColumn(
@@ -226,6 +292,7 @@ void CategoriesDialog::fillTable()
 
     auto idItem = std::make_unique<QTableWidgetItem>();
     idItem->setData(Qt::DisplayRole, category.ID());
+    idItem->setData(Qt::UserRole, category.ID());
 
     auto nameItem = std::make_unique<QTableWidgetItem>(category.name());
     auto parentIDItem = std::make_unique<QTableWidgetItem>();
@@ -265,12 +332,17 @@ void CategoriesDialog::fillTable()
 
 void CategoriesDialog::addCategory_clicked()
 {
+  const auto categoryID = allocateCategoryID();
+  if (!categoryID) {
+    return;
+  }
   int const row = m_ContextRow >= 0 ? m_ContextRow : 0;
   ui->categoriesTable->setSortingEnabled(false);
   ui->categoriesTable->insertRow(row);
 
   auto idItem = std::make_unique<QTableWidgetItem>();
-  idItem->setData(Qt::DisplayRole, ++m_HighestID);
+  idItem->setData(Qt::DisplayRole, *categoryID);
+  idItem->setData(Qt::UserRole, *categoryID);
   auto parentIDItem = std::make_unique<QTableWidgetItem>();
   parentIDItem->setData(Qt::DisplayRole, 0);
 
@@ -326,11 +398,16 @@ void CategoriesDialog::nexusImport_clicked()
       auto nexusCatItem = std::make_unique<QTableWidgetItem>(nexusLabel.join(", "));
       nexusCatItem->setData(Qt::UserRole, nexusData);
       if (table->findItems(name, Qt::MatchExactly).empty()) {
+        const auto categoryID = allocateCategoryID();
+        if (!categoryID) {
+          break;
+        }
         row = table->rowCount();
         table->insertRow(table->rowCount());
 
         auto idItem = std::make_unique<QTableWidgetItem>();
-        idItem->setData(Qt::DisplayRole, ++m_HighestID);
+        idItem->setData(Qt::DisplayRole, *categoryID);
+        idItem->setData(Qt::UserRole, *categoryID);
 
         auto nameItem = std::make_unique<QTableWidgetItem>(name);
         auto parentIDItem = std::make_unique<QTableWidgetItem>();
