@@ -32,6 +32,7 @@
 #include "modlist.h"
 #include "moshortcut.h"
 #include "pluginlist.h"
+#include "pluginrefreshcoalescing.h"
 #include "processrunner.h"
 #include "selfupdater.h"
 #include "settings.h"
@@ -46,6 +47,7 @@ class GameFeatures;
 class PluginContainer;
 class DirectoryRefresher;
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -587,6 +589,7 @@ private:
 
   ModList m_ModList;
   PluginList m_PluginList;
+  PluginRefreshCoalescing m_PluginRefreshCoalescing;
 
   QList<std::function<void()>> m_PostLoginTasks;
 

@@ -39,6 +39,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <utility>
 
 #include <esptk/espfile.h>
+#include <uibase/game_features/pluginlistlifecycle.h>
 #include <uibase/iplugingame.h>
 #include <uibase/report.h>
 #include <uibase/safewritefile.h>
@@ -224,6 +225,32 @@ void PluginList::refresh(const QString& profileName,
   QStringList primaryPlugins = m_GamePlugin->primaryPlugins();
   QStringList enabledPlugins = m_GamePlugin->enabledPlugins();
   auto gamePlugins           = m_Organizer.gameFeatures().gameFeature<GamePlugins>();
+  auto pluginListLifecycle =
+      m_Organizer.gameFeatures().gameFeature<PluginListLifecycle>();
+  bool lifecycleStarted = false;
+  if (pluginListLifecycle) {
+    try {
+      pluginListLifecycle->refreshStarted();
+      lifecycleStarted = true;
+    } catch (const std::exception& e) {
+      log::error("Plugin-list lifecycle start failed: {}", e.what());
+    } catch (...) {
+      log::error("Plugin-list lifecycle start failed with an unknown error");
+    }
+  }
+  auto lifecycleFailure = MakeGuard([&] {
+    if (!lifecycleStarted) {
+      return;
+    }
+    try {
+      pluginListLifecycle->refreshFailed();
+    } catch (const std::exception& e) {
+      log::error("Plugin-list lifecycle failure callback failed: {}", e.what());
+    } catch (...) {
+      log::error(
+          "Plugin-list lifecycle failure callback failed with an unknown error");
+    }
+  });
   const bool lightPluginsAreSupported =
       gamePlugins ? gamePlugins->lightPluginsAreSupported() : false;
   const bool mediumPluginsAreSupported =
@@ -422,6 +449,16 @@ void PluginList::refresh(const QString& profileName,
                    this->index(static_cast<int>(m_ESPs.size()), columnCount()));
 
   m_Refreshed();
+  lifecycleFailure.Dismiss();
+  if (lifecycleStarted) {
+    try {
+      pluginListLifecycle->refreshCompleted();
+    } catch (const std::exception& e) {
+      log::error("Plugin-list lifecycle completion failed: {}", e.what());
+    } catch (...) {
+      log::error("Plugin-list lifecycle completion failed with an unknown error");
+    }
+  }
 }
 
 void PluginList::fixPrimaryPlugins()

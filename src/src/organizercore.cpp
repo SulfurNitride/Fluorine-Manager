@@ -43,6 +43,7 @@
 #include <questionboxmemory.h>
 #include <uibase/game_features/dataarchives.h>
 #include <uibase/game_features/localsavegames.h>
+#include <uibase/game_features/pluginlistlifecycle.h>
 #include <uibase/game_features/scriptextender.h>
 #include <uibase/registry.h>
 #include <uibase/report.h>
@@ -2006,15 +2007,21 @@ void OrganizerCore::refreshESPList(bool force)
   onNextRefresh(
       [this, force] {
         TimeThis const tt("OrganizerCore::refreshESPList()");
+        const auto refreshAttempt = m_PluginRefreshCoalescing.begin(force);
 
-        m_CurrentProfile->writeModlist();
-
-        // clear list
         try {
+          m_CurrentProfile->writeModlist();
+
+          // clear list
           m_PluginList.refresh(m_CurrentProfile->name(), *m_DirectoryStructure,
                                m_CurrentProfile->getLockedOrderFileName(), force);
+          m_PluginRefreshCoalescing.complete(refreshAttempt, true);
         } catch (const std::exception& e) {
+          m_PluginRefreshCoalescing.complete(refreshAttempt, false);
           reportError(tr("Failed to refresh list of esps: %1").arg(e.what()));
+        } catch (...) {
+          m_PluginRefreshCoalescing.complete(refreshAttempt, false);
+          reportError(tr("Failed to refresh list of esps: unknown error"));
         }
       },
       RefreshCallbackGroup::CORE, RefreshCallbackMode::RUN_NOW_IF_POSSIBLE);
@@ -2354,12 +2361,33 @@ void OrganizerCore::onDirectoryRefreshed()
   m_DirectoryUpdate = false;
 
   log::debug("running post refresh tasks");
+  const auto pluginRefreshesBeforeCallbacks =
+      m_PluginRefreshCoalescing.snapshot();
   m_OnNextRefreshCallbacks();
   m_OnNextRefreshCallbacks.disconnect_all_slots();
 
   if (m_CurrentProfile != nullptr) {
-    log::debug("refreshing lists");
-    refreshLists();
+    if (!m_PluginRefreshCoalescing.canSkipFallbackSince(
+            pluginRefreshesBeforeCallbacks)) {
+      log::debug("refreshing lists");
+      refreshLists();
+    } else {
+      // A queued refreshESPList() already succeeded against this new
+      // directory structure. Persist any save queued after that refresh before
+      // reporting directoryStructureReady.
+      if (auto lifecycle = gameFeatures().gameFeature<PluginListLifecycle>()) {
+        try {
+          lifecycle->flushPendingWrites(managedGameOrganizer()->pluginList());
+        } catch (const std::exception& e) {
+          reportError(
+              tr("Failed to flush pending plugin-list writes: %1").arg(e.what()));
+        }
+      }
+      if (m_DirectoryStructure->isPopulated()) {
+        log::debug("plugin list already refreshed; refreshing archives");
+        refreshBSAList();
+      }
+    }
   }
 
   emit directoryStructureReady();

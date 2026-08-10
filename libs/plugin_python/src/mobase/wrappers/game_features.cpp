@@ -14,6 +14,7 @@
 #include <uibase/game_features/localsavegames.h>
 #include <uibase/game_features/moddatachecker.h>
 #include <uibase/game_features/moddatacontent.h>
+#include <uibase/game_features/pluginlistlifecycle.h>
 #include <uibase/game_features/savegameinfo.h>
 #include <uibase/game_features/scriptextender.h>
 #include <uibase/game_features/unmanagedmods.h>
@@ -98,6 +99,27 @@ namespace mo2::python {
         bool blueprintPluginsAreSupported() override
         {
             PYBIND11_OVERRIDE(bool, GamePlugins, blueprintPluginsAreSupported, );
+        }
+    };
+
+    class PyPluginListLifecycle : public PluginListLifecycle {
+    public:
+        void refreshStarted() override
+        {
+            PYBIND11_OVERRIDE_PURE(void, PluginListLifecycle, refreshStarted, );
+        }
+        void refreshCompleted() override
+        {
+            PYBIND11_OVERRIDE_PURE(void, PluginListLifecycle, refreshCompleted, );
+        }
+        void refreshFailed() override
+        {
+            PYBIND11_OVERRIDE_PURE(void, PluginListLifecycle, refreshFailed, );
+        }
+        void flushPendingWrites(IPluginList* pluginList) override
+        {
+            PYBIND11_OVERRIDE_PURE(void, PluginListLifecycle, flushPendingWrites,
+                                   pluginList);
         }
     };
 
@@ -266,6 +288,17 @@ namespace mo2::python {
             .def("mediumPluginsAreSupported", &GamePlugins::mediumPluginsAreSupported)
             .def("blueprintPluginsAreSupported",
                  &GamePlugins::blueprintPluginsAreSupported);
+
+        // PluginListLifecycle
+
+        py::class_<PluginListLifecycle, GameFeature, PyPluginListLifecycle,
+                   std::shared_ptr<PluginListLifecycle>>(m, "PluginListLifecycle")
+            .def(py::init<>())
+            .def("refreshStarted", &PluginListLifecycle::refreshStarted)
+            .def("refreshCompleted", &PluginListLifecycle::refreshCompleted)
+            .def("refreshFailed", &PluginListLifecycle::refreshFailed)
+            .def("flushPendingWrites", &PluginListLifecycle::flushPendingWrites,
+                 "plugin_list"_a);
 
         // LocalSavegames
 

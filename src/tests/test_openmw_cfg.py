@@ -1061,7 +1061,23 @@ class OpenMWConfigTests(unittest.TestCase):
                 "z.esp",
             ],
         )
-        self.assertTrue(result["alias_diagnostics"])
+        self.assertEqual(len(result["alias_diagnostics"]), 2)
+        self.assertEqual(len(result["ignored_alias_diagnostics"]), 1)
+        self.assertEqual(
+            result["ignored_alias_identities"], ["native.omwaddon"]
+        )
+        self.assertEqual(result["ignored_alias_counts"], {"omwaddon": 1})
+        self.assertEqual(len(result["wrapper_only_alias_diagnostics"]), 1)
+        self.assertIn(
+            "Only.omwscripts.esp",
+            result["wrapper_only_alias_diagnostics"][0],
+        )
+        self.assertEqual(
+            result["wrapper_only_alias_identities"], ["only.omwscripts"]
+        )
+        self.assertEqual(
+            result["wrapper_only_alias_counts"], {"omwscripts": 1}
+        )
         self.assertTrue(result["duplicate_diagnostics"])
         self.assertEqual(
             result["active_plugins"],

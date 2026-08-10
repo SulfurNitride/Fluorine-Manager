@@ -99,6 +99,26 @@ target_link_libraries(test_plugincompatibility PRIVATE
 add_test(NAME test_plugincompatibility COMMAND test_plugincompatibility)
 
 # ---------------------------------------------------------------------------
+# Directory-refresh plugin-list coalescing tests
+# ---------------------------------------------------------------------------
+add_executable(test_pluginrefreshcoalescing EXCLUDE_FROM_ALL
+    test_pluginrefreshcoalescing.cpp
+)
+set_target_properties(test_pluginrefreshcoalescing PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_pluginrefreshcoalescing PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_pluginrefreshcoalescing PRIVATE
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_pluginrefreshcoalescing COMMAND test_pluginrefreshcoalescing)
+
+# ---------------------------------------------------------------------------
 # Per-instance FUSE/USVFS selection and Wine launch-request serialization
 # ---------------------------------------------------------------------------
 add_executable(test_vfs_backend EXCLUDE_FROM_ALL
@@ -416,7 +436,8 @@ set_tests_properties(test_python_module_switch PROPERTIES
 # Register a "fluorine-tests" umbrella target that builds every test exe.
 add_custom_target(fluorine-tests
     DEPENDS test_esptk_tes3 test_bsatk_extraction
-            test_plugincompatibility test_metainiutils
+            test_plugincompatibility test_pluginrefreshcoalescing
+            test_metainiutils
             test_vfs_backend
             test_fluorineconfigownership
             test_heroicjson test_protondetection

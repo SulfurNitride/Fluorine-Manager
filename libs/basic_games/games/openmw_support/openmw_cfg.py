@@ -141,6 +141,12 @@ class PluginInventoryReconciliation(TypedDict):
     newly_discovered: list[str]
     insertion_positions: dict[str, int]
     alias_diagnostics: list[str]
+    ignored_alias_diagnostics: list[str]
+    ignored_alias_identities: list[str]
+    ignored_alias_counts: dict[str, int]
+    wrapper_only_alias_diagnostics: list[str]
+    wrapper_only_alias_identities: list[str]
+    wrapper_only_alias_counts: dict[str, int]
     duplicate_diagnostics: list[str]
 
 
@@ -523,7 +529,9 @@ def _unique_names(*groups: Iterable[str]) -> list[str]:
 
 def collapse_file_providers(available: Iterable[str]) -> list[str]:
     """Retain the highest-priority usable provider for each logical identity."""
-    native_order, providers, _, _, _ = _inventory_providers(available)
+    native_order, providers, _, _, _, _, _, _, _, _ = _inventory_providers(
+        available
+    )
     return [providers[key] for key in native_order]
 
 
@@ -719,11 +727,28 @@ def validate_selection_state(state: object) -> OpenMWSelectionState:
 
 def _inventory_providers(
     rows: Iterable[str],
-) -> tuple[list[str], dict[str, str], dict[str, str], list[str], list[str]]:
+) -> tuple[
+    list[str],
+    dict[str, str],
+    dict[str, str],
+    list[str],
+    list[str],
+    dict[str, int],
+    list[str],
+    list[str],
+    dict[str, int],
+    list[str],
+]:
     native_order: list[str] = []
     providers: dict[str, str] = {}
     wrappers: dict[str, str] = {}
-    aliases: list[str] = []
+    wrapper_filenames: dict[str, str] = {}
+    ignored_aliases: list[str] = []
+    ignored_alias_identities: list[str] = []
+    ignored_alias_counts: dict[str, int] = {}
+    wrapper_only_aliases: list[str] = []
+    wrapper_only_alias_identities: list[str] = []
+    wrapper_only_alias_counts: dict[str, int] = {}
     duplicates: list[str] = []
     for raw in rows:
         name = raw.strip()
@@ -733,6 +758,7 @@ def _inventory_providers(
         folded = logical.casefold()
         if is_openmw_player_stub(name):
             wrappers[folded] = logical
+            wrapper_filenames[folded] = name
             continue
         if folded in providers:
             duplicates.append(
@@ -743,15 +769,41 @@ def _inventory_providers(
         providers[folded] = name
         native_order.append(folded)
     for folded, wrapper in wrappers.items():
+        alias_filename = wrapper_filenames[folded]
+        suffix = next(
+            suffix
+            for suffix in _OPENMW_NATIVE_SUFFIXES
+            if folded.endswith(suffix)
+        )
+        kind = suffix.removeprefix(".")
         if folded in providers:
-            aliases.append(
-                f"Ignored wrapper alias {wrapper + '.esp'!r} for {providers[folded]!r}"
+            ignored_alias_identities.append(folded)
+            ignored_aliases.append(
+                f"Ignored wrapper alias {alias_filename!r} for "
+                f"{providers[folded]!r}"
             )
+            ignored_alias_counts[kind] = ignored_alias_counts.get(kind, 0) + 1
         else:
-            aliases.append(
-                f"Wrapper-only identity {wrapper!r} is known but unavailable"
+            wrapper_only_alias_identities.append(folded)
+            wrapper_only_aliases.append(
+                f"Wrapper-only alias {alias_filename!r} for identity "
+                f"{wrapper!r} is known but unavailable"
             )
-    return native_order, providers, wrappers, aliases, duplicates
+            wrapper_only_alias_counts[kind] = (
+                wrapper_only_alias_counts.get(kind, 0) + 1
+            )
+    return (
+        native_order,
+        providers,
+        wrappers,
+        ignored_aliases,
+        ignored_alias_identities,
+        dict(sorted(ignored_alias_counts.items())),
+        wrapper_only_aliases,
+        wrapper_only_alias_identities,
+        dict(sorted(wrapper_only_alias_counts.items())),
+        duplicates,
+    )
 
 
 def reconcile_plugin_inventory(
@@ -762,7 +814,18 @@ def reconcile_plugin_inventory(
     """Purely reconcile canonical state with the current physical inventory."""
     validate_selection_state(state)
     candidate = _copy_v3_state(state)
-    _, providers, wrappers, aliases, duplicates = _inventory_providers(
+    (
+        _,
+        providers,
+        wrappers,
+        ignored_aliases,
+        ignored_alias_identities,
+        ignored_alias_counts,
+        wrapper_only_aliases,
+        wrapper_only_alias_identities,
+        wrapper_only_alias_counts,
+        duplicates,
+    ) = _inventory_providers(
         available_plugins
     )
     primary = _canonical_plugin_names(primary_plugins)
@@ -827,7 +890,13 @@ def reconcile_plugin_inventory(
         ],
         "newly_discovered": [order_by_key[key] for key in new_keys],
         "insertion_positions": insertion_positions,
-        "alias_diagnostics": aliases,
+        "alias_diagnostics": [*ignored_aliases, *wrapper_only_aliases],
+        "ignored_alias_diagnostics": ignored_aliases,
+        "ignored_alias_identities": ignored_alias_identities,
+        "ignored_alias_counts": ignored_alias_counts,
+        "wrapper_only_alias_diagnostics": wrapper_only_aliases,
+        "wrapper_only_alias_identities": wrapper_only_alias_identities,
+        "wrapper_only_alias_counts": wrapper_only_alias_counts,
         "duplicate_diagnostics": duplicates,
     }
 
@@ -1035,7 +1104,9 @@ def migrate_selection_state(
         content = legacy_plugins
         content_source = "plugins.txt"
     else:
-        _, providers, wrappers, _, _ = _inventory_providers(available_plugins)
+        _, providers, wrappers, _, _, _, _, _, _, _ = _inventory_providers(
+            available_plugins
+        )
         content = _canonical_plugin_names(
             primary_plugins, providers.values(), wrappers.values()
         )
@@ -1073,7 +1144,9 @@ def migrate_selection_state(
         base_order = []
         order_source = "inventory"
 
-    _, providers, wrappers, _, _ = _inventory_providers(available_plugins)
+    _, providers, wrappers, _, _, _, _, _, _, _ = _inventory_providers(
+        available_plugins
+    )
     inventory = sorted(
         _canonical_plugin_names(providers.values(), wrappers.values()),
         key=lambda name: (name.casefold(), name),

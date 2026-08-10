@@ -20,6 +20,7 @@ class GamePlugins;
 class LocalSavegames;
 class ModDataChecker;
 class ModDataContent;
+class PluginListLifecycle;
 class SaveGameInfo;
 class ScriptExtender;
 class UnmanagedMods;
@@ -31,7 +32,7 @@ namespace details
   using BaseGameFeaturesP =
       std::tuple<BSAInvalidation*, DataArchives*, GamePlugins*, LocalSavegames*,
                  ModDataChecker*, ModDataContent*, SaveGameInfo*, ScriptExtender*,
-                 UnmanagedMods*>;
+                 UnmanagedMods*, PluginListLifecycle*>;
 
 }  // namespace details
 
