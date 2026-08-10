@@ -22,7 +22,9 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "env.h"
 #include "envmodule.h"
 #include "fluorineconfig.h"
+#include "processlifetime.h"
 #include "protonlauncher.h"
+#include "rootprocesscompletion.h"
 #include "settings.h"
 #include "shared/appconfig.h"
 #include "vfsbackend.h"
@@ -391,7 +393,8 @@ QString resolveProtonPath()
       {"Settings/proton_path", "Proton/path", "fluorine/proton_path"});
 }
 
-int spawn(const SpawnParameters& sp, pid_t& processId)
+int spawn(const SpawnParameters& sp,
+          process_lifetime::LaunchReceipt& receipt)
 {
   const QString bin = MOBase::normalizePathForHost(sp.binary.absoluteFilePath());
   QString cwd       = MOBase::normalizePathForHost(sp.currentDirectory.absolutePath());
@@ -414,6 +417,12 @@ int spawn(const SpawnParameters& sp, pid_t& processId)
       .setWorkingDir(cwd)
       .setGameDirectory(MOBase::normalizePathForHost(sp.gameDirectory.absolutePath()))
       .setSteamAppId(steamAppId);
+
+  if (!sp.lifetimeToken.isEmpty()) {
+    launcher.addEnvVar(
+        QString::fromLatin1(process_lifetime::LaunchTokenEnvironment),
+        sp.lifetimeToken);
+  }
 
   if (sp.useProton) {
     // Read per-instance settings from the instance INI (not the global QSettings).
@@ -498,12 +507,10 @@ int spawn(const SpawnParameters& sp, pid_t& processId)
 
   launcher.setUseTerminal(sp.useTerminal);
 
-  const auto [ok, pid] = launcher.launch();
-  if (!ok) {
+  receipt = launcher.launch();
+  if (!receipt) {
     return (errno != 0 ? errno : EIO);
   }
-
-  processId = static_cast<pid_t>(pid);
   return 0;
 }
 
@@ -578,8 +585,8 @@ bool startSteam(QWidget* parent)
   SpawnParameters sp;
   sp.binary = QFileInfo(steamPath);
 
-  pid_t pid    = -1;
-  const auto e = spawn(sp, pid);
+  process_lifetime::LaunchReceipt receipt;
+  const auto e = spawn(sp, receipt);
 
   if (e != 0) {
     log::error("failed to start steam");
@@ -674,10 +681,11 @@ bool checkBlacklist(QWidget* parent, const SpawnParameters& sp, Settings& settin
   }
 }
 
-pid_t startBinary(QWidget* parent, const SpawnParameters& sp)
+process_lifetime::LaunchReceipt startBinary(QWidget* parent,
+                                            const SpawnParameters& sp)
 {
-  pid_t pid    = -1;
-  const auto e = spawn::spawn(sp, pid);
+  process_lifetime::LaunchReceipt receipt;
+  const auto e = spawn::spawn(sp, receipt);
 
   if (e != 0) {
     if (e == ENOENT && sp.useProton && !FluorineConfig::isSetup()) {
@@ -693,10 +701,10 @@ pid_t startBinary(QWidget* parent, const SpawnParameters& sp)
     } else {
       dialogs::spawnFailed(parent, sp, e);
     }
-    return -1;
+    return {};
   }
 
-  return pid;
+  return receipt;
 }
 
 QString findJavaInstallation(const QString& jarFile)

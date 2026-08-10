@@ -7,6 +7,7 @@
 #include <QIODevice>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSaveFile>
 #include <QStandardPaths>
 #include <QThread>
 #include <uibase/log.h>
@@ -81,15 +82,13 @@ bool FluorineConfig::save() const
   obj.insert("proton_path", proton_path);
   obj.insert("created", created);
 
-  QFile f(path);
-  if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+  QSaveFile f(path);
+  if (!f.open(QIODevice::WriteOnly)) {
     return false;
   }
 
-  const qint64 written = f.write(QJsonDocument(obj).toJson(QJsonDocument::Indented));
-  f.close();
-
-  return written >= 0;
+  const QByteArray payload = QJsonDocument(obj).toJson(QJsonDocument::Indented);
+  return f.write(payload) == payload.size() && f.commit();
 }
 
 void FluorineConfig::deleteConfig() 

@@ -79,6 +79,9 @@ public:
 
   void setExitNeeded(ExitFlags e);
   ExitFlags exitNeeded() const;
+  void reportUpdateFailure(const QString& detail);
+  bool updatesSucceeded() const;
+  QString updateFailureDetail() const;
 
   // Pre-select a tab by its visible label (e.g. "Updates"). Must be called
   // before exec(); any saved tab index is overridden.
@@ -96,6 +99,7 @@ private:
   ExitFlags m_exit;
   PluginContainer* m_pluginContainer;
   int m_pendingTabOverride = -1;
+  QString m_updateFailureDetail;
 };
 
 #endif  // SETTINGSDIALOG_H

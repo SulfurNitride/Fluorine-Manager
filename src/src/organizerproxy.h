@@ -1,22 +1,45 @@
 #ifndef ORGANIZERPROXY_H
 #define ORGANIZERPROXY_H
 
+#include <atomic>
+#include <functional>
 #include <memory>
+#include <mutex>
+#include <utility>
 
 #include <imoinfo.h>
 #include <iplugin.h>
 
+#include "applicationrunnerregistry.h"
 #include "organizercore.h"
+#include "plugincallgate.h"
 
 class GameFeaturesProxy;
+class ApplicationCompletion;
 class PluginContainer;
 class DownloadManagerProxy;
 class ExecutablesListProxy;
 class ModListProxy;
 class PluginListProxy;
 
-class OrganizerProxy : public MOBase::IOrganizer
+/**
+ * Shared, fail-closed access to the OrganizerCore mutation barrier.
+ *
+ * Plugin-created helper objects can outlive OrganizerProxy. Keeping this state
+ * separate from the proxy lets those objects reject work after proxy destruction
+ * without retaining a raw OrganizerProxy pointer.
+ */
+class OrganizerProxyMutationGate : public PluginCallGate
 {
+public:
+  using PluginCallGate::PluginCallGate;
+};
+
+class OrganizerProxy : public MOBase::IOrganizer,
+                       public MOBase::IOrganizerApplicationHandles
+{
+  Q_OBJECT
+  Q_INTERFACES(MOBase::IOrganizerApplicationHandles)
 
 public:
   OrganizerProxy(OrganizerCore* organizer, PluginContainer* pluginContainer,
@@ -28,6 +51,23 @@ public:
    * @return the plugin corresponding to this proxy.
    */
   MOBase::IPlugin* plugin() const { return m_Plugin; }
+
+  template <typename Mutation>
+  bool runMutationIfAllowed(Mutation&& mutation) const
+  {
+    return m_MutationGate->runIfAllowed(std::forward<Mutation>(mutation));
+  }
+
+  std::shared_ptr<OrganizerProxyMutationGate> mutationGate() const
+  {
+    return m_MutationGate;
+  }
+
+  template <typename Callback>
+  bool runPluginCallIfAllowed(Callback&& callback) const
+  {
+    return m_MutationGate->runIfAllowed(std::forward<Callback>(callback));
+  }
 
 public:  // IOrganizer interface
   MOBase::IModRepositoryBridge* createNexusBridge() const override;
@@ -85,6 +125,7 @@ public:  // IOrganizer interface
                           bool ignoreCustomOverwrite           = false) override;
   bool waitForApplication(HANDLE handle, bool refresh = true,
                           LPDWORD exitCode = nullptr) const override;
+  bool releaseApplicationHandle(HANDLE handle) override;
   void refresh(bool saveChanges) override;
 
   bool onAboutToRun(const std::function<bool(const QString&)>& func) override;
@@ -141,11 +182,23 @@ protected:
    */
   void disconnectSignals();
 
+  bool retainConnection(boost::signals2::connection connection);
+
 private:
+  using ApplicationRegistry =
+      ApplicationRunnerRegistry<std::shared_ptr<ApplicationCompletion>>;
+
+  void pruneApplicationHandles() const;
+  bool waitForApplicationImpl(HANDLE handle, bool refresh,
+                              LPDWORD exitCode) const;
+  bool releaseApplicationHandleImpl(HANDLE handle);
+
   OrganizerCore* m_Proxied;
   PluginContainer* m_PluginContainer;
 
   MOBase::IPlugin* m_Plugin;
+
+  std::shared_ptr<OrganizerProxyMutationGate> m_MutationGate;
 
   OrganizerCore::SignalAboutToRunApplication m_AboutToRun;
   OrganizerCore::SignalFinishedRunApplication m_FinishedRun;
@@ -158,7 +211,15 @@ private:
   OrganizerCore::SignalPluginEnabled m_PluginEnabled;
   OrganizerCore::SignalPluginEnabled m_PluginDisabled;
 
+  std::mutex m_ConnectionsMutex;
+  bool m_ConnectionsClosed{false};
   std::vector<boost::signals2::connection> m_Connections;
+
+  // Lifetime tracking and launch-owned cleanup proceed independently of the
+  // optional public wait. Running states are retained; completed states use a
+  // bounded grace cache and may also be explicitly released.
+  mutable std::shared_ptr<ApplicationRegistry> m_ApplicationRunners =
+      std::make_shared<ApplicationRegistry>();
 
   std::unique_ptr<DownloadManagerProxy> m_DownloadManagerProxy;
   std::unique_ptr<ModListProxy> m_ModListProxy;

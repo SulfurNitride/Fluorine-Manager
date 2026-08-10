@@ -6,7 +6,11 @@
 #include <QString>
 #include <QStringList>
 #include <cstdint>
-#include <utility>
+
+namespace process_lifetime
+{
+struct LaunchReceipt;
+}
 
 class ProtonLauncher
 {
@@ -41,11 +45,11 @@ public:
   static bool unprivilegedBindMountSupported();
 
   // Launch dispatch: Proton -> Direct
-  std::pair<bool, qint64> launch() const;
+  process_lifetime::LaunchReceipt launch() const;
 
 private:
-  bool launchWithProton(qint64& pid) const;
-  bool launchDirect(qint64& pid) const;
+  bool launchWithProton(process_lifetime::LaunchReceipt& receipt) const;
+  bool launchDirect(process_lifetime::LaunchReceipt& receipt) const;
   static bool ensureSteamRunning();
 
   QString m_binary;

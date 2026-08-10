@@ -4,13 +4,16 @@
 #include "messagedialog.h"
 #include "modelutils.h"
 #include "organizercore.h"
+#include "profile.h"
 #include "settings.h"
 #include "ui_mainwindow.h"
 #include <log.h>
 #include <report.h>
+#include <uibase/scopeguard.h>
 
 #include <QMessageBox>
 #include <QSettings>
+#include <QUuid>
 #include <utility.h>
 
 using namespace MOShared;
@@ -149,57 +152,95 @@ void DataTab::onRefresh()
 void DataTab::onBrowseVFS()
 {
   QString const dataPath = m_core.managedGame()->dataDirectory().absolutePath();
-
-  // Mount the FUSE VFS so the file manager sees the merged mod files.
-  log::info("Mounting VFS for Browse...");
-  m_core.prepareVFS();
-
-  // Open the game data folder in the system file manager.
-  shell::Explore(dataPath);
-
-  // Show a modal dialog that keeps the VFS mounted.  When the user
-  // closes it, we unmount.
-  QMessageBox box(QMessageBox::Information,
-                  QObject::tr("Browse VFS"),
-                  QObject::tr("The virtual filesystem is mounted.\n\n"
-                              "The game Data folder has been opened in your "
-                              "file manager.  You can browse the merged mod "
-                              "files as the game would see them.\n\n"
-                              "Close this dialog to unmount the VFS."),
-                  QMessageBox::Close, m_parent);
-  box.setWindowModality(Qt::WindowModal);
-  box.exec();
-
-  log::info("Unmounting VFS after Browse...");
-  m_core.unmountVFS();
+  browseVfsSession(
+      dataPath, QObject::tr("Browse VFS"),
+      QObject::tr("The virtual filesystem is mounted.\n\n"
+                  "The game Data folder has been opened in your file manager. "
+                  "You can browse the merged mod files as the game would see "
+                  "them.\n\nClose this dialog to unmount the VFS."));
 }
 
 void DataTab::onBrowseRootBuilder()
 {
   QString const gameRoot = m_core.managedGame()->gameDirectory().absolutePath();
+  browseVfsSession(
+      gameRoot, QObject::tr("Browse Root Builder"),
+      QObject::tr("The virtual filesystem is mounted and Root Builder files "
+                  "have been deployed to the game root.\n\nThe game folder has "
+                  "been opened in your file manager. You can see files "
+                  "deployed by Root Builder (e.g. SKSE, ENB).\n\nClose this "
+                  "dialog to unmount and clean up."));
+}
 
-  // Mount the FUSE VFS which also triggers Root Builder deployment to the
-  // game root directory.
-  log::info("Mounting VFS for Root Builder browse...");
-  m_core.prepareVFS();
+void DataTab::browseVfsSession(const QString& path, const QString& title,
+                               const QString& message)
+{
+  const auto profile = m_core.currentProfile();
+  if (profile == nullptr) {
+    QMessageBox::warning(m_parent, QObject::tr("VFS unavailable"),
+                         QObject::tr("No active profile is available."));
+    return;
+  }
 
-  // Open the game root folder (not Data/) so the user sees deployed Root files.
-  shell::Explore(gameRoot);
+  const QString profileName = profile->name();
+  const QString launchToken =
+      QUuid::createUuid().toString(QUuid::WithoutBraces);
 
-  QMessageBox box(QMessageBox::Information,
-                  QObject::tr("Browse Root Builder"),
-                  QObject::tr("The virtual filesystem is mounted and Root Builder "
-                              "files have been deployed to the game root.\n\n"
-                              "The game folder has been opened in your file manager. "
-                              "You can see files deployed by Root Builder (e.g. SKSE, "
-                              "ENB).\n\n"
-                              "Close this dialog to unmount and clean up."),
+  OrganizerCore::VfsPreviewSessionResult result;
+  try {
+    result = m_core.beginVfsPreviewSession(launchToken, profileName);
+  } catch (const std::exception& e) {
+    log::error("Unable to start VFS preview: {}", e.what());
+    QMessageBox::warning(
+        m_parent, QObject::tr("VFS unavailable"),
+        QObject::tr("The virtual filesystem could not be mounted:\n\n%1")
+            .arg(QString::fromUtf8(e.what())));
+    return;
+  } catch (...) {
+    log::error("Unable to start VFS preview: unknown exception");
+    QMessageBox::warning(
+        m_parent, QObject::tr("VFS unavailable"),
+        QObject::tr("The virtual filesystem could not be mounted."));
+    return;
+  }
+
+  if (result == OrganizerCore::VfsPreviewSessionResult::Busy) {
+    QMessageBox::information(
+        m_parent, QObject::tr("VFS in use"),
+        QObject::tr("Another application or browse session is using the "
+                    "virtual filesystem. Close it before browsing the VFS."));
+    return;
+  }
+  if (result == OrganizerCore::VfsPreviewSessionResult::Unavailable) {
+    QMessageBox::information(
+        m_parent, QObject::tr("VFS unavailable"),
+        QObject::tr("The managed game does not use Fluorine Manager's virtual "
+                    "filesystem."));
+    return;
+  }
+
+  const auto closeSession = MakeGuard([this, launchToken, profileName]() {
+    try {
+      if (!m_core.endVfsPreviewSession(launchToken, profileName)) {
+        log::error("VFS preview session '{}' could not close its exact tracked "
+                   "session",
+                   launchToken.toStdString());
+      }
+    } catch (const std::exception& e) {
+      log::error("Unable to close VFS preview session '{}': {}",
+                 launchToken.toStdString(), e.what());
+    } catch (...) {
+      log::error("Unable to close VFS preview session '{}': unknown exception",
+                 launchToken.toStdString());
+    }
+  });
+
+  shell::Explore(path);
+
+  QMessageBox box(QMessageBox::Information, title, message,
                   QMessageBox::Close, m_parent);
   box.setWindowModality(Qt::WindowModal);
   box.exec();
-
-  log::info("Unmounting VFS after Root Builder browse...");
-  m_core.unmountVFS();
 }
 
 void DataTab::updateTree()

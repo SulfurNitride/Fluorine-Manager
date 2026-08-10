@@ -797,7 +797,12 @@ std::optional<int> ReloadPluginCommand::runPostOrganizer(OrganizerCore& core)
       QDir(AppConfig::pluginsPath()).absoluteFilePath(name);
 
   log::debug("reloading plugin from {}", filepath);
-  core.pluginContainer().reloadPlugin(filepath);
+  if (!core.pluginContainer().reloadPlugin(filepath)) {
+    log::error("plugin '{}' is already loaded; restart Mod Organizer to load a "
+               "new generation safely",
+               filepath);
+    return 1;
+  }
 
   return {};
 }

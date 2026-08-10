@@ -663,6 +663,45 @@ TEST(SettingsMigration, RollbackPreservesAnotherProcessSettingsChanges)
 #endif
 }
 
+TEST(SettingsMigration, InteractiveEditSnapshotAndRollbackRespectCanonicalLock)
+{
+  QTemporaryDir temporaryDirectory;
+  ASSERT_TRUE(temporaryDirectory.isValid());
+  const QString path = temporaryDirectory.filePath(QStringLiteral("instance.ini"));
+
+  QSettings settings(path, QSettings::IniFormat);
+  settings.setValue(QStringLiteral("Settings/value"), QStringLiteral("original"));
+  settings.sync();
+  ASSERT_EQ(settings.status(), QSettings::NoError);
+
+  const auto original =
+      SettingsMigration::captureInteractiveSettingsSnapshot(settings, 0);
+  ASSERT_TRUE(original);
+  settings.setValue(QStringLiteral("Settings/value"), QStringLiteral("rejected"));
+
+  QLockFile competing(SettingsMigration::settingsLockPath(path));
+  competing.setStaleLockTime(SettingsMigration::SettingsLockStaleMs);
+  ASSERT_TRUE(competing.tryLock());
+  EXPECT_FALSE(SettingsMigration::captureInteractiveSettingsSnapshot(settings, 0));
+  EXPECT_FALSE(SettingsMigration::verifyInteractiveSettingsState(settings, 0));
+  EXPECT_FALSE(
+      SettingsMigration::restoreInteractiveSettingsSnapshot(settings, *original, 0));
+  EXPECT_EQ(settings.value(QStringLiteral("Settings/value")).toString(),
+            QStringLiteral("rejected"));
+
+  competing.unlock();
+  EXPECT_TRUE(
+      SettingsMigration::restoreInteractiveSettingsSnapshot(settings, *original, 0));
+  EXPECT_TRUE(SettingsMigration::verifyInteractiveSettingsState(settings, 0));
+  EXPECT_EQ(settings.value(QStringLiteral("Settings/value")).toString(),
+            QStringLiteral("original"));
+
+  const auto persisted = SettingsMigration::inspectSettingsFile(path);
+  ASSERT_EQ(persisted.status, QSettings::NoError);
+  EXPECT_EQ(persisted.values.value(QStringLiteral("Settings/value")).toString(),
+            QStringLiteral("original"));
+}
+
 TEST(SettingsMigration, LiveMigrationLockDoesNotExpireByAge)
 {
   EXPECT_EQ(SettingsMigration::SettingsLockStaleMs, 0);

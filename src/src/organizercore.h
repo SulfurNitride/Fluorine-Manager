@@ -25,6 +25,7 @@
 #include <uibase/versioning.h>
 
 #include "downloadmanager.h"
+#include "afterrunrefreshqueue.h"
 #include "envdump.h"
 #include "executableslist.h"
 #include "installationmanager.h"
@@ -32,6 +33,7 @@
 #include "modlist.h"
 #include "moshortcut.h"
 #include "pluginlist.h"
+#include "processlaunchcontext.h"
 #include "pluginrefreshcoalescing.h"
 #include "processrunner.h"
 #include "selfupdater.h"
@@ -47,8 +49,11 @@ class GameFeatures;
 class PluginContainer;
 class DirectoryRefresher;
 
+#include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace MOBase
@@ -317,17 +322,60 @@ public:
   bool beforeRun(const QFileInfo& binary, const QDir& cwd, const QString& arguments,
                  const QString& profileName, const QString& customOverwrite,
                  const QList<MOBase::ExecutableForcedLoadSetting>& forcedLibraries,
-                 bool useProton,
+                 bool useProton, const QString& launchToken, bool ownsVfs,
                  QString* usvfsRequestPath = nullptr,
                  QString* saveBindMountSource = nullptr,
                  QString* saveBindMountTarget = nullptr);
 
   bool checkGameRegistryKey();
 
-  void afterRun(const QFileInfo& binary, DWORD exitCode);
+  bool reserveProcessLaunch(const QString& launchToken,
+                            const QString& profileName, bool ownsVfs);
 
-  static ProcessRunner::Results
-  waitForAllUSVFSProcesses(UILocker::Reasons reason = UILocker::PreventExit);
+  void abandonProcessLaunch(const QString& launchToken);
+
+  enum class AfterRunState
+  {
+    Rejected,
+    CleanupPending,
+    RefreshFailed,
+    Complete,
+  };
+
+  struct AfterRunResult
+  {
+    AfterRunState state{AfterRunState::Rejected};
+    bool refreshScheduled{false};
+  };
+
+  // Performs cleanup for exactly one registered launch. Mandatory VFS cleanup
+  // failures retain ownership and are retried; cleanupComplete is invoked only
+  // after that cleanup is known complete and the launch tracker is released.
+  AfterRunResult afterRun(
+      const QFileInfo& binary, DWORD exitCode, bool unmountVfs = true,
+      const QString& launchToken = {}, const QString& profileName = {},
+      bool triggerRefresh = true,
+      std::function<void()> refreshComplete = {},
+      std::function<void(bool refreshScheduled)> cleanupComplete = {});
+
+  // Noexcept rollback used by ProcessRunner's pre-spawn guard. It claims this
+  // exact preparation and retains/retries ownership if physical cleanup fails.
+  void abortProcessLaunchPreparation(const QString& launchToken,
+                                     const QString& profileName,
+                                     bool ownsVfs,
+                                     QString usvfsRequestPath = {}) noexcept;
+
+  // Schedules only the refresh portion of afterRun(). Each completion callback
+  // is tied to the directory-refresh generation that includes this request;
+  // it is never completed by an unrelated refresh that was already running.
+  bool refreshAfterRun(const QString& profileName,
+                       std::function<void()> refreshComplete = {});
+
+  // Non-blocking shutdown gate. The Linux process lifetime monitors own their
+  // waits; callers must leave this core alive until every launch context has
+  // completed its afterRun cleanup.
+  ProcessRunner::Results
+  waitForAllUSVFSProcesses(UILocker::Reasons reason = UILocker::PreventExit) const;
 
   void refreshESPList(bool force = false);
   void refreshBSAList();
@@ -358,9 +406,28 @@ public:
   void createOverwriteDirectories();
 
   MOBase::DelayedFileWriter& pluginsWriter() { return m_PluginListsWriter; }
+  void suppressPersistenceForFailedRollback() noexcept;
+  void cancelPersistenceWritersForFailedRollback() noexcept;
+  bool failedRollbackMutationsDrained() const noexcept;
+  void cancelDownloadOperationsForFailedRollback() noexcept;
+  bool failedRollbackDownloadOperationsDrained() const noexcept;
+  void suppressModInfoPersistenceForFailedRollback() noexcept;
 
   void prepareVFS();
   void unmountVFS();
+
+  enum class VfsPreviewSessionResult
+  {
+    Started,
+    Busy,
+    Unavailable
+  };
+
+  VfsPreviewSessionResult beginVfsPreviewSession(const QString& launchToken,
+                                                  const QString& profileName);
+  bool endVfsPreviewSession(const QString& launchToken,
+                            const QString& profileName);
+
   void discardVFSStagingOnUnmount();
   void trackOverwriteMove(const QString& relativePath, const QString& modFolderPath);
 
@@ -400,6 +467,17 @@ public:
                       const QVariant& def) const;
   void setPersistent(const QString& pluginName, const QString& key,
                      const QVariant& value, bool sync);
+
+  template <typename Mutation>
+  bool runPluginMutationIfAllowed(Mutation&& mutation)
+  {
+    return m_PluginMutationBarrier->runIfAllowed(
+        std::forward<Mutation>(mutation));
+  }
+  std::shared_ptr<SettingsWriteBarrier> pluginMutationBarrier() const noexcept
+  {
+    return m_PluginMutationBarrier;
+  }
   static QString pluginDataPath();
   virtual MOBase::IModInterface* installMod(const QString& fileName, int priority,
                                             bool reinstallation,
@@ -509,10 +587,33 @@ signals:
   // Use queued connections
   void directoryStructureReady();
 
+  // Internal quiescence notification. Unlike directoryStructureReady, this is
+  // still emitted during fail-stop so nested waiters can retire without
+  // dispatching UI or plugin-facing refresh consumers.
+  void directoryRefreshRetired();
+
   // Notify of a general UI refresh
   void refreshTriggered();
 
 private:
+  struct AfterRunWork;
+  AfterRunResult continueAfterRun(const std::shared_ptr<AfterRunWork>& work,
+                                  bool retry, unsigned int retryCount);
+  bool continueVfsPreviewTeardown(const QString& launchToken,
+                                  const QString& profileName, bool retry,
+                                  unsigned int retryCount);
+  void continueAbortedLaunchTeardown(const QString& launchToken,
+                                     const QString& profileName, bool ownsVfs,
+                                     const QString& usvfsRequestPath,
+                                     bool retry,
+                                     unsigned int retryCount);
+
+  void startAfterRunRefreshBatch(
+      std::vector<AfterRunRefreshQueue::Request> requests);
+  void schedulePendingAfterRunRefresh();
+  void completeAfterRunRefresh(std::uint64_t generation);
+  void completeAllAfterRunRefreshForFailStop();
+
   std::pair<unsigned int, ModInfo::Ptr> doInstall(const QString& archivePath,
                                                   MOBase::GuessedValue<QString> modName,
                                                   ModInfo::Ptr currentMod, int priority,
@@ -557,6 +658,8 @@ private slots:
   void loginFailed(const QString& message);
 
 private:
+  bool waitForDirectoryRefreshes();
+
   static constexpr unsigned int PROBLEM_MO1SCRIPTEXTENDERWORKAROUND = 1;
 
 private:
@@ -567,6 +670,7 @@ private:
   ModDataContentHolder m_Contents;
 
   std::shared_ptr<Profile> m_CurrentProfile;
+  ProcessLaunchContextTracker m_ProcessLaunchContext;
   bool m_CurrentProfileSavedForShutdown = false;
 
   Settings& m_Settings;
@@ -610,7 +714,13 @@ private:
   std::thread m_StructureDeleter;
 
   std::atomic<bool> m_DirectoryUpdate;
+  std::uint64_t m_NextDirectoryRefreshGeneration{0};
+  std::uint64_t m_ActiveDirectoryRefreshGeneration{0};
+  AfterRunRefreshQueue m_AfterRunRefreshQueue;
   bool m_ArchivesInit{false};
+  std::atomic_bool m_PersistenceSuppressed{false};
+  std::shared_ptr<SettingsWriteBarrier> m_PluginMutationBarrier{
+      std::make_shared<SettingsWriteBarrier>()};
 
   MOBase::DelayedFileWriter m_PluginListsWriter;
   FuseConnector m_USVFS;

@@ -21,3 +21,27 @@ target_link_libraries(test_fluorineconfigownership PRIVATE
 )
 add_test(NAME test_fluorineconfigownership COMMAND test_fluorineconfigownership)
 add_custom_target(prefix-safety-tests DEPENDS test_fluorineconfigownership)
+
+add_executable(test_protonsettingsedit EXCLUDE_FROM_ALL
+    test_protonsettingsedit.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/protonsettingsedit.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/fluorineconfig.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/fluorinepaths.cpp
+)
+set_target_properties(test_protonsettingsedit PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_protonsettingsedit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+    ${CMAKE_SOURCE_DIR}/libs/uibase/include
+)
+target_link_libraries(test_protonsettingsedit PRIVATE
+    Qt6::Core
+    mo2::uibase
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_protonsettingsedit COMMAND test_protonsettingsedit)
+add_dependencies(prefix-safety-tests test_protonsettingsedit)

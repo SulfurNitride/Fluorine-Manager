@@ -44,7 +44,8 @@ IPluginList::PluginStates PluginListProxy::state(const QString& name) const
 
 void PluginListProxy::setState(const QString& name, PluginStates state)
 {
-  return m_Proxied->setState(name, state);
+  m_OrganizerProxy->runMutationIfAllowed(
+      [&] { m_Proxied->setState(name, state); });
 }
 
 int PluginListProxy::priority(const QString& name) const
@@ -54,7 +55,10 @@ int PluginListProxy::priority(const QString& name) const
 
 bool PluginListProxy::setPriority(const QString& name, int newPriority)
 {
-  return m_Proxied->setPriority(name, newPriority);
+  bool result = false;
+  m_OrganizerProxy->runMutationIfAllowed(
+      [&] { result = m_Proxied->setPriority(name, newPriority); });
+  return result;
 }
 
 int PluginListProxy::loadOrder(const QString& name) const
@@ -64,7 +68,8 @@ int PluginListProxy::loadOrder(const QString& name) const
 
 void PluginListProxy::setLoadOrder(const QStringList& pluginList)
 {
-  return m_Proxied->setLoadOrder(pluginList);
+  m_OrganizerProxy->runMutationIfAllowed(
+      [&] { m_Proxied->setLoadOrder(pluginList); });
 }
 
 bool PluginListProxy::isMaster(const QString& name) const

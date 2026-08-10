@@ -3,9 +3,13 @@
 
 #include <QFutureWatcher>
 #include <QObject>
+#include <QPointer>
 
 #include "settings.h"
 #include "settingsdialog.h"
+#include "slroperationcontext.h"
+
+class QProgressDialog;
 
 class ProtonSettingsTab : public QObject, public SettingsTab
 {
@@ -13,6 +17,7 @@ class ProtonSettingsTab : public QObject, public SettingsTab
 
 public:
   ProtonSettingsTab(Settings& settings, SettingsDialog& dialog);
+  ~ProtonSettingsTab() override;
 
   void update() override;
 
@@ -41,6 +46,7 @@ private:
                             const QString& protonName, const QString& protonPath);
 
   void appendInstallLog(const QString& message);
+  void cancelAndWaitForSlrWorker() noexcept;
 
   static void logCallback(const char* message);
 
@@ -49,6 +55,9 @@ private slots:
 
 private:
   QFutureWatcher<InstallResult> m_installWatcher;
+  QFutureWatcher<QString> m_slrWatcher;
+  SlrCancellationSource m_slrCancellation;
+  QPointer<QProgressDialog> m_slrProgress;
 
   uint32_t m_pendingAppId = 0;
   QString m_pendingPrefixPath;
@@ -56,6 +65,7 @@ private:
   QString m_pendingProtonPath;
 
   bool m_busy = false;
+  bool m_settingsDialogClosing = false;
 };
 
 #endif  // SETTINGSDIALOGPROTON_H

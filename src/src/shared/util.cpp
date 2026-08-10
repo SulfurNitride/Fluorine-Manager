@@ -18,6 +18,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include "util.h"
+#include "exitstate.h"
 #include "../env.h"
 #include "../mainwindow.h"
 #include "windows_error.h"
@@ -207,8 +208,7 @@ void checkDuplicateShortcuts(const QMenu& m)
 
 }  // namespace MOShared
 
-static bool g_exiting  = false;
-static bool g_canClose = false;
+static ExitState g_exitState;
 
 MainWindow* findMainWindow()
 {
@@ -221,46 +221,38 @@ MainWindow* findMainWindow()
   return nullptr;
 }
 
-bool ExitModOrganizer(ExitFlags e)
+ExitRequestResult ExitModOrganizer(ExitFlags e, bool silentActiveLaunch)
 {
-  if (g_exiting) {
-    return true;
-  }
-
-  g_exiting = true;
-  Guard g([&] {
-    g_exiting = false;
-  });
-
-  if (!e.testFlag(Exit::Force)) {
+  const auto result = g_exitState.requestAuthorization([&] {
     if (auto* mw = findMainWindow()) {
-      if (!mw->canExit()) {
+      if (!mw->canExit(e.testFlag(Exit::Force), silentActiveLaunch)) {
         return false;
       }
     }
+    return true;
+  });
+
+  if (result == ExitRequestResult::Authorized) {
+    const int code = (e.testFlag(Exit::Restart) ? RestartExitCode : 0);
+    qApp->exit(code);
   }
 
-  g_canClose = true;
-
-  const int code = (e.testFlag(Exit::Restart) ? RestartExitCode : 0);
-  qApp->exit(code);
-
-  return true;
+  return result;
 }
 
 bool ModOrganizerCanCloseNow()
 {
-  return g_canClose;
+  return g_exitState.canClose();
 }
 
 bool ModOrganizerExiting()
 {
-  return g_exiting;
+  return g_exitState.exiting();
 }
 
 void ResetExitFlag()
 {
-  g_exiting = false;
+  g_exitState.resetForRestart();
 }
 
 bool isNxmLink(const QString& link)

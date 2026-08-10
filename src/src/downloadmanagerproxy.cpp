@@ -38,19 +38,30 @@ void DownloadManagerProxy::disconnectSignals()
 
 int DownloadManagerProxy::startDownloadURLs(const QStringList& urls)
 {
-  return m_Proxied->startDownloadURLs(urls);
+  int result = -1;
+  m_OrganizerProxy->runMutationIfAllowed(
+      [&] { result = m_Proxied->startDownloadURLs(urls); });
+  return result;
 }
 
 int DownloadManagerProxy::startDownloadNexusFile(int modID, int fileID)
 {
-  return m_Proxied->startDownloadNexusFile(
-      m_OrganizerProxy->managedGame()->gameNexusName(), modID, fileID);
+  int result = -1;
+  m_OrganizerProxy->runMutationIfAllowed([&] {
+    result = m_Proxied->startDownloadNexusFile(
+        m_OrganizerProxy->managedGame()->gameNexusName(), modID, fileID);
+  });
+  return result;
 }
 
 int DownloadManagerProxy::startDownloadNexusFileForGame(const QString& gameName,
                                                         int modID, int fileID)
 {
-  return m_Proxied->startDownloadNexusFile(gameName, modID, fileID);
+  int result = -1;
+  m_OrganizerProxy->runMutationIfAllowed([&] {
+    result = m_Proxied->startDownloadNexusFile(gameName, modID, fileID);
+  });
+  return result;
 }
 
 QString DownloadManagerProxy::downloadPath(int id)

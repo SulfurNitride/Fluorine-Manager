@@ -1,6 +1,7 @@
 #include "createinstancedialog.h"
 #include "createinstancedialogpages.h"
 #include "instancemanager.h"
+#include "restarttransaction.h"
 #include "settings.h"
 #include "shared/appconfig.h"
 #include "shared/util.h"
@@ -404,23 +405,27 @@ void CreateInstanceDialog::finish()
 
     // launch the new instance
     if (ui->launch->isChecked()) {
-      if (ci.type == Portable) {
-        const auto defaultPortable =
-            QDir(InstanceManager::singleton().portablePath()).absolutePath();
-        if (QDir(ci.dataPath).absolutePath() == defaultPortable) {
-          InstanceManager::singleton().setCurrentInstance("");
-        } else {
-          // Non-default portable location: store the absolute path
-          InstanceManager::singleton().setCurrentInstance(ci.dataPath);
-        }
-      } else {
-        InstanceManager::singleton().setCurrentInstance(ci.instanceName);
+      const auto switchResult = restart_transaction::authorizeThenCommit(
+          mustRestart, [] { return ExitModOrganizer(Exit::Restart); }, [&] {
+            if (ci.type == Portable) {
+              const auto defaultPortable =
+                  QDir(InstanceManager::singleton().portablePath()).absolutePath();
+              if (QDir(ci.dataPath).absolutePath() == defaultPortable) {
+                InstanceManager::singleton().setCurrentInstance("");
+              } else {
+                InstanceManager::singleton().setCurrentInstance(ci.dataPath);
+              }
+            } else {
+              InstanceManager::singleton().setCurrentInstance(ci.instanceName);
+            }
+          });
+      if (switchResult != ExitRequestResult::Authorized) {
+        // Creation succeeded, but this restart attempt was not authorized.
+        // Leave the wizard open so Finish can be retried without changing the
+        // current instance in the meantime.
+        return;
       }
-
-      if (mustRestart) {
-        ExitModOrganizer(Exit::Restart);
-        m_switching = true;
-      }
+      m_switching = mustRestart;
     }
 
     // close the dialog

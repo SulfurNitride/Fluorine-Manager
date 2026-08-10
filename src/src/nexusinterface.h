@@ -34,7 +34,9 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <QVariant>
 
 #include <list>
+#include <memory>
 #include <set>
+#include <atomic>
 
 namespace MOBase
 {
@@ -43,6 +45,7 @@ class IPluginGame;
 
 class NexusInterface;
 class NXMAccessManager;
+class OrganizerProxyMutationGate;
 class Settings;
 
 /**
@@ -59,6 +62,8 @@ class NexusBridge : public MOBase::IModRepositoryBridge
 
 public:
   NexusBridge(PluginContainer* pluginContainer, const QString& subModule = "");
+  NexusBridge(std::shared_ptr<OrganizerProxyMutationGate> mutationGate,
+              const QString& subModule = "");
 
   /**
    * @brief request description for a mod
@@ -141,6 +146,7 @@ public slots:
                         int requestID, int errorCode, const QString& errorMessage);
 
 private:
+  std::shared_ptr<OrganizerProxyMutationGate> m_MutationGate;
   NexusInterface* m_Interface;
   QString m_SubModule;
   std::set<int> m_RequestIDs;
@@ -228,6 +234,14 @@ public:
    * again
    */
   void cleanup();
+
+  // Terminal fail-stop phase 1: atomically reject new API work. Safe while an
+  // already-admitted plugin request is still returning from request*().
+  void suppressRequestAdmissionForFailedRollback() noexcept;
+
+  // Terminal fail-stop phase 2, called only after plugin mutations drain:
+  // prevent result callbacks and abandon queued/active requests.
+  void cancelSuppressedRequestsForFailedRollback() noexcept;
 
   /**
    * @brief clear webcache and cookies associated with this access manager
@@ -713,6 +727,7 @@ private:
   QQueue<NXMRequestInfo> m_RequestQueue;
   PluginContainer* m_PluginContainer{nullptr};
   APIUserAccount m_User;
+  std::atomic_bool m_RequestsSuppressed{false};
 };
 
 #endif  // NEXUSINTERFACE_H

@@ -68,6 +68,8 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "problemsdialog.h"
 #include "profile.h"
 #include "profilesdialog.h"
+#include "protonsettingsedit.h"
+#include "restarttransaction.h"
 #include "savestab.h"
 #include "selectiondialog.h"
 #include "serverinfo.h"
@@ -88,6 +90,8 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <uibase/utility.h>
 #include <uibase/versioninfo.h>
 #include "fluorinepaths.h"
+
+#include <cstdlib>
 
 #include "directoryrefresher.h"
 #include "shared/directoryentry.h"
@@ -117,6 +121,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QEvent>
+#include <QEventLoop>
 #include <QFileIconProvider>
 #include <QFileDialog>
 #include <QFont>
@@ -508,6 +513,10 @@ MainWindow::MainWindow(Settings& settings, OrganizerCore& organizerCore,
   if (auto* fu = m_OrganizerCore.fluorineUpdater()) {
     connect(fu, &FluorineUpdater::updateAvailable, this,
             [this](const FluorineUpdater::ReleaseInfo& info) {
+              if (m_StartupFailed) {
+                return;
+              }
+
               m_FluorineUpdatePending = true;
               updateAvailable();
 
@@ -696,6 +705,9 @@ MainWindow::~MainWindow()
     if (!m_StartupFailed) {
       m_ArchiveListWriter.writeImmediately(true);
       m_OrganizerCore.pluginsWriter().writeImmediately(true);
+    }
+    if (m_StartupFailed) {
+      m_ArchiveListWriter.cancel();
     }
     cleanup();
 
@@ -1519,7 +1531,7 @@ void MainWindow::onBeforeClose()
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
-  if (isVisible()) {
+  if (isVisible() && !m_StartupFailed) {
     // this is messy
     //
     // the main problem this is solving is when closing MO, then getting the
@@ -1573,9 +1585,22 @@ void MainWindow::closeEvent(QCloseEvent* event)
   ExitModOrganizer();
 }
 
-bool MainWindow::canExit()
+bool MainWindow::canExit(bool force, bool silentActiveLaunch)
 {
-  if (m_OrganizerCore.downloadManager()->downloadsInProgressNoPause()) {
+  const auto r = m_OrganizerCore.waitForAllUSVFSProcesses(
+      silentActiveLaunch ? UILocker::NoReason : UILocker::PreventExit);
+  if (r == ProcessRunner::Cancelled) {
+    if (ProcessShutdownPolicy::showActiveLaunchFeedback(silentActiveLaunch)) {
+      QMessageBox::information(
+          this, tr("Applications still running"),
+          tr("One or more applications launched by Fluorine Manager are still "
+             "running. Close them before exiting or restarting Fluorine Manager."));
+    }
+    return false;
+  }
+
+  if (ProcessShutdownPolicy::checkDownloadPrompts(force) &&
+      m_OrganizerCore.downloadManager()->downloadsInProgressNoPause()) {
     if (QMessageBox::question(
             this, tr("Downloads in progress"),
             tr("There are still downloads in progress, do you really want to quit?"),
@@ -1586,13 +1611,120 @@ bool MainWindow::canExit()
     }
   }
 
-  const auto r = OrganizerCore::waitForAllUSVFSProcesses();
-  if (r == ProcessRunner::Cancelled) {
-    return false;
-  }
-
   setCursor(Qt::WaitCursor);
   return true;
+}
+
+void MainWindow::failStopAfterSettingsRollback()
+{
+  if (m_StartupFailed) {
+    return;
+  }
+
+  // An incomplete rollback leaves persistence and live caches untrustworthy.
+  // Stop accepting work immediately and suppress every normal shutdown write.
+  // Active launch ownership still has to drain before process teardown, so a
+  // silent forced-exit request is retried until the launch gate authorizes it.
+  m_StartupFailed = true;
+
+  // Close plugin mutation and process-launch admission before any cancellation
+  // below. Nexus cancellation can synchronously invoke plugin callbacks, and
+  // none of those callbacks may start new work after fail-stop begins.
+  m_OrganizerCore.suppressPersistenceForFailedRollback();
+  GlobalSettings::suppressWritesForFailedRollback();
+  ProtonSettingsEdit::suppressWritesForFailedRollback();
+
+  auto& nexus = NexusInterface::instance();
+  nexus.suppressRequestAdmissionForFailedRollback();
+  auto* nexusAccess = nexus.getAccessManager();
+
+  // Update checks may already have queued a prompt. Disconnect every updater
+  // sender before removing queued callbacks so fail-stop cannot open a new
+  // modal dialog or start an installer while admitted mutations drain.
+  disconnect(m_OrganizerCore.updater(), nullptr, this, nullptr);
+  if (auto* fluorineUpdater = m_OrganizerCore.fluorineUpdater()) {
+    disconnect(fluorineUpdater, nullptr, this, nullptr);
+  }
+  disconnect(&nexus, nullptr, this, nullptr);
+  disconnect(nexusAccess, nullptr, this, nullptr);
+  QCoreApplication::removePostedEvents(this, QEvent::MetaCall);
+
+  m_SaveMetaTimer.stop();
+  setEnabled(false);
+  hide();
+  m_OrganizerCore.cancelPersistenceWritersForFailedRollback();
+
+  const auto finishFailStop = [this, nexusAccess]() {
+    // An admitted profile transition/setter may have installed a new current
+    // backend or queued an UpdateRequest after phase-one suppression. With the
+    // full drain proven, re-arm every core/profile/settings sink before any
+    // destructive cancellation.
+    m_OrganizerCore.suppressPersistenceForFailedRollback();
+    m_OrganizerCore.cancelPersistenceWritersForFailedRollback();
+
+    // Plugin requests are now drained, so destructive queue/reply cancellation
+    // cannot race an admitted request*() call on another thread.
+    NexusInterface::instance().cancelSuppressedRequestsForFailedRollback();
+    nexusAccess->suppressPersistenceForFailedRollback();
+    // Download callbacks were admission-closed in phase one. With every
+    // admitted frame now drained, disconnect and abort their replies without
+    // running ordinary readyRead/finalize/meta persistence.
+    m_OrganizerCore.cancelDownloadOperationsForFailedRollback();
+
+    // The Settings dialog stops and joins this worker before edits begin; this
+    // wait is a defensive final quiescence point that prevents a cross-thread
+    // suppression-flag race.
+    m_MetaSave.waitForFinished();
+
+    auto* retry = new QTimer(qApp);
+    retry->setInterval(250);
+    const auto attemptExit = [this, retry]() {
+      if (!m_OrganizerCore.failedRollbackDownloadOperationsDrained()) {
+        // Idempotent retry covers a reply that was transitioning while abort
+        // ran. Exit is authorized only after the real request/reply/output
+        // lifetime, not merely its presentation state, is quiescent.
+        m_OrganizerCore.cancelDownloadOperationsForFailedRollback();
+        return;
+      }
+
+      if (ExitModOrganizer(Exit::Force, /*silentActiveLaunch=*/true) ==
+          ExitRequestResult::Authorized) {
+        // Authorization means every tracked launch has completed its mandatory
+        // cleanup. Do not run ordinary QObject/static destructors after a failed
+        // rollback: QSettings and other caches may retry precisely the writes we
+        // could not safely restore. This is the final process-wide write barrier.
+        std::_Exit(EXIT_FAILURE);
+      }
+    };
+    connect(retry, &QTimer::timeout, qApp, attemptExit);
+    retry->start();
+    QMetaObject::invokeMethod(qApp, attemptExit, Qt::QueuedConnection);
+  };
+
+  if (m_OrganizerCore.failedRollbackMutationsDrained() &&
+      ProtonSettingsEdit::failedRollbackWritesDrained()) {
+    // Settings entry is rejected while this thread owns a mutation, so zero
+    // means no facade or persistence operation can retain cancelled objects.
+    finishFailStop();
+    return;
+  }
+
+  // Never block the UI waiting for an admitted plugin worker: it may be waiting
+  // for a synchronous UI callback. Poll from the event loop, then destructively
+  // cancel request/download state only after the active count reaches zero.
+  auto* drainRetry = new QTimer(qApp);
+  drainRetry->setInterval(10);
+  connect(drainRetry, &QTimer::timeout, qApp,
+          [this, drainRetry, finishFailStop]() {
+            if (!m_OrganizerCore.failedRollbackMutationsDrained() ||
+                !ProtonSettingsEdit::failedRollbackWritesDrained()) {
+              return;
+            }
+            drainRetry->stop();
+            drainRetry->deleteLater();
+            finishFailStop();
+          });
+  drainRetry->start();
 }
 
 void MainWindow::cleanup()
@@ -1624,6 +1756,10 @@ bool MainWindow::eventFilter(QObject* object, QEvent* event)
 
 void MainWindow::registerPluginTool(IPluginTool* tool, QString name, QMenu* menu)
 {
+  const auto pluginGate = m_PluginContainer.pluginCallGate(tool);
+  if (!pluginGate) {
+    return;
+  }
   if (!menu) {
     menu = ui->actionTool->menu();
   }
@@ -1636,15 +1772,18 @@ void MainWindow::registerPluginTool(IPluginTool* tool, QString name, QMenu* menu
   tool->setParentWidget(this);
   connect(
       action, &QAction::triggered, this,
-      [this, tool]() {
-        try {
-          tool->display();
-        } catch (const std::exception& e) {
-          reportError(
-              tr("Plugin \"%1\" failed: %2").arg(tool->localizedName()).arg(e.what()));
-        } catch (...) {
-          reportError(tr("Plugin \"%1\" failed").arg(tool->localizedName()));
-        }
+      [this, pluginGate, tool]() {
+        pluginGate->runIfAllowed([&] {
+          try {
+            tool->display();
+          } catch (const std::exception& e) {
+            reportError(tr("Plugin \"%1\" failed: %2")
+                            .arg(tool->localizedName())
+                            .arg(e.what()));
+          } catch (...) {
+            reportError(tr("Plugin \"%1\" failed").arg(tool->localizedName()));
+          }
+        });
       },
       Qt::QueuedConnection);
 
@@ -1712,28 +1851,34 @@ void MainWindow::updateToolMenu()
 
 void MainWindow::registerModPage(IPluginModPage* modPage)
 {
+  const auto pluginGate = m_PluginContainer.pluginCallGate(modPage);
+  if (!pluginGate) {
+    return;
+  }
   QAction* action = new QAction(modPage->icon(), modPage->displayName(), this);
   connect(
       action, &QAction::triggered, this,
-      [this, modPage]() {
+      [this, pluginGate, modPage]() {
+        pluginGate->runIfAllowed([&] {
 #ifdef MO2_WEBENGINE
-        if (modPage->useIntegratedBrowser()) {
+          if (modPage->useIntegratedBrowser()) {
 
-          if (!m_IntegratedBrowser) {
-            m_IntegratedBrowser.reset(new BrowserDialog);
+            if (!m_IntegratedBrowser) {
+              m_IntegratedBrowser.reset(new BrowserDialog);
 
-            connect(m_IntegratedBrowser.get(),
-                    SIGNAL(requestDownload(QUrl, QNetworkReply*)), &m_OrganizerCore,
-                    SLOT(requestDownload(QUrl, QNetworkReply*)));
-          }
+              connect(m_IntegratedBrowser.get(),
+                      SIGNAL(requestDownload(QUrl, QNetworkReply*)), &m_OrganizerCore,
+                      SLOT(requestDownload(QUrl, QNetworkReply*)));
+            }
 
-          m_IntegratedBrowser->setWindowTitle(modPage->displayName());
-          m_IntegratedBrowser->openUrl(modPage->pageURL());
-        } else
+            m_IntegratedBrowser->setWindowTitle(modPage->displayName());
+            m_IntegratedBrowser->openUrl(modPage->pageURL());
+          } else
 #endif
-        {
-          shell::Open(QUrl(modPage->pageURL()));
-        }
+          {
+            shell::Open(QUrl(modPage->pageURL()));
+          }
+        });
       },
       Qt::QueuedConnection);
 
@@ -2252,7 +2397,7 @@ void MainWindow::checkBSAList()
 
 void MainWindow::saveModMetas()
 {
-  if (!m_CategoryFactory.categoriesLoaded()) {
+  if (m_StartupFailed || !m_CategoryFactory.categoriesLoaded()) {
     return;
   }
   if (m_MetaSave.isFinished()) {
@@ -2564,6 +2709,10 @@ void MainWindow::on_startButton_clicked()
     const bool freshInstall = !isSlrInstalled();
     // Only show the heavyweight progress dialog on a fresh install.
     if (freshInstall) {
+      if (slrOperationAdmissionSuppressed()) {
+        return;
+      }
+
       auto* progress = new QProgressDialog(
           tr("Downloading Steam Linux Runtime (~200 MB)...\n"
              "This is required to launch games. Check the MO2 log for details."),
@@ -2573,24 +2722,26 @@ void MainWindow::on_startButton_clicked()
       progress->setAttribute(Qt::WA_ShowWithoutActivating);
       progress->setMinimumDuration(0);
 
-      int cancelFlag = 0;
-      connect(progress, &QProgressDialog::canceled, this, [&cancelFlag] {
-        cancelFlag = 1;
+      const SlrCancellationSource cancellation;
+      connect(progress, &QProgressDialog::canceled, this, [cancellation] {
+        cancellation.cancel();
       });
 
       QFutureWatcher<QString> watcher;
       QEventLoop loop;
       connect(&watcher, &QFutureWatcher<QString>::finished, &loop, &QEventLoop::quit);
-      watcher.setFuture(QtConcurrent::run([&cancelFlag]() -> QString {
-        return downloadSlr(nullptr, nullptr, &cancelFlag);
-      }));
+      watcher.setFuture(
+          QtConcurrent::run([token = cancellation.token()]() -> QString {
+            return downloadSlr(nullptr, nullptr, token);
+          }));
       progress->show();
       loop.exec();
       progress->close();
       progress->deleteLater();
 
       const QString err = watcher.result();
-      if (cancelFlag) {
+      if (cancellation.isCancellationRequested() ||
+          slrOperationAdmissionSuppressed()) {
         return; // user cancelled, don't launch
       }
       if (!err.isEmpty()) {
@@ -2919,6 +3070,10 @@ void MainWindow::refreshProfile_activated()
 
 void MainWindow::saveArchiveList()
 {
+  if (m_StartupFailed) {
+    return;
+  }
+
   if (m_OrganizerCore.isArchivesInit()) {
     SafeWriteFile archiveFile(m_OrganizerCore.currentProfile()->getArchivesFileName());
     for (int i = 0; i < ui->bsaList->topLevelItemCount(); ++i) {
@@ -3076,7 +3231,89 @@ void MainWindow::on_linkButton_pressed()
 
 void MainWindow::on_actionSettings_triggered()
 {
+  if (m_StartupFailed) {
+    return;
+  }
+
+  // This modal flow is the sole origin of interactive rollback fail-stop. Do
+  // not nest it inside an admitted facade/write transaction: after exec()
+  // returns, fail-stop can safely wait for a true zero active count before it
+  // destroys Nexus replies or pauses download-manager operations.
+  if (SettingsWriteBarrier::currentThreadHasMutation()) {
+    log::warn("ignoring nested Settings request during an active mutation");
+    return;
+  }
+
   Settings& settings = m_OrganizerCore.settings();
+
+  // The modal Settings event loop must never overlap the background meta.ini
+  // writer. A failed rollback can then install its per-mod barrier without a
+  // data race or allowing a write that already passed saveMeta()'s guard.
+  const bool resumeMetaTimer = m_SaveMetaTimer.isActive();
+  const int metaTimerInterval = m_SaveMetaTimer.interval();
+  m_SaveMetaTimer.stop();
+  m_MetaSave.waitForFinished();
+  const auto resumeMetaSaves = MakeGuard([this, resumeMetaTimer,
+                                          metaTimerInterval]() {
+    if (resumeMetaTimer && !m_StartupFailed) {
+      m_SaveMetaTimer.start(metaTimerInterval);
+    }
+  });
+
+  const auto editSnapshot = settings.captureEditSnapshot();
+  if (!editSnapshot) {
+    QMessageBox::critical(
+        this, tr("Settings unavailable"),
+        tr("Fluorine Manager could not capture the current settings. No changes "
+           "were made."));
+    return;
+  }
+
+  QSettings protonDefaultSettings;
+  const auto protonEditSnapshot =
+      ProtonSettingsEdit::capture(protonDefaultSettings);
+  if (!protonEditSnapshot) {
+    QMessageBox::critical(
+        this, tr("Settings unavailable"),
+        tr("Fluorine Manager could not capture the current Proton and launch "
+           "settings. No changes were made."));
+    return;
+  }
+  std::optional<ProtonSettingsEdit::Snapshot> rejectedProtonEditSnapshot;
+
+  const auto nexusCredentialSnapshot = GlobalSettings::captureNexusCredentials();
+  if (!nexusCredentialSnapshot) {
+    QMessageBox::critical(
+        this, tr("Settings unavailable"),
+        tr("Fluorine Manager could not capture the current Nexus credentials. "
+           "No changes were made."));
+    return;
+  }
+
+  auto& nexusInterface = NexusInterface::instance();
+  auto* nexusAccess    = nexusInterface.getAccessManager();
+  const auto nexusLiveSnapshot = nexusAccess->captureCredentialState(
+      nexusInterface.getAPIUserAccount());
+
+  struct PluginEditState
+  {
+    IPlugin* plugin;
+    bool enabled;
+    QVariantMap settings;
+  };
+  std::vector<PluginEditState> oldPluginStates;
+  QSet<IPlugin*> capturedPlugins;
+  for (auto* plugin : settings.plugins().plugins()) {
+    if (capturedPlugins.contains(plugin)) {
+      continue;
+    }
+    capturedPlugins.insert(plugin);
+    oldPluginStates.push_back({plugin, m_PluginContainer.isEnabled(plugin),
+                               settings.plugins().settings(plugin->name())});
+  }
+  const QStringList oldPluginBlacklist = settings.plugins().blacklist().values();
+  const QString oldLanguage = settings.interface().language();
+  const QString oldStyle = settings.interface().styleName().value_or("");
 
   QString const oldModDirectory(settings.paths().mods());
   QString const oldCacheDirectory(settings.paths().cache());
@@ -3089,10 +3326,185 @@ void MainWindow::on_actionSettings_triggered()
   const bool oldCheckForUpdates = settings.checkForUpdates();
   const int oldMaxDumps         = settings.diagnostics().maxCoreDumps();
 
-  SettingsDialog dialog(&m_PluginContainer, settings, this);
-  dialog.exec();
+  const auto rollbackSettingsEdit = [&](const QString& context) {
+    std::vector<bool> changedPluginStates;
+    for (const auto& state : oldPluginStates) {
+      changedPluginStates.push_back(
+          m_PluginContainer.isEnabled(state.plugin) != state.enabled);
+    }
 
-  auto e = dialog.exitNeeded();
+    const auto rollbackResult = restart_transaction::restoreAfterRefusal(
+        [&] {
+          try {
+            // Do not short-circuit: each store gets its own restoration attempt
+            // even if another one reports an error.
+            const bool settingsRestored = settings.restoreEditSnapshot(*editSnapshot);
+            const bool credentialsRestored = GlobalSettings::restoreNexusCredentials(
+                *nexusCredentialSnapshot);
+            const bool protonSettingsRestored =
+                rejectedProtonEditSnapshot &&
+                ProtonSettingsEdit::restore(protonDefaultSettings,
+                                            *protonEditSnapshot,
+                                            *rejectedProtonEditSnapshot);
+            return settingsRestored && credentialsRestored &&
+                   protonSettingsRestored;
+          } catch (const std::exception& exception) {
+            log::error("failed to restore persistent settings after {}: {}", context,
+                       exception.what());
+            return false;
+          } catch (...) {
+            log::error("failed to restore persistent settings after {}: unknown "
+                       "exception",
+                       context);
+            return false;
+          }
+        },
+        [&] {
+          try {
+            for (const auto& state : oldPluginStates) {
+              settings.plugins().setSettings(state.plugin->name(), state.settings);
+            }
+            settings.plugins().setBlacklist(oldPluginBlacklist);
+            return true;
+          } catch (const std::exception& exception) {
+            log::error("failed to restore cached plugin settings after {}: {}",
+                       context, exception.what());
+            return false;
+          } catch (...) {
+            log::error("failed to restore cached plugin settings after {}: unknown "
+                       "exception",
+                       context);
+            return false;
+          }
+        },
+        [&] {
+          try {
+            const bool nexusRestored =
+                nexusAccess->restoreCredentialState(nexusLiveSnapshot);
+            if (!restart_transaction::notifyChangedStatesOnce(
+                    oldPluginStates, changedPluginStates, [&](const auto& state) {
+                      m_PluginContainer.notifyEnabledStateRestored(state.plugin,
+                                                                   state.enabled);
+                    })) {
+              return false;
+            }
+            emit settings.languageChanged(oldLanguage);
+            emit settings.styleChanged(oldStyle);
+            return nexusRestored;
+          } catch (const std::exception& exception) {
+            log::error("failed to reverse live settings events after {}: {}", context,
+                       exception.what());
+            return false;
+          } catch (...) {
+            log::error("failed to reverse live settings events after {}: unknown "
+                       "exception",
+                       context);
+            return false;
+          }
+        },
+        [&] {
+          try {
+            return settings.verifyEditState() &&
+                   GlobalSettings::verifyNexusCredentials(
+                       *nexusCredentialSnapshot) &&
+                   rejectedProtonEditSnapshot &&
+                   ProtonSettingsEdit::verify(protonDefaultSettings,
+                                              *protonEditSnapshot,
+                                              *rejectedProtonEditSnapshot) &&
+                   nexusAccess->matchesCredentialState(
+                       nexusLiveSnapshot, nexusInterface.getAPIUserAccount());
+          } catch (const std::exception& exception) {
+            log::error("failed to verify restored settings after {}: {}", context,
+                       exception.what());
+            return false;
+          } catch (...) {
+            log::error("failed to verify restored settings after {}: unknown "
+                       "exception",
+                       context);
+            return false;
+          }
+        });
+
+    if (!restart_transaction::requiresFailStop(rollbackResult)) {
+      return true;
+    }
+
+    QString detail;
+    switch (rollbackResult) {
+    case restart_transaction::RollbackResult::PersistenceFailed:
+      detail = tr("the previous settings, Proton configuration, or Nexus "
+                  "credentials could not be restored");
+      break;
+    case restart_transaction::RollbackResult::CacheFailed:
+      detail = tr("cached plugin settings could not be restored");
+      break;
+    case restart_transaction::RollbackResult::EventReversalFailed:
+      detail = tr("live plugin, Nexus, or interface changes could not be reversed");
+      break;
+    case restart_transaction::RollbackResult::VerificationFailed:
+      detail = tr("the restored settings, Proton configuration, and Nexus state "
+                  "could not be verified");
+      break;
+    case restart_transaction::RollbackResult::Complete:
+      break;
+    }
+    // Enter fail-stop before any nested event loop. Otherwise the modal error
+    // dialog can dispatch delayed writers and OAuth callbacks while the live
+    // state is already known to be untrustworthy.
+    failStopAfterSettingsRollback();
+    QMessageBox::critical(
+        nullptr, tr("Settings rollback incomplete"),
+        tr("%1, but %2. Fluorine Manager must close to prevent further changes. "
+           "It will exit as soon as any running applications finish.")
+            .arg(context, detail));
+
+    return false;
+  };
+
+  auto dialog =
+      std::make_unique<SettingsDialog>(&m_PluginContainer, settings, this);
+  const int dialogResult = dialog->exec();
+  auto e = dialog->exitNeeded();
+  const bool updatesSucceeded = dialog->updatesSucceeded();
+  const QString updateFailureDetail = dialog->updateFailureDetail();
+  rejectedProtonEditSnapshot =
+      ProtonSettingsEdit::capture(protonDefaultSettings);
+
+  // Destroy the Settings tabs before restoring their external state. In
+  // particular, NexusConnectionUI owns a one-shot validator whose late
+  // callback can otherwise persist credentials again after rollback.
+  dialog.reset();
+
+  if (!rejectedProtonEditSnapshot) {
+    // Accepted tabs may already have persisted changes. Without a valid
+    // rejected snapshot, a selective rollback cannot prove which external
+    // values belong to this edit, so fail closed.
+    failStopAfterSettingsRollback();
+    QMessageBox::critical(
+        nullptr, tr("Settings state unavailable"),
+        tr("The edited Proton and launch settings could not be captured for "
+           "verification. Fluorine Manager must close to prevent further "
+           "changes. It will exit as soon as any running applications finish."));
+    return;
+  }
+
+  if (dialogResult != QDialog::Accepted) {
+    // Plugin enablement and Nexus credentials can change while the modal
+    // dialog is still open. Cancel must undo those live/persistent effects.
+    rollbackSettingsEdit(tr("The settings dialog was canceled"));
+    return;
+  }
+
+  if (!updatesSucceeded) {
+    if (rollbackSettingsEdit(tr("The settings update failed"))) {
+      QMessageBox::critical(
+          this, tr("Settings not saved"),
+          tr("The settings change was not saved because %1. Previous values "
+             "were restored.")
+              .arg(updateFailureDetail));
+    }
+    return;
+  }
 
   if (oldManagedGameDirectory != settings.game().directory()) {
     e |= Exit::Restart;
@@ -3111,7 +3523,18 @@ void MainWindow::on_actionSettings_triggered()
             .exec();
 
     if (r == QMessageBox::Yes) {
-      ExitModOrganizer(e);
+      const auto exitResult = ExitModOrganizer(e);
+      if (exitResult != ExitRequestResult::Authorized) {
+        rollbackSettingsEdit(
+            exitResult == ExitRequestResult::InProgress
+                ? tr("Another exit request was already in progress")
+                : tr("The restart was refused"));
+        return;
+      }
+
+      // qApp accepted an in-process restart. Do not reconfigure the old core
+      // with paths or plugin state intended for its successor.
+      return;
     }
   }
 
@@ -3189,6 +3612,7 @@ void MainWindow::on_actionSettings_triggered()
 
 void MainWindow::onPluginRegistrationChanged()
 {
+  updateToolMenu();
   updateModPageMenu();
   scheduleCheckForProblems();
   m_DownloadsTab->update();
@@ -3303,6 +3727,10 @@ void MainWindow::originModified(int originID)
 
 void MainWindow::updateAvailable()
 {
+  if (m_StartupFailed) {
+    return;
+  }
+
   ui->actionUpdate->setEnabled(true);
   ui->actionUpdate->setToolTip(tr("Update available"));
   ui->statusBar->setUpdateAvailable(true);
@@ -3311,6 +3739,10 @@ void MainWindow::updateAvailable()
 void MainWindow::showFluorineUpdatePrompt(
     const FluorineUpdater::ReleaseInfo& info)
 {
+  if (m_StartupFailed) {
+    return;
+  }
+
   const QString availableVersion =
       !info.versionString.isEmpty()
           ? info.versionString
@@ -3380,14 +3812,20 @@ void MainWindow::showFluorineUpdatePrompt(
             progress->close();
             progress->deleteLater();
             installer->deleteLater();
-            QMessageBox::warning(
-                this, tr("Update installation failed"), reason);
+            if (!m_StartupFailed) {
+              QMessageBox::warning(
+                  this, tr("Update installation failed"), reason);
+            }
           });
   installer->install(info);
 }
 
 void MainWindow::motdReceived(const QString& motd)
 {
+  if (m_StartupFailed) {
+    return;
+  }
+
   // don't show motd after 5 seconds, may be annoying. Hopefully the user's
   // internet connection is faster next time
   if (m_StartTime.secsTo(QTime::currentTime()) < 5) {
@@ -3402,6 +3840,10 @@ void MainWindow::motdReceived(const QString& motd)
 
 void MainWindow::on_actionUpdate_triggered()
 {
+  if (m_StartupFailed) {
+    return;
+  }
+
   // Fluorine has its own updater (Settings → Updates). The MO2 self-updater
   // is no-op'd (see SelfUpdater::testForUpdate). Open the Updates tab so
   // the user can see the release info and trigger Install & restart.
@@ -3491,6 +3933,10 @@ void MainWindow::toggleUpdateAction()
 
 void MainWindow::nxmEndorsementsAvailable(QVariant userData, QVariant resultData, int)
 {
+  if (m_StartupFailed) {
+    return;
+  }
+
   QVariantList const data = resultData.toList();
   std::multimap<QString, std::pair<int, QString>> sorted;
   QStringList games = m_OrganizerCore.managedGame()->validShortNames();
@@ -3542,6 +3988,10 @@ void MainWindow::nxmEndorsementsAvailable(QVariant userData, QVariant resultData
 void MainWindow::nxmUpdateInfoAvailable(QString gameName, QVariant userData,
                                         QVariant resultData, int)
 {
+  if (m_StartupFailed) {
+    return;
+  }
+
   QString gameNameReal;
   for (IPluginGame* game : m_PluginContainer.plugins<IPluginGame>()) {
     if (game->gameNexusName() == gameName) {
@@ -3716,6 +4166,10 @@ QString pickNewestVersion(int installedFileId, bool fileIsActive,
 void MainWindow::nxmUpdatesAvailable(QString gameName, int modID, QVariant userData,
                                      QVariant resultData, int requestID)
 {
+  if (m_StartupFailed) {
+    return;
+  }
+
   QVariantMap resultInfo  = resultData.toMap();
   QList const files       = resultInfo["files"].toList();
   QList const fileUpdates = resultInfo["file_updates"].toList();
@@ -3784,6 +4238,10 @@ void MainWindow::nxmUpdatesAvailable(QString gameName, int modID, QVariant userD
 void MainWindow::nxmModInfoAvailable(QString gameName, int modID, QVariant userData,
                                      QVariant resultData, int requestID)
 {
+  if (m_StartupFailed) {
+    return;
+  }
+
   QVariantMap result = resultData.toMap();
   QString gameNameReal;
   bool foundUpdate = false;
@@ -3852,6 +4310,10 @@ void MainWindow::nxmModInfoAvailable(QString gameName, int modID, QVariant userD
 
 void MainWindow::nxmEndorsementToggled(QString, int, QVariant, QVariant resultData, int)
 {
+  if (m_StartupFailed) {
+    return;
+  }
+
   const QMap results = resultData.toMap();
 
   auto itor = results.find("status");
@@ -3895,6 +4357,10 @@ void MainWindow::nxmEndorsementToggled(QString, int, QVariant, QVariant resultDa
 
 void MainWindow::nxmTrackedModsAvailable(QVariant userData, QVariant resultData, int)
 {
+  if (m_StartupFailed) {
+    return;
+  }
+
   QMap<QString, QString> gameNames;
   for (auto *game : m_PluginContainer.plugins<IPluginGame>()) {
     gameNames[game->gameNexusName()] = game->gameShortName();
@@ -3924,6 +4390,10 @@ void MainWindow::nxmTrackedModsAvailable(QVariant userData, QVariant resultData,
 
 void MainWindow::nxmDownloadURLs(QString, int, int, QVariant, QVariant resultData, int)
 {
+  if (m_StartupFailed) {
+    return;
+  }
+
   auto servers = m_OrganizerCore.settings().network().servers();
 
   for (const QVariant& var : resultData.toList()) {
@@ -3960,6 +4430,10 @@ void MainWindow::nxmDownloadURLs(QString, int, int, QVariant, QVariant resultDat
 void MainWindow::nxmGameInfoAvailable(QString, QVariant userData,
                                       QVariant resultData, int requestID)
 {
+  if (m_StartupFailed) {
+    return;
+  }
+
   if (!SettingsMigration::isExpectedCategoryMigrationResponse(
           requestID, m_CategoryMigrationRequestId, userData)) {
     return;
@@ -4023,6 +4497,10 @@ void MainWindow::nxmRequestFailed(QString gameName, int modID, int,
                                   QVariant userData, int requestID, int errorCode,
                                   const QString& errorString)
 {
+  if (m_StartupFailed) {
+    return;
+  }
+
   if (SettingsMigration::isCategoryMigrationResponse(userData)) {
     if (SettingsMigration::isExpectedCategoryMigrationResponse(
             requestID, m_CategoryMigrationRequestId, userData)) {
@@ -4309,17 +4787,28 @@ void MainWindow::on_sortButton_clicked()
     const QString sortToolName = game->sortToolName();
     if (!sortToolName.isEmpty()) {
       for (IPluginTool* tool : m_PluginContainer.plugins<IPluginTool>()) {
-        if (tool->name() == sortToolName && m_PluginContainer.isEnabled(tool)) {
-          tool->setParentWidget(this);
-          try {
-            tool->display();
-          } catch (const std::exception& e) {
-            reportError(tr("Plugin \"%1\" failed: %2")
-                            .arg(tool->localizedName())
-                            .arg(e.what()));
-          } catch (...) {
-            reportError(tr("Plugin \"%1\" failed").arg(tool->localizedName()));
-          }
+        const auto pluginGate = m_PluginContainer.pluginCallGate(tool);
+        bool matched          = false;
+        if (pluginGate) {
+          pluginGate->runIfAllowed([&] {
+            if (tool->name() != sortToolName ||
+                !m_PluginContainer.isEnabled(tool)) {
+              return;
+            }
+            matched = true;
+            tool->setParentWidget(this);
+            try {
+              tool->display();
+            } catch (const std::exception& e) {
+              reportError(tr("Plugin \"%1\" failed: %2")
+                              .arg(tool->localizedName())
+                              .arg(e.what()));
+            } catch (...) {
+              reportError(tr("Plugin \"%1\" failed").arg(tool->localizedName()));
+            }
+          });
+        }
+        if (matched) {
           return;
         }
       }

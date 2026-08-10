@@ -12,3 +12,6 @@ def test_getters():
     assert o.startApplication("invalid.exe") == mobase.INVALID_HANDLE_VALUE
     assert o.waitForApplication(42) == (False, -1)
     assert o.waitForApplication(4654) == (True, 0)
+    # Older IOrganizer implementations need not expose the optional release
+    # extension; the binding reports that absence without an ABI dependency.
+    assert o.releaseApplicationHandle(4654) is False

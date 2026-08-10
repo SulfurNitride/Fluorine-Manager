@@ -504,27 +504,30 @@ void ModInfo::setPluginSelected(const bool& isSelected)
 
 void ModInfo::addCategory(const QString& categoryName)
 {
-  int id = CategoryFactory::instance().getCategoryID(categoryName);
-  if (id == -1) {
-    id = CategoryFactory::instance().addCategory(
-        categoryName, std::vector<CategoryFactory::NexusCategory>(), 0);
-  }
-  if (id >= 0) {
-    setCategory(id, true);
-  }
+  metaWriteBarrier().runIfAllowed([&] {
+    int id = CategoryFactory::instance().getCategoryID(categoryName);
+    if (id == -1) {
+      id = CategoryFactory::instance().addCategory(
+          categoryName, std::vector<CategoryFactory::NexusCategory>(), 0);
+    }
+    if (id >= 0) {
+      setCategory(id, true);
+    }
+  });
 }
 
 bool ModInfo::removeCategory(const QString& categoryName)
 {
-  int const id = CategoryFactory::instance().getCategoryID(categoryName);
-  if (id == -1) {
-    return false;
-  }
-  if (!categorySet(id)) {
-    return false;
-  }
-  setCategory(id, false);
-  return true;
+  bool removed = false;
+  metaWriteBarrier().runIfAllowed([&] {
+    int const id = CategoryFactory::instance().getCategoryID(categoryName);
+    if (id == -1 || !categorySet(id)) {
+      return;
+    }
+    setCategory(id, false);
+    removed = true;
+  });
+  return removed;
 }
 
 QStringList ModInfo::categories() const

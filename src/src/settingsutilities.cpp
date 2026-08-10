@@ -5,8 +5,40 @@
 
 #include <QDir>
 #include <QSettings>
+#include <QHash>
+
+#include <mutex>
 
 using namespace MOBase;
+
+namespace
+{
+std::mutex g_SettingsBarrierMutex;
+QHash<QSettings*, const SettingsWriteBarrier*> g_SettingsBarriers;
+}
+
+void registerSettingsWriteBarrier(QSettings& settings,
+                                  const SettingsWriteBarrier& barrier)
+{
+  const std::lock_guard lock(g_SettingsBarrierMutex);
+  g_SettingsBarriers.insert(&settings, &barrier);
+}
+
+void unregisterSettingsWriteBarrier(QSettings& settings) noexcept
+{
+  try {
+    const std::lock_guard lock(g_SettingsBarrierMutex);
+    g_SettingsBarriers.remove(&settings);
+  } catch (...) {
+  }
+}
+
+const SettingsWriteBarrier* registeredSettingsWriteBarrier(
+    QSettings& settings)
+{
+  const std::lock_guard lock(g_SettingsBarrierMutex);
+  return g_SettingsBarriers.value(&settings, nullptr);
+}
 
 bool shouldLogSetting(const QString& displayName)
 {
@@ -49,20 +81,28 @@ QString settingName(const QString& section, const QString& key)
 void removeImpl(QSettings& settings, const QString& displayName, const QString& section,
                 const QString& key)
 {
-  if (key.isEmpty()) {
-    if (!settings.childGroups().contains(section, Qt::CaseInsensitive)) {
-      // not there
-      return;
+  const auto mutation = [&] {
+    if (key.isEmpty()) {
+      if (!settings.childGroups().contains(section, Qt::CaseInsensitive)) {
+        // not there
+        return;
+      }
+    } else {
+      if (!settings.contains(settingName(section, key))) {
+        // not there
+        return;
+      }
     }
-  } else {
-    if (!settings.contains(settingName(section, key))) {
-      // not there
-      return;
-    }
-  }
 
-  logRemoval(displayName);
-  settings.remove(settingName(section, key));
+    logRemoval(displayName);
+    settings.remove(settingName(section, key));
+  };
+
+  if (const auto* barrier = registeredSettingsWriteBarrier(settings)) {
+    barrier->runIfAllowed(mutation);
+  } else {
+    mutation();
+  }
 }
 
 void remove(QSettings& settings, const QString& section, const QString& key)
@@ -97,7 +137,7 @@ QStringList ScopedGroup::keys() const
 }
 
 ScopedReadArray::ScopedReadArray(QSettings& s, const QString& section)
-    : m_settings(s) 
+    : m_settings(s)
 {
   m_count = m_settings.beginReadArray(section);
 }
@@ -119,18 +159,33 @@ QStringList ScopedReadArray::keys() const
 
 ScopedWriteArray::ScopedWriteArray(QSettings& s, const QString& section,
                                    std::size_t size)
-    : m_settings(s), m_section(section) 
+    : m_settings(s), m_section(section)
 {
-  m_settings.beginWriteArray(section, size == NoSize ? -1 : static_cast<int>(size));
+  if (const auto* barrier = registeredSettingsWriteBarrier(m_settings)) {
+    m_writeLease.emplace(barrier->enterIfAllowed());
+    m_writeAllowed = static_cast<bool>(*m_writeLease);
+  } else {
+    m_writeAllowed = true;
+  }
+
+  if (m_writeAllowed) {
+    m_settings.beginWriteArray(section,
+                               size == NoSize ? -1 : static_cast<int>(size));
+  }
 }
 
 ScopedWriteArray::~ScopedWriteArray()
 {
-  m_settings.endArray();
+  if (m_writeAllowed) {
+    m_settings.endArray();
+  }
 }
 
 void ScopedWriteArray::next()
 {
+  if (!m_writeAllowed) {
+    return;
+  }
   m_settings.setArrayIndex(m_i);
   ++m_i;
 }
@@ -219,11 +274,14 @@ QString credentialName(const QString& key)
 // matches the upstream MO2 behaviour that already lived in the #else branch.
 static QSettings& credentialSettings()
 {
-  static QSettings s(QDir::homePath() + "/.config/ModOrganizer/credentials.ini",
-                     QSettings::IniFormat);
-  return s;
+  // Every mutation is explicitly synchronized by setWindowsCredential(). Keep
+  // this as a process-lifetime object so a failed explicit sync is never
+  // retried implicitly during static destruction after a rollback fail-stop.
+  static auto* s = new QSettings(
+      QDir::homePath() + "/.config/ModOrganizer/credentials.ini",
+      QSettings::IniFormat);
+  return *s;
 }
-
 QString getWindowsCredential(const QString& key)
 {
   return credentialSettings().value(credentialName(key)).toString();
@@ -236,5 +294,11 @@ bool setWindowsCredential(const QString& key, const QString& data)
   } else {
     credentialSettings().setValue(credentialName(key), data);
   }
-  return true;
+  return syncWindowsCredentials();
+}
+
+bool syncWindowsCredentials()
+{
+  credentialSettings().sync();
+  return credentialSettings().status() == QSettings::NoError;
 }

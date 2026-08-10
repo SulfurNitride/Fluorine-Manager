@@ -431,6 +431,7 @@ public:
    * @brief stores meta information back to disk
    */
   void saveMeta() override;
+  void suppressWritesForFailedRollback() override;
 
   void readMeta() override;
 
@@ -524,6 +525,7 @@ private:
   NexusBridge m_NexusBridge;
 
   bool needsDescriptionUpdate() const;
+  void saveMetaImpl();
 };
 
 #endif  // MODINFOREGULAR_H

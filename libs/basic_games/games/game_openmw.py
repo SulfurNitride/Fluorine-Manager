@@ -64,6 +64,7 @@ from .openmw_support.game_plugins import (
     OpenMWGamePlugins,
     OpenMWPluginListLifecycle,
 )
+from .openmw_support.process_lifetime import companion_process_names
 
 _FLATPAK_ID = "org.openmw.OpenMW"
 
@@ -238,6 +239,12 @@ class OpenMWGame(BasicGame):
         if openmw:
             out.append(mobase.ExecutableInfo("OpenMW", QFileInfo(openmw)))
         return out
+
+    def executableProcessNames(
+        self, executable: str, arguments: list[str]
+    ) -> list[str]:
+        """Keep launcher runs active for the OpenMW engine they start."""
+        return companion_process_names(executable, arguments, _FLATPAK_ID)
 
     # ------------------------------------------------------------------
     # openmw.cfg export (runs on every launch via onAboutToRun)

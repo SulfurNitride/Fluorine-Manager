@@ -1,17 +1,22 @@
 #include "processrunner.h"
+#include "applicationcompletion.h"
+#include "asynctask.h"
+#include "processlifetime.h"
+#include "rootprocesscompletion.h"
 #include "env.h"
 #include "envmodule.h"
 #include "instancemanager.h"
 #include "iuserinterface.h"
+#include "launchlifecycle.h"
 #include "organizercore.h"
 #include "vfsbackend.h"
 
 #include <iplugingame.h>
 #include <log.h>
 #include <report.h>
+#include <uibase/scopeguard.h>
 #include <uibase/utility.h>
 
-#include <QCoreApplication>
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
@@ -20,16 +25,12 @@
 #include <QProcess>
 #include <QSettings>
 #include <QThread>
+#include <QUuid>
 
-#include <cerrno>
-#include <deque>
-#include <dirent.h>
-#include <fstream>
-#include <csignal>
-#include <sys/stat.h>
-#include <sys/wait.h>
-#include <unordered_map>
-#include <unordered_set>
+#include <algorithm>
+#include <chrono>
+#include <exception>
+#include <thread>
 
 using namespace MOBase;
 
@@ -169,700 +170,133 @@ pid_t handleToPid(HANDLE h)
   return static_cast<pid_t>(reinterpret_cast<intptr_t>(h));
 }
 
-QString readProcComm(pid_t pid)
+void logQueuedProcessFailure(const char* operation, pid_t pid,
+                             std::exception_ptr failure) noexcept
 {
-  QFile f(QString("/proc/%1/comm").arg(pid));
-  if (!f.open(QIODevice::ReadOnly)) {
-    return {};
-  }
-
-  return QString::fromUtf8(f.readAll()).trimmed();
-}
-
-// Read /proc/<pid>/cmdline (NUL-separated) and return all argv entries.
-QStringList readProcCmdline(pid_t pid)
-{
-  QFile f(QString("/proc/%1/cmdline").arg(pid));
-  if (!f.open(QIODevice::ReadOnly)) {
-    return {};
-  }
-
-  const QByteArray data = f.readAll();
-  QStringList parts;
-  for (const QByteArray& part : data.split('\0')) {
-    if (!part.isEmpty()) {
-      parts.push_back(QString::fromUtf8(part));
+  try {
+    if (failure) {
+      std::rethrow_exception(failure);
     }
-  }
-  return parts;
-}
-
-// Read a specific environment variable from /proc/<pid>/environ.
-// The environ file is NUL-separated KEY=VALUE pairs.
-QString readProcEnvVar(pid_t pid, const char* varName)
-{
-  QFile f(QString("/proc/%1/environ").arg(pid));
-  if (!f.open(QIODevice::ReadOnly)) {
-    return {};
-  }
-
-  const QByteArray data   = f.readAll();
-  const QByteArray prefix = QByteArray(varName) + '=';
-  for (const QByteArray& entry : data.split('\0')) {
-    if (entry.startsWith(prefix)) {
-      return QString::fromUtf8(entry.mid(prefix.size()));
+    log::error("process runner: queued {} failed for pid {}", operation, pid);
+  } catch (const std::exception& e) {
+    try {
+      log::error("process runner: queued {} failed for pid {}: {}", operation,
+                 pid, e.what());
+    } catch (...) {
     }
-  }
-  return {};
-}
-
-// Find a wineserver process owned by the current user that belongs to the
-// given WINEPREFIX. When expectedPrefix is empty, returns the first
-// wineserver owned by us (legacy behaviour).
-//
-// Wineserver stays alive as long as any Wine process in the prefix is
-// running, making it the most reliable way to detect when a game has truly
-// exited — even when launcher .exe's (nvse_loader, skse_loader, etc.) exit
-// before the actual game.
-pid_t findWineserver(const QString& expectedPrefix = {})
-{
-  const uid_t myUid = ::getuid();
-  DIR* proc         = opendir("/proc");
-  if (!proc)
-    return 0;
-
-  pid_t result         = 0;
-  struct dirent* entry = nullptr;
-  while ((entry = readdir(proc)) != nullptr) {
-    if (entry->d_type != DT_DIR && entry->d_type != DT_UNKNOWN)
-      continue;
-    const char* name = entry->d_name;
-    if (*name == '\0' || !std::isdigit(static_cast<unsigned char>(*name)))
-      continue;
-
-    const pid_t pid    = static_cast<pid_t>(std::strtol(name, nullptr, 10));
-    const QString comm = readProcComm(pid);
-    if (comm != "wineserver")
-      continue;
-
-    struct stat st;
-    if (::stat(QString("/proc/%1").arg(pid).toStdString().c_str(), &st) != 0 ||
-        st.st_uid != myUid) {
-      continue;
-    }
-
-    // If a prefix filter was given, verify this wineserver belongs to it.
-    // A wineserver without WINEPREFIX in its environ is using the default
-    // ~/.wine prefix, which is never the game prefix — skip it too.
-    if (!expectedPrefix.isEmpty()) {
-      const QString wsPrefix = readProcEnvVar(pid, "WINEPREFIX");
-      if (wsPrefix.isEmpty() ||
-          QDir(wsPrefix).canonicalPath() != QDir(expectedPrefix).canonicalPath()) {
-        log::debug("skipping wineserver {} (prefix '{}' != expected '{}')", pid,
-                   wsPrefix.toStdString(), expectedPrefix.toStdString());
-        continue;
-      }
-    }
-
-    result = pid;
-    break;
-  }
-  closedir(proc);
-  return result;
-}
-
-// Check whether any of the expected executable names appear in a process's
-// comm or cmdline. Wine processes often show "wine64-preload" or "start.exe"
-// in /proc/comm while the actual game executable only appears in cmdline.
-// Also handles the 15-char TASK_COMM_LEN truncation in /proc/comm.
-bool processMatchesExpected(pid_t pid, const QStringList& expected,
-                            QString* matchedNameOut)
-{
-  // 1. Check /proc/comm (fast path).
-  const QString comm = readProcComm(pid);
-  if (!comm.isEmpty()) {
-    const QString lower = comm.toLower();
-    for (const QString& exp : expected) {
-      if (lower == exp) {
-        if (matchedNameOut)
-          *matchedNameOut = comm;
-        return true;
-      }
-      // Handle TASK_COMM_LEN truncation (15 chars): if the expected name is
-      // longer than 15 chars, check if comm matches its first 15 chars.
-      if (exp.size() > 15 && lower == exp.left(15)) {
-        if (matchedNameOut)
-          *matchedNameOut = exp;
-        return true;
-      }
-    }
-  }
-
-  // 2. Check /proc/cmdline — Wine/Proton processes carry the .exe name here
-  //    even when comm shows wine64-preloader or start.exe.
-  const QStringList cmdline = readProcCmdline(pid);
-  for (const QString& arg : cmdline) {
-    const QString normalized = QString(arg).replace('\\', '/');
-    const QString base       = QFileInfo(normalized).fileName().toLower();
-    if (expected.contains(base)) {
-      if (matchedNameOut)
-        *matchedNameOut = QFileInfo(normalized).fileName();
-      return true;
-    }
-  }
-
-  return false;
-}
-
-std::unordered_map<pid_t, std::vector<pid_t>> buildProcChildrenMap()
-{
-  std::unordered_map<pid_t, std::vector<pid_t>> children;
-  DIR* proc = opendir("/proc");
-  if (!proc) {
-    return children;
-  }
-
-  struct dirent* entry = nullptr;
-  while ((entry = readdir(proc)) != nullptr) {
-    if (entry->d_type != DT_DIR && entry->d_type != DT_UNKNOWN) {
-      continue;
-    }
-
-    const char* name = entry->d_name;
-    if (*name == '\0' || !std::isdigit(static_cast<unsigned char>(*name))) {
-      continue;
-    }
-
-    const pid_t pid = static_cast<pid_t>(std::strtol(name, nullptr, 10));
-    std::ifstream status(QString("/proc/%1/status").arg(pid).toStdString());
-    if (!status.is_open()) {
-      continue;
-    }
-
-    std::string line;
-    pid_t ppid = 0;
-    while (std::getline(status, line)) {
-      if (line.rfind("PPid:", 0) == 0) {
-        ppid = static_cast<pid_t>(std::strtol(line.c_str() + 5, nullptr, 10));
-        break;
-      }
-    }
-
-    if (ppid > 0) {
-      children[ppid].push_back(pid);
-    }
-  }
-
-  closedir(proc);
-  return children;
-}
-
-std::unordered_set<pid_t> collectDescendants(
-    pid_t root, const std::unordered_map<pid_t, std::vector<pid_t>>& children)
-{
-  std::unordered_set<pid_t> out;
-  std::deque<pid_t> q;
-  q.push_back(root);
-
-  while (!q.empty()) {
-    const pid_t cur = q.front();
-    q.pop_front();
-
-    const auto it = children.find(cur);
-    if (it == children.end()) {
-      continue;
-    }
-
-    for (pid_t child : it->second) {
-      if (out.insert(child).second) {
-        q.push_back(child);
-      }
-    }
-  }
-
-  return out;
-}
-
-QStringList buildExpectedExecutables(const QFileInfo& binary, const QString& arguments)
-{
-  QStringList expected;
-  auto addName = [&](QString name) {
-    name = name.trimmed().toLower();
-    if (!name.isEmpty() && !expected.contains(name)) {
-      expected.push_back(name);
-    }
-  };
-
-  addName(binary.fileName());
-
-  const auto args = QProcess::splitCommand(arguments);
-  for (const QString& arg : args) {
-    const QFileInfo fi(arg);
-    const QString base = fi.fileName();
-    if (base.endsWith(".exe", Qt::CaseInsensitive)) {
-      addName(base);
-    }
-  }
-
-  log::debug("buildExpectedExecutables: returning [{}]",
-             expected.join(", ").toStdString());
-  return expected;
-}
-
-pid_t findTrackedProcess(pid_t rootPid, const QStringList& expected,
-                         QString* trackedNameOut)
-{
-  if (expected.isEmpty()) {
-    return 0;
-  }
-
-  const auto children    = buildProcChildrenMap();
-  const auto descendants = collectDescendants(rootPid, children);
-  if (descendants.empty()) {
-    return 0;
-  }
-
-  pid_t best = 0;
-  QString bestName;
-  for (pid_t pid : descendants) {
-    QString matched;
-    if (processMatchesExpected(pid, expected, &matched)) {
-      best     = pid;
-      bestName = matched;
-      break;
-    }
-  }
-
-  if (best > 0 && trackedNameOut) {
-    *trackedNameOut = bestName;
-  }
-  return best;
-}
-
-// Scan every process owned by the current user for one whose comm or cmdline
-// matches an expected game executable (e.g. FalloutNV.exe, SkyrimSE.exe).
-// Used as a fallback after the immediate descendant tree loses the game —
-// Proton's session manager can reparent game processes outside of our root
-// PID's subtree, so a plain-descendant walk misses them. Only processes
-// inside the given WINEPREFIX are considered so we don't latch onto an
-// unrelated Wine/Proton session.
-pid_t findGameProcessInPrefix(const QStringList& expected, const QString& winePrefix,
-                              QString* matchedNameOut)
-{
-  if (expected.isEmpty()) {
-    return 0;
-  }
-
-  const uid_t myUid = ::getuid();
-  DIR* proc         = opendir("/proc");
-  if (!proc) {
-    return 0;
-  }
-
-  QString expectedPrefixCanon;
-  if (!winePrefix.isEmpty()) {
-    expectedPrefixCanon = QDir(winePrefix).canonicalPath();
-  }
-
-  pid_t best           = 0;
-  struct dirent* entry = nullptr;
-  while ((entry = readdir(proc)) != nullptr) {
-    if (entry->d_type != DT_DIR && entry->d_type != DT_UNKNOWN)
-      continue;
-    const char* name = entry->d_name;
-    if (*name == '\0' || !std::isdigit(static_cast<unsigned char>(*name)))
-      continue;
-
-    const pid_t pid = static_cast<pid_t>(std::strtol(name, nullptr, 10));
-
-    struct stat st;
-    if (::stat(QString("/proc/%1").arg(pid).toStdString().c_str(), &st) != 0 ||
-        st.st_uid != myUid) {
-      continue;
-    }
-
-    QString matched;
-    if (!processMatchesExpected(pid, expected, &matched)) {
-      continue;
-    }
-
-    // Constrain to the same WINEPREFIX so we don't latch onto an unrelated
-    // Wine process (another instance, winetricks, etc.).
-    if (!expectedPrefixCanon.isEmpty()) {
-      const QString pidPrefix = readProcEnvVar(pid, "WINEPREFIX");
-      if (pidPrefix.isEmpty())
-        continue;
-      if (QDir(pidPrefix).canonicalPath() != expectedPrefixCanon)
-        continue;
-    }
-
-    best = pid;
-    if (matchedNameOut)
-      *matchedNameOut = matched;
-    break;
-  }
-  closedir(proc);
-  return best;
-}
-
-// Best-effort "hard kill" of the wineserver (and every Wine process it owns)
-// for the given prefix. Used when the user clicks Unlock in the lock dialog —
-// Proton's session manager can keep wineserver alive for tens of seconds
-// after the game exits, and that's exactly what the user is asking us to
-// short-circuit.
-void killWineserverForPrefix(const QString& winePrefix)
-{
-  if (winePrefix.isEmpty()) {
-    log::debug("killWineserverForPrefix: skipping (no WINEPREFIX resolved)");
-    return;
-  }
-
-  const pid_t ws = findWineserver(winePrefix);
-  if (ws > 0) {
-    log::info("sending SIGTERM to wineserver {} for prefix '{}'", ws,
-              winePrefix.toStdString());
-    if (::kill(ws, SIGTERM) != 0 && errno != ESRCH) {
-      log::warn("SIGTERM on wineserver {} failed, errno={}", ws, errno);
-    }
-    // Give wineserver a short window to tear down cleanly, then SIGKILL if
-    // it's still hanging around.
-    for (int i = 0; i < 10; ++i) {
-      if (::kill(ws, 0) != 0 && errno == ESRCH) {
-        break;
-      }
-      QThread::msleep(100);
-    }
-    if (::kill(ws, 0) == 0) {
-      log::warn("wineserver {} did not exit on SIGTERM, sending SIGKILL", ws);
-      ::kill(ws, SIGKILL);
-    }
-  } else {
-    log::debug("killWineserverForPrefix: no wineserver found for '{}'",
-               winePrefix.toStdString());
-  }
-}
-
-// SIGTERM every descendant of |root| (and root itself), wait briefly, then
-// SIGKILL any survivor. Used on force-unlock so launcher .exe grandchildren
-// (skse_loader → SkyrimSE.exe → audio/physics workers) all go down even when
-// wineserver wasn't reachable.
-void killProcessTree(pid_t root)
-{
-  if (root <= 0) {
-    return;
-  }
-
-  const auto children    = buildProcChildrenMap();
-  auto descendants       = collectDescendants(root, children);
-  descendants.insert(root);
-
-  for (pid_t p : descendants) {
-    if (::kill(p, SIGTERM) != 0 && errno != ESRCH) {
-      log::debug("SIGTERM on {} failed, errno={}", p, errno);
-    }
-  }
-
-  for (int i = 0; i < 5; ++i) {
-    bool anyAlive = false;
-    for (pid_t p : descendants) {
-      if (::kill(p, 0) == 0) {
-        anyAlive = true;
-        break;
-      }
-    }
-    if (!anyAlive) {
-      return;
-    }
-    QThread::msleep(100);
-  }
-
-  for (pid_t p : descendants) {
-    if (::kill(p, 0) == 0) {
-      log::warn("process {} did not exit on SIGTERM, sending SIGKILL", p);
-      ::kill(p, SIGKILL);
+  } catch (...) {
+    try {
+      log::error("process runner: queued {} failed for pid {}", operation, pid);
+    } catch (...) {
     }
   }
 }
 
-DWORD exitCodeFromWaitStatus(int status)
+void finishApplicationCleanupNoThrow(
+    const std::shared_ptr<ApplicationCompletion>& completion,
+    const char* operation) noexcept
 {
-  if (WIFEXITED(status)) {
-    return static_cast<DWORD>(WEXITSTATUS(status));
+  try {
+    completion->finishCleanup();
+  } catch (...) {
+    logQueuedProcessFailure(operation, completion->rootPid(),
+                            std::current_exception());
   }
-
-  if (WIFSIGNALED(status)) {
-    return static_cast<DWORD>(128 + WTERMSIG(status));
-  }
-
-  return 0;
 }
 
-// killTreeOnUnlock: when the user force-unlocks/cancels the lock dialog, SIGKILL
-// the launched process tree (and the wineserver) so the wineprefix/FUSE VFS can
-// be torn down cleanly. This is correct for Proton games and for native games
-// that still rely on the FUSE VFS (e.g. Stardew Valley). It must be FALSE for
-// native, non-VFS games like OpenMW (usesVFS()==false): there is nothing to tear
-// down, and killing the tree would take down a launcher-spawned engine the user
-// is actively using. See OrganizerCore::managedGame()->usesVFS() at the caller.
-ProcessRunner::Results waitForPid(pid_t pid, LPDWORD exitCode,
-                                  UILocker::Session* ls, const QStringList& expected,
-                                  bool killTreeOnUnlock)
-{
-  if (pid <= 0) {
-    return ProcessRunner::Error;
-  }
-
-  // Capture the WINEPREFIX from the launched process so we can filter
-  // wineserver lookups to the correct prefix. Without this, Fluorine would
-  // track ANY wineserver owned by the user (e.g. one running winecfg under
-  // ~/.wine while the game uses a different prefix).
-  const QString winePrefix = readProcEnvVar(pid, "WINEPREFIX");
-  if (!winePrefix.isEmpty()) {
-    log::debug("process {} has WINEPREFIX='{}'", pid, winePrefix.toStdString());
-  }
-
-  // startDetached() creates a non-child process, so waitpid() will fail with
-  // ECHILD. Detect this on the first call and switch to kill(pid, 0) polling
-  // which works for any process owned by the same user.
-  bool useKillPoll = false;
-  {
-    int status        = 0;
-    const pid_t probe = ::waitpid(pid, &status, WNOHANG);
-    if (probe == pid) {
-      if (exitCode != nullptr) {
-        *exitCode = exitCodeFromWaitStatus(status);
-      }
-      log::debug("process {} completed immediately", pid);
-      return ProcessRunner::Completed;
-    }
-    if (probe < 0 && errno == ECHILD) {
-      useKillPoll = true;
-      log::debug("process {} is detached, using kill(0) polling", pid);
-    }
-  }
-
-  bool seenTrackedProcess = false;
-  pid_t lastTrackedPid    = 0;
-
-  while (true) {
-    QString trackedName;
-    pid_t displayPid       = pid;
-    QString displayName    = readProcComm(pid);
-    const pid_t tracked    = findTrackedProcess(pid, expected, &trackedName);
-    if (tracked > 0) {
-      if (!seenTrackedProcess || tracked != lastTrackedPid) {
-        log::info("tracking game process {}: {}", tracked, trackedName.toStdString());
-      }
-      seenTrackedProcess = true;
-      lastTrackedPid     = tracked;
-      displayPid         = tracked;
-      displayName        = trackedName;
-    } else if (seenTrackedProcess) {
-      // The tracked process is no longer a descendant of the root PID. This
-      // can happen when:
-      //  a) The root (proton) exits and wine/game processes get reparented
-      //  b) A launcher .exe (nvse_loader, skse_loader, f4se_loader) exits
-      //     after spawning the actual game (FalloutNV.exe, SkyrimSE.exe,
-      //     Fallout4.exe)
-      //
-      // If the last tracked PID is still alive, keep polling it directly.
-      if (lastTrackedPid > 0 && ::kill(lastTrackedPid, 0) == 0) {
-        displayPid  = lastTrackedPid;
-        displayName = readProcComm(lastTrackedPid);
-      } else {
-        // The previously tracked process is gone. Rescan the user's processes
-        // for any of the expected game executables in the same WINEPREFIX —
-        // Proton's session manager can reparent the game out of our
-        // descendant tree. If we find one, track that.
-        QString rescanName;
-        const pid_t rescanned =
-            findGameProcessInPrefix(expected, winePrefix, &rescanName);
-        if (rescanned > 0 && rescanned != lastTrackedPid) {
-          log::info("tracked process exited, resumed tracking game {}: {}",
-                    rescanned, rescanName.toStdString());
-          lastTrackedPid = rescanned;
-          useKillPoll    = true;
-          displayName    = rescanName;
-          continue;
-        }
-
-        // No matching game process remains. Do NOT fall back to waiting for
-        // wineserver — Proton's session manager keeps wineserver alive for
-        // the prefix idle timeout (several seconds on modern Proton, much
-        // longer under load), and blocking MO2's lock on that is
-        // indistinguishable from a hang from the user's POV.
-        if (exitCode != nullptr) {
-          *exitCode = 0;
-        }
-        log::debug("game processes for root {} exited; releasing lock "
-                   "(wineserver may linger in background)",
-                   pid);
-        return ProcessRunner::Completed;
-      }
-    }
-
-    if (ls != nullptr) {
-      ls->setInfo(static_cast<DWORD>(std::max<pid_t>(0, displayPid)), displayName);
-    }
-
-    if (useKillPoll) {
-      // Poll for process existence via kill(pid, 0). When we have a tracked
-      // game PID, monitor that instead of the root (proton) PID which may
-      // have already exited.
-      const pid_t pollPid =
-          (seenTrackedProcess && lastTrackedPid > 0) ? lastTrackedPid : pid;
-      if (::kill(pollPid, 0) != 0) {
-        if (errno == ESRCH) {
-          // The polled process exited. Rescan the prefix for any other
-          // matching game executable (launcher .exe's like f4se_loader exit
-          // after spawning the real game binary, and Proton can reparent
-          // that binary out of our root's subtree).
-          if (seenTrackedProcess) {
-            QString rescanName;
-            const pid_t rescanned =
-                findGameProcessInPrefix(expected, winePrefix, &rescanName);
-            if (rescanned > 0 && rescanned != pollPid) {
-              log::info("polled process {} exited, resumed tracking game {}: {}",
-                        pollPid, rescanned, rescanName.toStdString());
-              lastTrackedPid = rescanned;
-              continue;
-            }
-          }
-          // No game process remains — do NOT block on wineserver.
-          if (exitCode != nullptr) {
-            *exitCode = 0;
-          }
-          log::debug("process {} completed", pollPid);
-          return ProcessRunner::Completed;
-        }
-        // EPERM means the process exists but we can't signal it; keep
-        // waiting.
-        else if (errno != EPERM) {
-          log::error("failed checking process {}, errno={}", pollPid, errno);
-          return ProcessRunner::Error;
-        }
-      }
-    } else {
-      int status             = 0;
-      const pid_t waitResult = ::waitpid(pid, &status, WNOHANG);
-
-      if (waitResult == pid) {
-        // Root process (proton) exited. If we have a tracked game process
-        // that is still alive, switch to polling the game PID directly
-        // rather than declaring the game finished.
-        if (seenTrackedProcess && lastTrackedPid > 0 &&
-            ::kill(lastTrackedPid, 0) == 0) {
-          log::debug("root process {} exited but tracked game {} still alive, "
-                     "switching to kill-poll",
-                     pid, lastTrackedPid);
-          useKillPoll = true;
-          continue;
-        }
-        if (exitCode != nullptr) {
-          *exitCode = exitCodeFromWaitStatus(status);
-        }
-        log::debug("process {} completed", pid);
-        return ProcessRunner::Completed;
-      }
-
-      if (waitResult < 0) {
-        if (errno == EINTR) {
-          continue;
-        }
-        if (errno == ECHILD) {
-          // Process was reparented, switch to kill polling.
-          useKillPoll = true;
-          continue;
-        }
-        log::error("failed waiting for {}, errno={}", pid, errno);
-        return ProcessRunner::Error;
-      }
-    }
-
-    if (ls != nullptr) {
-      switch (UILocker::Session::result()) {
-      case UILocker::StillLocked:
-        break;
-
-      case UILocker::ForceUnlocked:
-      case UILocker::Cancelled: {
-        const bool cancelled = (UILocker::Session::result() == UILocker::Cancelled);
-
-        // The teardown below exists only to clean up the wineprefix and let the
-        // FUSE VFS unmount. A native, non-VFS game (OpenMW, usesVFS()==false)
-        // has neither, and its launcher spawns the real engine as a child the
-        // user is still playing — so force-unlock here must release the lock
-        // without killing the process tree.
-        if (!killTreeOnUnlock) {
-          log::debug("waiting for {} {} by user; non-VFS game, releasing lock "
-                     "but leaving the process tree running",
-                     displayPid, cancelled ? "cancelled" : "force unlocked");
-          if (exitCode != nullptr) {
-            *exitCode = 0;
-          }
-          return cancelled ? ProcessRunner::Cancelled
-                           : ProcessRunner::ForceUnlocked;
-        }
-
-        log::debug("waiting for {} {} by user, terminating", displayPid,
-                   cancelled ? "cancelled" : "force unlocked");
-
-        // The root pid (Proton wrapper) often doesn't carry WINEPREFIX in
-        // its environ even though the actual game process below it does.
-        // Fall through the known PIDs until we find one that has it set.
-        QString effectivePrefix = winePrefix;
-        for (pid_t candidate : {displayPid, lastTrackedPid, pid}) {
-          if (!effectivePrefix.isEmpty()) {
-            break;
-          }
-          if (candidate > 0) {
-            effectivePrefix = readProcEnvVar(candidate, "WINEPREFIX");
-          }
-        }
-
-        // Take down the whole descendant tree first — launcher .exe's
-        // (skse_loader, nvse_loader, f4se_loader) often exit before the real
-        // game does, leaving grandchildren that a single SIGTERM on
-        // displayPid wouldn't reach. Then SIGKILL wineserver so Proton's
-        // session manager can't keep the prefix open and the next launch
-        // starts from a clean state.
-        killProcessTree(pid);
-        killWineserverForPrefix(effectivePrefix);
-
-        // Signal abnormal termination so afterRun()'s plugin-sync gate
-        // skips the prefix (we may have killed the game mid-write).
-        if (exitCode != nullptr) {
-          *exitCode = 1;
-        }
-        return cancelled ? ProcessRunner::Cancelled
-                         : ProcessRunner::ForceUnlocked;
-      }
-
-      case UILocker::NoResult:
-      default:
-        log::debug("unexpected lock result while waiting for {}", pid);
-        return ProcessRunner::Error;
-      }
-    }
-
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-    QThread::msleep(50);
+void finishApplicationRefreshNoThrow(
+    const std::shared_ptr<ApplicationCompletion> &completion,
+    const char *operation) noexcept {
+  try {
+    completion->finishRefresh();
+  } catch (...) {
+    logQueuedProcessFailure(operation, completion->rootPid(),
+                            std::current_exception());
   }
 }
+
+void failApplicationRefreshNoThrow(
+    const std::shared_ptr<ApplicationCompletion> &completion,
+    const char *operation) noexcept {
+  try {
+    completion->failRefresh();
+  } catch (...) {
+    logQueuedProcessFailure(operation, completion->rootPid(),
+                            std::current_exception());
+  }
+}
+
+void failApplicationCompletionNoThrow(
+    const std::shared_ptr<ApplicationCompletion>& completion,
+    bool finishCleanup, const char* operation) noexcept
+{
+  try {
+    completion->finishLifetime(ApplicationCompletion::Result::Error,
+                               static_cast<std::uint32_t>(-1));
+  } catch (...) {
+    logQueuedProcessFailure(operation, completion->rootPid(),
+                            std::current_exception());
+  }
+  if (finishCleanup) {
+    finishApplicationCleanupNoThrow(completion, operation);
+  }
+}
+
 
 ProcessRunner::Results waitForProcess(HANDLE initialProcess, LPDWORD exitCode,
                                       UILocker::Session* ls,
                                       const QStringList& expected,
-                                      bool killTreeOnUnlock)
+                                      bool killTreeOnUnlock,
+                                      const QString& launchToken,
+                                      bool expectDetachedCompanion,
+                                      std::uint64_t rootStartTime,
+                                      const std::shared_ptr<
+                                          process_lifetime::RootProcessCompletion>&
+                                          rootCompletion)
 {
-  return waitForPid(handleToPid(initialProcess), exitCode, ls, expected,
-                    killTreeOnUnlock);
+  process_lifetime::Callbacks callbacks;
+  if (ls != nullptr) {
+    callbacks.updateProcess = [ls](pid_t pid, const QString& name) {
+      ls->setInfo(static_cast<DWORD>(pid), name);
+    };
+    callbacks.control = []() {
+      switch (UILocker::Session::result()) {
+      case UILocker::Cancelled:
+        return process_lifetime::Control::Cancel;
+      case UILocker::ForceUnlocked:
+        return process_lifetime::Control::ForceUnlock;
+      case UILocker::StillLocked:
+        return process_lifetime::Control::Continue;
+      case UILocker::NoResult:
+      default:
+        return process_lifetime::Control::Error;
+      }
+    };
+  }
+
+  const auto result = process_lifetime::waitForPid(
+      handleToPid(initialProcess), exitCode, callbacks, expected, killTreeOnUnlock,
+      launchToken, expectDetachedCompanion, rootStartTime, rootCompletion);
+  switch (result) {
+  case process_lifetime::Result::Completed:
+    return ProcessRunner::Completed;
+  case process_lifetime::Result::Cancelled:
+    return ProcessRunner::Cancelled;
+  case process_lifetime::Result::ForceUnlocked:
+    return ProcessRunner::ForceUnlocked;
+  case process_lifetime::Result::Error:
+  default:
+    return ProcessRunner::Error;
+  }
 }
 
 ProcessRunner::Results waitForProcesses(const std::vector<HANDLE>& initialProcesses,
                                         UILocker::Session* ls,
                                         const QStringList& expected,
-                                        bool killTreeOnUnlock)
+                                        bool killTreeOnUnlock,
+                                        const QString& launchToken,
+                                        bool expectDetachedCompanion,
+                                        std::uint64_t rootStartTime = 0)
 {
   if (initialProcesses.empty()) {
     return ProcessRunner::Completed;
@@ -870,14 +304,452 @@ ProcessRunner::Results waitForProcesses(const std::vector<HANDLE>& initialProces
 
   for (HANDLE h : initialProcesses) {
     DWORD ignored = 0;
-    const auto r  = waitForPid(handleToPid(h), &ignored, ls, expected,
-                               killTreeOnUnlock);
+    const auto r =
+        waitForProcess(h, &ignored, ls, expected, killTreeOnUnlock,
+                       launchToken, expectDetachedCompanion, rootStartTime, {});
     if (r != ProcessRunner::Completed) {
       return r;
     }
   }
 
   return ProcessRunner::Completed;
+}
+
+OrganizerCore::AfterRunResult invokeAfterRun(
+    OrganizerCore& core, const QFileInfo& binary, DWORD exitCode, pid_t rootPid,
+    bool unmountVfs, const QString& launchToken, const QString& profileName,
+    bool triggerRefresh, std::function<void()> refreshComplete = {},
+    std::function<void(bool refreshScheduled)> cleanupComplete = {})
+{
+  const auto started = std::chrono::steady_clock::now();
+  try {
+    log::info("process runner: afterRun begin for root pid {} (exit code {})",
+              rootPid, exitCode);
+  } catch (...) {
+  }
+  const auto result = core.afterRun(
+      binary, exitCode, unmountVfs, launchToken, profileName, triggerRefresh,
+      std::move(refreshComplete), std::move(cleanupComplete));
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now() - started)
+                           .count();
+  try {
+    log::info("process runner: afterRun end for root pid {} ({} ms)", rootPid,
+              elapsed);
+  } catch (...) {
+  }
+  return result;
+}
+
+ProcessRunner::Results applicationResult(ApplicationCompletion::Result result)
+{
+  switch (result) {
+  case ApplicationCompletion::Result::Completed:
+    return ProcessRunner::Completed;
+  case ApplicationCompletion::Result::Cancelled:
+    return ProcessRunner::Cancelled;
+  case ApplicationCompletion::Result::ForceUnlocked:
+    return ProcessRunner::ForceUnlocked;
+  case ApplicationCompletion::Result::Running:
+  case ApplicationCompletion::Result::Error:
+  default:
+    return ProcessRunner::Error;
+  }
+}
+
+ApplicationCompletion::Result
+applicationResult(process_lifetime::Result result)
+{
+  switch (result) {
+  case process_lifetime::Result::Completed:
+    return ApplicationCompletion::Result::Completed;
+  case process_lifetime::Result::Cancelled:
+    return ApplicationCompletion::Result::Cancelled;
+  case process_lifetime::Result::ForceUnlocked:
+    return ApplicationCompletion::Result::ForceUnlocked;
+  case process_lifetime::Result::Error:
+  default:
+    return ApplicationCompletion::Result::Error;
+  }
+}
+
+std::function<void()> makeApplicationRefreshCompletion(
+    OrganizerCore &core,
+    const std::shared_ptr<ApplicationCompletion> &completion) {
+  auto destroyedConnection = std::make_shared<QMetaObject::Connection>();
+  *destroyedConnection =
+      QObject::connect(&core, &QObject::destroyed, [completion]() noexcept {
+        failApplicationRefreshNoThrow(completion,
+                                      "destroyed-core refresh failure");
+      });
+
+  return [completion, destroyedConnection]() noexcept {
+    try {
+      QObject::disconnect(*destroyedConnection);
+    } catch (...) {
+      logQueuedProcessFailure("refresh disconnect", completion->rootPid(),
+                              std::current_exception());
+    }
+    finishApplicationRefreshNoThrow(completion, "refresh completion");
+  };
+}
+
+void scheduleLateApplicationRefresh(
+    QPointer<OrganizerCore> core,
+    const std::shared_ptr<ApplicationCompletion> &completion) noexcept {
+  try {
+    if (!completion->claimRefreshAfterCleanup()) {
+      return;
+    }
+
+    if (!core) {
+      failApplicationRefreshNoThrow(completion, "late refresh without core");
+      return;
+    }
+
+    const bool queued = QMetaObject::invokeMethod(
+        core,
+        [core, completion]() noexcept {
+          try {
+            if (!core) {
+              failApplicationRefreshNoThrow(completion,
+                                            "late refresh without core");
+              return;
+            }
+
+            if (!core->refreshAfterRun(
+                    completion->profileName(),
+                    makeApplicationRefreshCompletion(*core, completion))) {
+              failApplicationRefreshNoThrow(completion,
+                                            "unscheduled late refresh");
+            }
+          } catch (...) {
+            logQueuedProcessFailure("late post-run refresh",
+                                    completion->rootPid(),
+                                    std::current_exception());
+            failApplicationRefreshNoThrow(completion, "failed late refresh");
+          }
+        },
+        Qt::QueuedConnection);
+    if (!queued) {
+      failApplicationRefreshNoThrow(completion, "unqueued late refresh");
+    }
+  } catch (...) {
+    logQueuedProcessFailure("late refresh scheduling", completion->rootPid(),
+                            std::current_exception());
+    failApplicationRefreshNoThrow(completion, "failed late refresh scheduling");
+  }
+}
+
+struct PreparedProcessObserver
+{
+  enum class Mode
+  {
+    AsyncRefresh,
+    Application,
+  };
+
+  QPointer<OrganizerCore> core;
+  QFileInfo binary;
+  QStringList expectedExecutables;
+  QString lifetimeToken;
+  QString profileName;
+  bool ownsVfs{false};
+  bool expectCompanion{false};
+  std::shared_ptr<ApplicationCompletion> completion;
+  process_lifetime::Callbacks callbacks;
+
+  // Bound after spawn and before the release-store in executor.activate().
+  pid_t pid{-1};
+  std::uint64_t rootStartTime{process_lifetime::UnknownProcessStartTime};
+  std::shared_ptr<process_lifetime::RootProcessCompletion> rootCompletion;
+  Mode mode{Mode::AsyncRefresh};
+  DWORD preservedExitCode{static_cast<DWORD>(-1)};
+  bool triggerRefresh{false};
+  std::atomic<bool> stopRequested{false};
+};
+
+void runPreparedAsyncObserver(
+    const std::shared_ptr<PreparedProcessObserver>& observer,
+    std::stop_token stop)
+{
+  constexpr auto invalidExitCode = static_cast<std::uint32_t>(-1);
+  std::uint32_t observedExitCode = invalidExitCode;
+  std::uint32_t lastExitCode = invalidExitCode;
+  auto retryDelay = std::chrono::milliseconds(100);
+  process_lifetime::Result result = process_lifetime::Result::Error;
+
+  while (observer->core) {
+    if (stop.stop_requested()) {
+      return;
+    }
+    observedExitCode = invalidExitCode;
+    result = process_lifetime::waitForPid(
+        observer->pid, &observedExitCode, observer->callbacks,
+        observer->expectedExecutables,
+        /*killTreeOnUnlock=*/false, observer->lifetimeToken,
+        observer->expectCompanion, observer->rootStartTime,
+        observer->rootCompletion);
+    if (observedExitCode != invalidExitCode) {
+      lastExitCode = observedExitCode;
+    }
+    if (result != process_lifetime::Result::Error ||
+        observer->lifetimeToken.isEmpty()) {
+      break;
+    }
+
+    log::warn("process runner: asynchronous managed lifetime observation failed "
+              "for pid {}; retrying in {} ms without releasing launch ownership",
+              observer->pid, retryDelay.count());
+    auto remaining = retryDelay;
+    while (remaining > std::chrono::milliseconds::zero() && observer->core &&
+           !stop.stop_requested()) {
+      const auto slice = std::min(remaining, std::chrono::milliseconds(50));
+      QThread::msleep(static_cast<unsigned long>(slice.count()));
+      remaining -= slice;
+    }
+    retryDelay = std::min(retryDelay * 2, std::chrono::milliseconds(2000));
+  }
+
+  if (!observer->core || stop.stop_requested()) {
+    return;
+  }
+  if (lastExitCode != invalidExitCode) {
+    observedExitCode = lastExitCode;
+  }
+  if (result != process_lifetime::Result::Completed) {
+    log::warn("process runner: asynchronous lifetime tracking failed for pid {} "
+              "(result {})",
+              observer->pid, static_cast<int>(result));
+    observedExitCode = 1;
+  } else if (observer->preservedExitCode != static_cast<DWORD>(-1)) {
+    observedExitCode = observer->preservedExitCode;
+  }
+
+  if (result != process_lifetime::Result::Completed) {
+    if (!observer->ownsVfs) {
+      QMetaObject::invokeMethod(
+          observer->core,
+          [observer]() noexcept {
+            try {
+              if (observer->core) {
+                observer->core->abandonProcessLaunch(observer->lifetimeToken);
+              }
+            } catch (...) {
+              logQueuedProcessFailure("launch abandonment", observer->pid,
+                                      std::current_exception());
+            }
+          },
+          Qt::QueuedConnection);
+    }
+    return;
+  }
+
+  const bool queued = QMetaObject::invokeMethod(
+      observer->core,
+      [observer, observedExitCode]() noexcept {
+        try {
+          if (observer->core) {
+            const auto result = invokeAfterRun(
+                *observer->core, observer->binary, observedExitCode,
+                observer->pid, observer->ownsVfs, observer->lifetimeToken,
+                observer->profileName, observer->triggerRefresh);
+            if (result.state == OrganizerCore::AfterRunState::Rejected) {
+              log::error(
+                  "process runner: queued afterRun was rejected for pid {}",
+                  observer->pid);
+            } else if (result.state ==
+                       OrganizerCore::AfterRunState::RefreshFailed) {
+              log::error("process runner: queued afterRun could not start its "
+                         "refresh for pid {}",
+                         observer->pid);
+            }
+          }
+        } catch (...) {
+          logQueuedProcessFailure("afterRun", observer->pid,
+                                  std::current_exception());
+        }
+      },
+      Qt::QueuedConnection);
+  if (!queued) {
+    log::error("process runner: unable to queue afterRun for pid {}; launch "
+               "ownership remains retained",
+               observer->pid);
+  }
+}
+
+void runPreparedApplicationObserver(
+    const std::shared_ptr<PreparedProcessObserver>& observer,
+    std::stop_token stop)
+{
+  const auto& completion = observer->completion;
+  constexpr auto invalidExitCode = static_cast<std::uint32_t>(-1);
+  std::uint32_t exitCode = invalidExitCode;
+  std::uint32_t preservedExitCode = invalidExitCode;
+  auto retryDelay = std::chrono::milliseconds(100);
+  process_lifetime::Result lifetimeResult = process_lifetime::Result::Error;
+  for (;;) {
+    exitCode = invalidExitCode;
+    lifetimeResult = process_lifetime::waitForPid(
+        completion->rootPid(), &exitCode, observer->callbacks,
+        observer->expectedExecutables, observer->ownsVfs,
+        observer->lifetimeToken, observer->expectCompanion,
+        observer->rootStartTime, observer->rootCompletion);
+    if (exitCode != invalidExitCode) {
+      preservedExitCode = exitCode;
+    }
+    if (stop.stop_requested() ||
+        lifetimeResult != process_lifetime::Result::Error ||
+        observer->lifetimeToken.isEmpty() || !observer->core) {
+      break;
+    }
+
+    completion->noteObservationFailure();
+    log::warn("process runner: managed lifetime observation failed for pid {}; "
+              "retrying in {} ms without releasing launch ownership",
+              completion->rootPid(), retryDelay.count());
+
+    const auto controlAtFailure = completion->requestedControl();
+    auto remaining = retryDelay;
+    while (remaining > std::chrono::milliseconds::zero() && observer->core &&
+           !stop.stop_requested()) {
+      if (completion->requestedControl() != controlAtFailure) {
+        break;
+      }
+      const auto slice = std::min(remaining, std::chrono::milliseconds(50));
+      QThread::msleep(static_cast<unsigned long>(slice.count()));
+      remaining -= slice;
+    }
+    retryDelay = std::min(retryDelay * 2, std::chrono::milliseconds(2000));
+  }
+  if (exitCode == invalidExitCode && preservedExitCode != invalidExitCode) {
+    exitCode = preservedExitCode;
+  }
+  if (stop.stop_requested()) {
+    completion->finishLifetime(ApplicationCompletion::Result::Error,
+                               static_cast<std::uint32_t>(-1));
+    if (!observer->core || observer->lifetimeToken.isEmpty()) {
+      finishApplicationCleanupNoThrow(completion,
+                                      "stopped raw-pid observer cleanup");
+    }
+    return;
+  }
+
+  const auto result = applicationResult(lifetimeResult);
+  completion->finishLifetime(result, exitCode);
+  const bool needsLaunchCleanup = ApplicationCompletion::requiresLaunchCleanup(
+      result, observer->ownsVfs);
+
+  if (!observer->core) {
+    completion->finishLifetime(ApplicationCompletion::Result::Error,
+                               static_cast<std::uint32_t>(-1));
+    completion->finishCleanup();
+    return;
+  }
+
+  if (!needsLaunchCleanup) {
+    if (!observer->ownsVfs) {
+      const bool queued = QMetaObject::invokeMethod(
+          observer->core,
+          [observer]() noexcept {
+            try {
+              if (observer->core) {
+                observer->core->abandonProcessLaunch(observer->lifetimeToken);
+              }
+              observer->completion->finishCleanup();
+            } catch (...) {
+              logQueuedProcessFailure("application cleanup",
+                                      observer->completion->rootPid(),
+                                      std::current_exception());
+            }
+          },
+          Qt::QueuedConnection);
+      if (!queued) {
+        if (observer->lifetimeToken.isEmpty()) {
+          finishApplicationCleanupNoThrow(completion,
+                                          "raw-pid application cleanup");
+        } else {
+          logQueuedProcessFailure("unqueued application abandonment",
+                                  completion->rootPid(), {});
+        }
+      }
+    } else {
+      log::error(
+          "process runner: VFS application cleanup was not proven for pid "
+          "{}; retaining cleanupFinished=false",
+          completion->rootPid());
+    }
+    return;
+  }
+
+  const bool queued = QMetaObject::invokeMethod(
+      observer->core,
+      [observer, exitCode]() noexcept {
+        try {
+          const auto &completion = observer->completion;
+          if (!observer->core) {
+            failApplicationCompletionNoThrow(completion,
+                                             /*finishCleanup=*/true,
+                                             "cleanup without core");
+            return;
+          }
+
+          const bool triggerRefresh = completion->claimRefreshForCleanup();
+          const auto result = invokeAfterRun(
+              *observer->core, observer->binary, exitCode, observer->pid,
+              observer->ownsVfs, observer->lifetimeToken,
+              completion->profileName(), triggerRefresh,
+              triggerRefresh ? makeApplicationRefreshCompletion(*observer->core,
+                                                                completion)
+                             : std::function<void()>{},
+              [observer, completion,
+               triggerRefresh](bool refreshScheduled) noexcept {
+                if (triggerRefresh && !refreshScheduled) {
+                  failApplicationRefreshNoThrow(
+                      completion, "afterRun refresh startup failure");
+                }
+                finishApplicationCleanupNoThrow(completion,
+                                                "afterRun cleanup completion");
+                scheduleLateApplicationRefresh(observer->core, completion);
+              });
+          if (result.state == OrganizerCore::AfterRunState::Rejected) {
+            failApplicationCompletionNoThrow(completion,
+                                             /*finishCleanup=*/
+                                             observer->lifetimeToken.isEmpty(),
+                                             "rejected afterRun");
+            if (triggerRefresh) {
+              failApplicationRefreshNoThrow(completion,
+                                            "rejected afterRun refresh");
+            }
+          } else if (result.state ==
+                     OrganizerCore::AfterRunState::RefreshFailed) {
+            failApplicationRefreshNoThrow(completion,
+                                          "failed afterRun refresh startup");
+          }
+        } catch (...) {
+          const auto& completion = observer->completion;
+          logQueuedProcessFailure("monitored afterRun", completion->rootPid(),
+                                  std::current_exception());
+          // An exception before OrganizerCore accepts the cleanup has no
+          // retry continuation. Do not claim success for a retained managed
+          // tracker; a waiting caller remains blocked by cleanupFinished=false.
+          failApplicationCompletionNoThrow(
+              completion,
+              /*finishCleanup=*/observer->lifetimeToken.isEmpty(),
+              "failed monitored afterRun");
+        }
+      },
+      Qt::QueuedConnection);
+  if (!queued) {
+    failApplicationCompletionNoThrow(
+        completion, /*finishCleanup=*/observer->lifetimeToken.isEmpty(),
+        "unqueued application afterRun");
+    if (!observer->lifetimeToken.isEmpty()) {
+      log::error("process runner: unable to queue launch cleanup for pid {}; launch "
+                 "ownership and cleanupFinished=false remain retained",
+                 completion->rootPid());
+    }
+  }
 }
 
 ProcessRunner::ProcessRunner(OrganizerCore& core, IUserInterface* ui)
@@ -1122,6 +994,159 @@ bool ProcessRunner::shouldRunShell() const
   return !m_shellOpen.filePath().isEmpty();
 }
 
+bool ProcessRunner::prepareLaunchObserver(bool ownsVfs)
+{
+  try {
+    auto observer = std::make_shared<PreparedProcessObserver>();
+    observer->core = &m_core;
+    observer->binary = m_sp.binary;
+    observer->expectedExecutables = m_expectedExecutables;
+    observer->lifetimeToken = m_sp.lifetimeToken;
+    observer->profileName = m_profileName;
+    observer->ownsVfs = ownsVfs;
+    observer->expectCompanion = !m_companionProcessNames.isEmpty();
+    observer->completion = std::make_shared<ApplicationCompletion>(
+        0, ownsVfs, m_profileName);
+
+    const auto completion = observer->completion;
+    observer->callbacks.updateProcess =
+        [completion](pid_t trackedPid, const QString& name) {
+          completion->updateProcess(trackedPid, name);
+        };
+    auto* observerState = observer.get();
+    observer->callbacks.control = [observerState, completion]() {
+      if (observerState->stopRequested.load(std::memory_order_acquire)) {
+        return process_lifetime::Control::Error;
+      }
+      switch (completion->requestedControl()) {
+      case ApplicationCompletion::Control::Cancel:
+        return process_lifetime::Control::Cancel;
+      case ApplicationCompletion::Control::ForceUnlock:
+        return process_lifetime::Control::ForceUnlock;
+      case ApplicationCompletion::Control::Continue:
+      default:
+        return process_lifetime::Control::Continue;
+      }
+    };
+
+    async_task::ManagedTaskExecutor::Task work =
+        [observer](std::stop_token stop) {
+          observer->stopRequested.store(stop.stop_requested(),
+                                        std::memory_order_release);
+          std::stop_callback stopCallback(stop, [observer]() {
+            observer->stopRequested.store(true, std::memory_order_release);
+          });
+          if (observer->mode == PreparedProcessObserver::Mode::Application) {
+            runPreparedApplicationObserver(observer, stop);
+          } else {
+            runPreparedAsyncObserver(observer, stop);
+          }
+        };
+    async_task::ManagedTaskExecutor::FailureHandler failure =
+        [observer]() noexcept {
+          try {
+            if (observer->mode == PreparedProcessObserver::Mode::Application) {
+              failApplicationCompletionNoThrow(
+                  observer->completion, /*finishCleanup=*/!observer->core,
+                  "observer task failure");
+              if (!observer->core) {
+                return;
+              }
+              if (!observer->lifetimeToken.isEmpty()) {
+                // An unexpected observer failure cannot prove a managed
+                // lifetime ended. Retain launch ownership and
+                // cleanupFinished=false for both VFS and native launches.
+                return;
+              }
+              const bool queued = QMetaObject::invokeMethod(
+                  observer->core,
+                  [observer]() noexcept {
+                    try {
+                      if (observer->core) {
+                        observer->core->abandonProcessLaunch(
+                            observer->lifetimeToken);
+                      }
+                      finishApplicationCleanupNoThrow(
+                          observer->completion,
+                          "observer failure cleanup completion");
+                    } catch (...) {
+                      logQueuedProcessFailure(
+                          "observer failure cleanup", observer->pid,
+                          std::current_exception());
+                    }
+                  },
+                  Qt::QueuedConnection);
+              if (!queued) {
+                if (observer->lifetimeToken.isEmpty()) {
+                  finishApplicationCleanupNoThrow(
+                      observer->completion,
+                      "unqueued raw-pid observer failure cleanup");
+                } else {
+                  logQueuedProcessFailure("unqueued observer abandonment",
+                                          observer->pid, {});
+                }
+              }
+            } else if (observer->core &&
+                       observer->lifetimeToken.isEmpty()) {
+              QMetaObject::invokeMethod(
+                  observer->core,
+                  [observer]() noexcept {
+                    try {
+                      if (observer->core) {
+                        observer->core->abandonProcessLaunch(
+                            observer->lifetimeToken);
+                      }
+                    } catch (...) {
+                      logQueuedProcessFailure("observer abandonment",
+                                              observer->pid,
+                                              std::current_exception());
+                    }
+                  },
+                  Qt::QueuedConnection);
+            }
+          } catch (...) {
+            logQueuedProcessFailure("observer failure handler", observer->pid,
+                                    std::current_exception());
+          }
+        };
+
+    if (!async_task::executor().prepare(
+            m_asyncTaskLease, std::move(work), std::move(failure))) {
+      return false;
+    }
+    m_preparedObserver = std::move(observer);
+    return true;
+  } catch (const std::exception& e) {
+    log::error("process runner: observer preparation failed: {}", e.what());
+  } catch (...) {
+    log::error("process runner: observer preparation failed");
+  }
+  return false;
+}
+
+bool ProcessRunner::activatePreparedObserver(bool applicationMode,
+                                             DWORD preservedExitCode,
+                                             bool triggerRefresh) noexcept
+{
+  if (m_observerActivated) {
+    return true;
+  }
+  if (!m_preparedObserver || !m_asyncTaskLease) {
+    return false;
+  }
+
+  m_preparedObserver->mode =
+      applicationMode ? PreparedProcessObserver::Mode::Application
+                      : PreparedProcessObserver::Mode::AsyncRefresh;
+  m_preparedObserver->preservedExitCode = preservedExitCode;
+  m_preparedObserver->triggerRefresh = triggerRefresh;
+  if (!async_task::executor().activate(m_asyncTaskLease)) {
+    return false;
+  }
+  m_observerActivated = true;
+  return true;
+}
+
 ProcessRunner::Results ProcessRunner::run()
 {
   // check if setHooked() was called after setFromFile(); this needs to modify
@@ -1183,6 +1208,16 @@ std::optional<ProcessRunner::Results> ProcessRunner::runShell()
 
 std::optional<ProcessRunner::Results> ProcessRunner::runBinary()
 {
+  // Reserve bounded asynchronous-monitor capacity before any process or VFS
+  // launch exists. A successful launch can therefore always transfer its one
+  // lifetime task without a UI-thread fallback.
+  m_asyncTaskLease = async_task::executor().reserve(&m_core);
+  if (!m_asyncTaskLease) {
+    log::error("process runner: no asynchronous lifetime monitor capacity is "
+               "available");
+    return Error;
+  }
+
   if (m_profileName.isEmpty()) {
     const auto profile = m_core.currentProfile();
     if (!profile) {
@@ -1194,6 +1229,28 @@ std::optional<ProcessRunner::Results> ProcessRunner::runBinary()
 
   const auto* game = m_core.managedGame();
   auto& settings   = m_core.settings();
+  const bool ownsVfs = (game == nullptr) || game->usesVFS();
+  m_ownsVfs = ownsVfs;
+
+  m_sp.lifetimeToken =
+      QUuid::createUuid().toString(QUuid::WithoutBraces);
+  if (!m_core.reserveProcessLaunch(m_sp.lifetimeToken, m_profileName,
+                                   ownsVfs)) {
+    log::error("process runner: cannot start '{}' because another launch "
+               "owns the organizer VFS",
+               m_sp.binary.absoluteFilePath().toStdString());
+    return Error;
+  }
+  // Arm physical rollback immediately after reservation. Any exception or
+  // early return from beforeRun, plugin virtuals, observer preparation or
+  // spawn reaches the same noexcept cleanup. OrganizerCore retains/retries the
+  // exact tracker entry if mandatory VFS cleanup cannot complete.
+  auto rollbackPreparedLaunch = makePreparedLaunchRollback(
+      [this, ownsVfs]() noexcept {
+        m_core.abortProcessLaunchPreparation(
+            m_sp.lifetimeToken, m_profileName, ownsVfs,
+            std::move(m_sp.usvfsRequestPath));
+      });
 
   // FUSE makes an executable stored under mods/ visible at its virtual game
   // path before adjustForVirtualized runs. USVFS is installed by the Windows
@@ -1213,18 +1270,11 @@ std::optional<ProcessRunner::Results> ProcessRunner::runBinary()
   // if a plugin doesn't want the program to run.
   if (!m_core.beforeRun(m_sp.binary, m_sp.currentDirectory, m_sp.arguments,
                         m_profileName, m_customOverwrite, m_forcedLibraries,
-                        m_sp.useProton, &m_sp.usvfsRequestPath,
+                        m_sp.useProton, m_sp.lifetimeToken, ownsVfs,
+                        &m_sp.usvfsRequestPath,
                         &m_sp.saveBindMountSource, &m_sp.saveBindMountTarget)) {
     return Error;
   }
-
-  const auto abortPreparedLaunch = [this]() {
-    if (!m_sp.usvfsRequestPath.isEmpty()) {
-      QFile::remove(m_sp.usvfsRequestPath);
-      m_sp.usvfsRequestPath.clear();
-    }
-    m_core.unmountVFS();
-  };
 
   QWidget* parent = (m_ui ? m_ui->mainWindow() : nullptr);
 
@@ -1240,12 +1290,10 @@ std::optional<ProcessRunner::Results> ProcessRunner::runBinary()
   }
 
   if (!checkSteam(parent, m_sp, game->gameDirectory(), m_sp.steamAppID, settings)) {
-    abortPreparedLaunch();
     return Error;
   }
 
   if (!checkBlacklist(parent, m_sp, settings)) {
-    abortPreparedLaunch();
     return Error;
   }
 
@@ -1255,62 +1303,62 @@ std::optional<ProcessRunner::Results> ProcessRunner::runBinary()
     adjustForVirtualized(game, m_sp, settings);
   }
 
+  // Query game/plugin lifetime policy exactly once, after the final launch
+  // path is known but before a process exists. Python and native plugins may
+  // throw here; rollbackPreparedLaunch removes any VFS preparation while
+  // retaining ownership if cleanup itself needs a retry.
+  try {
+    const QStringList arguments = QProcess::splitCommand(m_sp.arguments);
+    const QStringList requestedCompanions =
+        game != nullptr
+            ? game->executableProcessNames(m_sp.binary.absoluteFilePath(),
+                                           arguments)
+            : QStringList{};
+    m_companionProcessNames = process_lifetime::buildExpectedExecutables(
+        QFileInfo{}, QString{}, requestedCompanions);
+    m_expectedExecutables = process_lifetime::buildExpectedExecutables(
+        m_sp.binary, m_sp.arguments, m_companionProcessNames);
+    m_expectedExecutables = processTrackingExecutables(
+        m_expectedExecutables, !m_sp.usvfsRequestPath.isEmpty());
+    m_lifetimeTrackingPrepared = true;
+  } catch (const std::exception& e) {
+    log::error("process runner: failed to resolve companion lifetime policy "
+               "for '{}': {}",
+               m_sp.binary.absoluteFilePath().toStdString(), e.what());
+    return Error;
+  } catch (...) {
+    log::error("process runner: failed to resolve companion lifetime policy "
+               "for '{}' (unknown plugin exception)",
+               m_sp.binary.absoluteFilePath().toStdString());
+    return Error;
+  }
+
+  // Materialize the completion state, final executable list, callbacks and
+  // both observer modes before a child process exists. After this point a
+  // successful spawn requires only noexcept receipt binding and activation.
+  if (!prepareLaunchObserver(ownsVfs)) {
+    return Error;
+  }
+
+  auto launchReceipt = startBinary(parent, m_sp);
   m_handle.reset(reinterpret_cast<HANDLE>(
-      static_cast<intptr_t>(startBinary(parent, m_sp))));
+      static_cast<intptr_t>(launchReceipt.pid)));
 
   if (m_handle.get() == INVALID_HANDLE_VALUE) {
     // beforeRun may have deployed Root Builder files for the Wine-side USVFS
     // helper. Use the normal VFS teardown path when process creation fails.
-    abortPreparedLaunch();
     return Error;
   }
 
+  m_sp.lifetimeRootStartTime = launchReceipt.startTime;
+  m_rootCompletion = std::move(launchReceipt.completion);
+  m_preparedObserver->pid = launchReceipt.pid;
+  m_preparedObserver->rootStartTime = launchReceipt.startTime;
+  m_preparedObserver->rootCompletion = m_rootCompletion;
+  m_preparedObserver->completion->bindRootPid(launchReceipt.pid);
+  rollbackPreparedLaunch.dismiss();
+
   return {};
-}
-
-bool ProcessRunner::shouldRefresh(Results r) const
-{
-  // afterRun() is only called with the Refresh flag; it refreshes the
-  // directory structure and notifies plugins.
-  //
-  // Refreshing is not always required and can actually cause problems:
-  //
-  //  1) running shortcuts doesn't need refreshing because MO closes right
-  //     after
-  //
-  //  2) the mod info dialog is not set up to deal with refreshes, so that it
-  //     will crash because the old DirectoryEntry's are still being used in
-  //     the list
-  if (!m_waitFlags.testFlag(TriggerRefresh)) {
-    log::debug("process runner: not refreshing because the flag isn't set");
-    return false;
-  }
-
-  switch (r) {
-  case Completed: {
-    log::debug("process runner: refreshing because the process completed");
-    return true;
-  }
-
-  case ForceUnlocked: {
-    // The ForceUnlocked branch in waitForPid has already taken down the
-    // game's process tree and wineserver, so by the time we're here no
-    // Wine process is still writing under the prefix. Run afterRun() so
-    // the FUSE VFS is unmounted, game-dir permissions are restored, and
-    // local saves are synced back. The exit code is set non-zero in that
-    // branch, which gates plugin sync-back (Plugins.txt may have been
-    // half-written when we killed the game).
-    log::debug("process runner: running afterRun to unmount VFS after force unlock");
-    return true;
-  }
-
-  case Error:
-  case Cancelled:
-  case Running:
-  default: {
-    return false;
-  }
-  }
 }
 
 ProcessRunner::Results ProcessRunner::postRun()
@@ -1328,14 +1376,52 @@ ProcessRunner::Results ProcessRunner::postRun()
     m_lockReason = UILocker::LockUI;
   }
 
+  // Only a runBinary() generation that reserved the organizer VFS may tear it
+  // down. Shell-open and compatibility raw-PID waits have no launch ownership
+  // and must not unmount an unrelated active launch.
+  const bool ownsVfs = !m_sp.lifetimeToken.isEmpty() && m_ownsVfs;
+  if (!mustWait && m_lockReason == UILocker::NoReason &&
+      m_preparedObserver) {
+    const bool applicationMode = !m_waitFlags.testFlag(TriggerRefresh);
+    const bool activated = activatePreparedObserver(
+        applicationMode, static_cast<DWORD>(-1),
+        m_waitFlags.testFlag(TriggerRefresh));
+    Q_ASSERT(activated);
+  }
   const bool usingUsvfsHelper = !m_sp.usvfsRequestPath.isEmpty();
-  const QStringList expectedExecutables = processTrackingExecutables(
-      buildExpectedExecutables(m_sp.binary, m_sp.arguments), usingUsvfsHelper);
+  QStringList fallbackExpectedExecutables;
+  if (!m_lifetimeTrackingPrepared) {
+    fallbackExpectedExecutables = processTrackingExecutables(
+        process_lifetime::buildExpectedExecutables(
+            m_sp.binary, m_sp.arguments, {}),
+        usingUsvfsHelper);
+  }
+  const QStringList& expectedExecutables =
+      m_lifetimeTrackingPrepared ? m_expectedExecutables
+                                 : fallbackExpectedExecutables;
+
+  if (!m_companionProcessNames.isEmpty()) {
+    log::info("process runner: root pid {} has companion lifetime processes [{}]",
+              getProcessHandle(),
+              m_companionProcessNames.join(", ").toStdString());
+  }
 
   if (usingUsvfsHelper) {
     log::debug("process runner: using {} as the USVFS lifetime anchor",
                kUsvfsLauncherExecutable);
   }
+
+  auto scheduleAsyncRefresh = [&](DWORD preservedExitCode) {
+    const bool triggerRefresh = m_waitFlags.testFlag(TriggerRefresh);
+    const bool activated = activatePreparedObserver(
+        /*applicationMode=*/false, preservedExitCode, triggerRefresh);
+    Q_ASSERT(activated);
+
+    log::debug(
+        "process runner: scheduled async post-run refresh for pid {} "
+        "tracking [{}]",
+        getProcessHandle(), expectedExecutables.join(", ").toStdString());
+  };
 
   if (!mustWait) {
     if (m_lockReason == UILocker::NoReason) {
@@ -1343,43 +1429,14 @@ ProcessRunner::Results ProcessRunner::postRun()
       // waiting/locking. In that mode we still need post-run refresh/sync once
       // the process exits.
       if (m_waitFlags.testFlag(TriggerRefresh)) {
-        const pid_t pid =
-            static_cast<pid_t>(reinterpret_cast<intptr_t>(m_handle.get()));
-        const QFileInfo binary       = m_sp.binary;
-        QPointer<OrganizerCore> core = &m_core;
-
-        std::thread([core, binary, pid, expectedExecutables]() {
-          DWORD exitCode = 0;
-          const auto result = waitForPid(pid, &exitCode, nullptr,
-                                         expectedExecutables,
-                                         /*killTreeOnUnlock=*/false);
-
-          if (result != ProcessRunner::Completed) {
-            MOBase::log::warn(
-                "process runner: asynchronous lifetime tracking failed for "
-                "pid {} (result {})",
-                pid, static_cast<int>(result));
-            exitCode = 1;
-          }
-
-          if (!core) {
-            return;
-          }
-
-          QMetaObject::invokeMethod(
-              core,
-              [core, binary, exitCode]() {
-                if (core) {
-                  core->afterRun(binary, exitCode);
-                }
-              },
-              Qt::QueuedConnection);
-        }).detach();
-
-        log::debug(
-            "process runner: scheduled async post-run refresh for pid {} "
-            "tracking [{}]",
-            pid, expectedExecutables.join(", ").toStdString());
+        scheduleAsyncRefresh(static_cast<DWORD>(-1));
+      } else if (m_preparedObserver) {
+        // startApplication() obtains its public completion immediately after
+        // run(). Start that one observer now, before returning through plugin
+        // code that may allocate or throw.
+        const bool activated = activatePreparedObserver(
+            /*applicationMode=*/true, static_cast<DWORD>(-1), false);
+        Q_ASSERT(activated);
       }
       return Running;
     }
@@ -1390,31 +1447,72 @@ ProcessRunner::Results ProcessRunner::postRun()
   // must keep running when the user releases the lock — same usesVFS() gate as
   // the FUSE mount in OrganizerCore (default true = unchanged for every other
   // game).
-  const auto* game        = m_core.managedGame();
-  const bool killTreeOnUnlock = (game == nullptr) || game->usesVFS();
+  const bool killTreeOnUnlock = ownsVfs;
 
   auto r = Error;
-  withLock([&](auto& ls) {
+  withLock([&](auto &ls) {
     r = waitForProcess(m_handle.get(), &m_exitCode, &ls, expectedExecutables,
-                       killTreeOnUnlock);
+                       killTreeOnUnlock, m_sp.lifetimeToken,
+                       !m_companionProcessNames.isEmpty(),
+                       m_sp.lifetimeRootStartTime, m_rootCompletion);
   });
+  const bool observationFailed = r == Error;
 
-  if (shouldRefresh(r)) {
+  if (!killTreeOnUnlock && (r == Cancelled || r == ForceUnlocked)) {
+    // Cancel/Force Unlock for native non-VFS games releases only the UI lock;
+    // the engine intentionally remains alive. Transfer lifecycle ownership to
+    // the background so afterRun is emitted once at the real exit, never now.
+    scheduleAsyncRefresh(m_exitCode);
+    return r;
+  }
+
+  const bool needsLaunchCleanup =
+      r == Completed || (ownsVfs && (r == Cancelled || r == ForceUnlocked));
+  if (needsLaunchCleanup) {
     QEventLoop loop;
-    const bool wait = m_waitFlags.testFlag(WaitForRefresh);
+    auto refreshWait = std::make_shared<RefreshWaitLatch>(loop);
+    const bool triggerRefresh = m_waitFlags.testFlag(TriggerRefresh);
+    const bool wait = triggerRefresh && m_waitFlags.testFlag(WaitForRefresh);
 
-    if (wait) {
-      QObject::connect(&m_core, &OrganizerCore::directoryStructureReady, &loop,
-                       &QEventLoop::quit, Qt::ConnectionType::QueuedConnection);
-    }
+    const auto afterRun = invokeAfterRun(
+        m_core, m_sp.binary, m_exitCode, getProcessHandle(), ownsVfs,
+        m_sp.lifetimeToken, m_profileName, triggerRefresh,
+        wait ? std::function<void()>(
+                   [refreshWait]() noexcept { refreshWait->complete(); })
+             : std::function<void()>{},
+        wait ? std::function<void(bool)>([refreshWait, triggerRefresh](
+                                             bool refreshScheduled) noexcept {
+          if (triggerRefresh && !refreshScheduled) {
+            refreshWait->fail();
+          }
+        })
+             : std::function<void(bool)>{});
 
-    m_core.afterRun(m_sp.binary, m_exitCode);
-
-    if (wait) {
+    const bool completionWillArrive =
+        afterRun.refreshScheduled ||
+        afterRun.state == OrganizerCore::AfterRunState::CleanupPending;
+    const bool alreadyComplete = refreshWait->completeBeforeWait();
+    if (wait && completionWillArrive && !alreadyComplete) {
       log::debug("process runner: waiting until refresh finishes");
       loop.exec();
       log::debug("process runner: refresh is done");
+    } else if (wait && alreadyComplete) {
+      log::debug("process runner: refresh completed before wait loop started");
     }
+    if (afterRun.state == OrganizerCore::AfterRunState::RefreshFailed ||
+        (wait && refreshWait->failed())) {
+      log::error("process runner: post-run refresh failed for pid {}",
+                 getProcessHandle());
+      r = Error;
+    }
+  }
+
+  if (observationFailed && !m_sp.lifetimeToken.isEmpty()) {
+    // A bounded observation failure is not proof that a managed process has
+    // exited. Keep the exact generation under background observation for both
+    // VFS and native launches; when procfs recovers it will perform the one
+    // normal afterRun teardown and release the launch reservation.
+    scheduleAsyncRefresh(m_exitCode);
   }
 
   return r;
@@ -1422,8 +1520,137 @@ ProcessRunner::Results ProcessRunner::postRun()
 
 ProcessRunner::Results ProcessRunner::attachToProcess(pid_t pid)
 {
+  // Raw PID compatibility has no spawn receipt or QProcess completion. Bind
+  // the current procfs generation before preparing or activating an observer,
+  // and reject an unreadable/exited PID instead of ever tracking PID alone.
+  const auto startTime = process_lifetime::processStartTime(pid);
+  if (!startTime ||
+      process_lifetime::processIdentityState(pid, *startTime) !=
+          process_lifetime::IdentityState::Running) {
+    log::error("process runner: cannot capture a live generation for attached "
+               "pid {}",
+               pid);
+    return Error;
+  }
+  m_sp.lifetimeRootStartTime = *startTime;
+
+  if (!m_asyncTaskLease) {
+    m_asyncTaskLease = async_task::executor().reserve(&m_core);
+    if (!m_asyncTaskLease) {
+      log::error("process runner: no asynchronous lifetime monitor capacity "
+                 "is available for attached pid {}",
+                 pid);
+      return Error;
+    }
+  }
+  if (!m_preparedObserver) {
+    m_expectedExecutables =
+        processTrackingExecutables(process_lifetime::buildExpectedExecutables(
+                                       m_sp.binary, m_sp.arguments, {}),
+                                   !m_sp.usvfsRequestPath.isEmpty());
+    m_lifetimeTrackingPrepared = true;
+    if (!prepareLaunchObserver(/*ownsVfs=*/false)) {
+      return Error;
+    }
+    m_preparedObserver->pid = pid;
+    m_preparedObserver->rootStartTime = *startTime;
+    m_preparedObserver->completion->bindRootPid(pid);
+  }
   m_handle.reset(reinterpret_cast<HANDLE>(static_cast<intptr_t>(pid)));
   return postRun();
+}
+
+std::shared_ptr<ApplicationCompletion> ProcessRunner::monitorApplication() {
+  const pid_t pid = getProcessHandle();
+  if (pid <= 0 || m_handle.get() == INVALID_HANDLE_VALUE ||
+      !m_preparedObserver) {
+    return {};
+  }
+
+  // runBinary() prepared and postRun() activated this exact observer before
+  // returning to OrganizerProxy. No allocation, list construction or
+  // std::function storage is permitted in this successful-spawn path.
+  const bool activated = activatePreparedObserver(
+      /*applicationMode=*/true, static_cast<DWORD>(-1), false);
+  Q_ASSERT(activated);
+  auto completion = m_preparedObserver->completion;
+  m_handle.release();
+  m_handle.reset(INVALID_HANDLE_VALUE);
+  return completion;
+}
+
+ProcessRunner::Results ProcessRunner::waitForApplicationCompletion(
+    const std::shared_ptr<ApplicationCompletion> &completion) {
+  if (!completion) {
+    return Error;
+  }
+
+  const bool triggerRefresh = m_waitFlags.testFlag(TriggerRefresh);
+  const bool waitForRefresh =
+      triggerRefresh && m_waitFlags.testFlag(WaitForRefresh);
+  if (triggerRefresh) {
+    completion->requestRefresh();
+  }
+
+  Results result = Error;
+  bool finished = false;
+  QPointer<OrganizerCore> core = &m_core;
+  withLock([&](auto& lock) {
+    while (!finished) {
+      scheduleLateApplicationRefresh(core, completion);
+      const auto snapshot = completion->snapshot();
+      lock.setInfo(static_cast<DWORD>(std::max<pid_t>(0, snapshot.displayPid)),
+                   snapshot.displayName);
+
+      if (snapshot.cleanupFinished) {
+        result = applicationResult(snapshot.result);
+        m_exitCode = snapshot.exitCode;
+        if (triggerRefresh && snapshot.refreshFailed) {
+          result = Error;
+        }
+        if (result == Error || !waitForRefresh || snapshot.refreshFinished) {
+          finished = true;
+          continue;
+        }
+      }
+
+      // Once process lifetime is terminal, ignore a late button press and let
+      // its already-queued launch cleanup complete.
+      if (snapshot.result == ApplicationCompletion::Result::Running) {
+        switch (UILocker::Session::result()) {
+        case UILocker::Cancelled:
+        case UILocker::ForceUnlocked: {
+          const bool cancelled =
+              UILocker::Session::result() == UILocker::Cancelled;
+          if (!completion->ownsVfs()) {
+            // Native non-VFS launches keep running after the lock is released;
+            // their one background monitor still performs eventual cleanup.
+            m_exitCode = 0;
+            result = cancelled ? Cancelled : ForceUnlocked;
+            finished = true;
+            continue;
+          }
+          completion->requestControl(
+              cancelled ? ApplicationCompletion::Control::Cancel
+                        : ApplicationCompletion::Control::ForceUnlock);
+          break;
+        }
+        case UILocker::StillLocked:
+          break;
+        case UILocker::NoResult:
+        default:
+          result = Error;
+          finished = true;
+          continue;
+        }
+      }
+
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+      completion->waitForChange(std::chrono::milliseconds(30));
+    }
+  });
+
+  return result;
 }
 
 DWORD ProcessRunner::exitCode() const

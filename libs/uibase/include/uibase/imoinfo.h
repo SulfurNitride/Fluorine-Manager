@@ -26,6 +26,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 #include <QList>
 #include <QMainWindow>
 #include <QString>
+#include <QtPlugin>
 #include <QVariant>
 #include <QWidget>
 #include <cstdint>
@@ -56,6 +57,26 @@ class IPluginList;
 class IPlugin;
 class IPluginGame;
 class IGameFeatures;
+
+/**
+ * @brief Optional versioned extension for releasing application handles.
+ *
+ * This is deliberately separate from IOrganizer so adding it does not change
+ * the long-lived plugin ABI vtable. Discover it with qobject_cast().
+ */
+class QDLLEXPORT IOrganizerApplicationHandles
+{
+public:
+  virtual ~IOrganizerApplicationHandles() = default;
+
+  /**
+   * Releases a handle returned by IOrganizer::startApplication() without
+   * waiting for it. Process monitoring and organizer cleanup continue.
+   *
+   * @return true if this call released a live opaque handle.
+   */
+  virtual bool releaseApplicationHandle(HANDLE handle) = 0;
+};
 
 /**
  * @brief Interface to class that provides information about the running session
@@ -418,7 +439,16 @@ public:
    *                               overwrite
    *
    * @return a handle to the process that was started or INVALID_HANDLE_VALUE
-   *         if the application failed to start.
+   *         if the application failed to start. A running handle remains
+   *         valid until waitForApplication() consumes it or the optional
+   *         IOrganizerApplicationHandles extension releases it. Completed,
+   *         unconsumed handles are eligible for age-based retirement after
+   *         five minutes. The oldest completed handles may be retired sooner
+   *         when the completed-state cache exceeds 64 entries.
+   *
+   * @note Callers needing deterministic completion must call
+   *       waitForApplication() promptly. Callers that will not wait should
+   *       release the handle through IOrganizerApplicationHandles.
    */
   virtual HANDLE startApplication(const QString& executable,
                                   const QStringList& args = QStringList(),
@@ -627,6 +657,9 @@ public:
 };
 
 }  // namespace MOBase
+
+Q_DECLARE_INTERFACE(MOBase::IOrganizerApplicationHandles,
+                    "com.fluorine.ModOrganizer.OrganizerApplicationHandles/1.0")
 
 namespace MOBase::details
 {

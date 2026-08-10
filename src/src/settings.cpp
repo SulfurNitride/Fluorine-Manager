@@ -30,9 +30,12 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "settingsmigration.h"
 #include "settingsutilities.h"
 #include "shared/appconfig.h"
+#include <QCoreApplication>
+#include <QEvent>
 #include <QJsonDocument>
 #include <expanderwidget.h>
 #include <iplugingame.h>
+#include <atomic>
 #include <optional>
 #include <utility.h>
 
@@ -138,28 +141,58 @@ Settings::Settings(const QString& path, bool globalInstance)
       m_Settings(*m_SettingsOwner),
       m_Game(m_Settings),
       m_Geometry(m_Settings), m_Widgets(m_Settings, globalInstance),
-      m_Colors(m_Settings), m_Plugins(m_Settings), m_Paths(m_Settings),
+      m_Colors(m_Settings), m_Plugins(m_Settings, m_WriteBarrier), m_Paths(m_Settings),
       m_Network(m_Settings, globalInstance), m_Nexus(*this, m_Settings),
       m_Steam(*this, m_Settings), m_Interface(m_Settings), m_Diagnostics(m_Settings)
 {
+  if (globalInstance && s_Instance != nullptr) {
+    throw std::runtime_error("second instance of \"Settings\" created");
+  }
+
+  // m_WriteBarrier is declared before the backend and therefore outlives it.
+  // Registration is removed while both objects are still alive in ~Settings.
+  registerSettingsWriteBarrier(m_Settings, m_WriteBarrier);
   if (globalInstance) {
-    if (s_Instance != nullptr) {
-      throw std::runtime_error("second instance of \"Settings\" created");
-    } else {
-      s_Instance = this;
-    }
+    s_Instance = this;
   }
 }
 
 Settings::~Settings()
 {
-  if (m_UpdateLock) {
+  if (m_WriteBarrier.suppressed()) {
+    // QSettings synchronizes pending changes from its destructor. A failed
+    // rollback must not get a second, uncontrolled write attempt during
+    // teardown, so intentionally retain this process-lifetime backend until
+    // the operating system reclaims it.
+    m_UpdateLock.reset();
+    (void)m_SettingsOwner.release();
+  } else if (m_UpdateLock) {
     restoreUpdateSnapshot();
   }
   if (s_Instance == this) {
     MOBase::QuestionBoxMemory::setCallbacks({}, {}, {});
     s_Instance = nullptr;
   }
+  unregisterSettingsWriteBarrier(m_Settings);
+}
+
+void Settings::suppressWritesForFailedRollback() noexcept
+{
+  m_WriteBarrier.suppress();
+  QCoreApplication::removePostedEvents(&m_Settings, QEvent::UpdateRequest);
+}
+
+bool Settings::failedRollbackWritesDrained() const noexcept
+{
+  if (!m_WriteBarrier.suppressionDrained()) {
+    return false;
+  }
+
+  // An admitted setter may have queued a fresh deferred sync after phase-one
+  // suppression removed the earlier event. Zero active writers is the safe
+  // point to discard that final event before destructive teardown.
+  QCoreApplication::removePostedEvents(&m_Settings, QEvent::UpdateRequest);
+  return true;
 }
 
 bool Settings::beginUpdates()
@@ -585,12 +618,14 @@ bool Settings::firstStart() const
 
 void Settings::setFirstStart(bool b)
 {
-  if (b) {
-    SettingsMigration::markNewInstance(m_Settings);
-  } else {
-    m_Settings.setValue(SettingsMigration::FirstStartKey, false);
-    m_Settings.remove(SettingsMigration::NewInstanceProvenanceKey);
-  }
+  m_WriteBarrier.runIfAllowed([&] {
+    if (b) {
+      SettingsMigration::markNewInstance(m_Settings);
+    } else {
+      m_Settings.setValue(SettingsMigration::FirstStartKey, false);
+      m_Settings.remove(SettingsMigration::NewInstanceProvenanceKey);
+    }
+  });
 }
 
 bool Settings::isNewInstance() const
@@ -831,8 +866,37 @@ QSettings::Status Settings::sync() const
   if (m_InitialStatus != QSettings::NoError) {
     return m_InitialStatus;
   }
-  m_Settings.sync();
-  return m_Settings.status();
+
+  QSettings::Status status = QSettings::AccessError;
+  m_WriteBarrier.runIfAllowed([&] {
+    m_Settings.sync();
+    status = m_Settings.status();
+  });
+  return status;
+}
+
+std::optional<QMap<QString, QVariant>> Settings::captureEditSnapshot() const
+{
+  if (m_InitialStatus != QSettings::NoError) {
+    return std::nullopt;
+  }
+  return SettingsMigration::captureInteractiveSettingsSnapshot(m_Settings);
+}
+
+bool Settings::restoreEditSnapshot(const QMap<QString, QVariant>& snapshot)
+{
+  if (m_InitialStatus != QSettings::NoError) {
+    return false;
+  }
+  return SettingsMigration::restoreInteractiveSettingsSnapshot(m_Settings, snapshot);
+}
+
+bool Settings::verifyEditState() const
+{
+  if (m_InitialStatus != QSettings::NoError) {
+    return false;
+  }
+  return SettingsMigration::verifyInteractiveSettingsState(m_Settings);
 }
 
 QSettings::Status Settings::iniStatus() const
@@ -1616,7 +1680,10 @@ QColor ColorSettings::idealTextColor(const QColor& rBackgroundColor)
   return {iLuminance >= 128 ? Qt::black : Qt::white};
 }
 
-PluginSettings::PluginSettings(QSettings& settings) : m_Settings(settings) {}
+PluginSettings::PluginSettings(QSettings& settings,
+                               const SettingsWriteBarrier& writeBarrier)
+    : m_Settings(settings), m_WriteBarrier(writeBarrier)
+{}
 
 void PluginSettings::clearPlugins()
 {
@@ -1663,14 +1730,16 @@ void PluginSettings::registerPlugin(IPlugin* plugin)
 
   // Handle previous "enabled" settings:
   if (m_PluginSettings[plugin->name()].contains("enabled")) {
-    setPersistent(plugin->name(), "enabled",
-                  m_PluginSettings[plugin->name()]["enabled"].toBool(), true);
-    m_PluginSettings[plugin->name()].remove("enabled");
-    m_PluginDescriptions[plugin->name()].remove("enabled");
+    m_WriteBarrier.runIfAllowed([&] {
+      setPersistent(plugin->name(), "enabled",
+                    m_PluginSettings[plugin->name()]["enabled"].toBool(), true);
+      m_PluginSettings[plugin->name()].remove("enabled");
+      m_PluginDescriptions[plugin->name()].remove("enabled");
 
-    // We need to drop it manually in Settings since it is not possible to remove plugin
-    // settings:
-    remove(m_Settings, "Plugins", plugin->name() + "/enabled");
+      // We need to drop it manually in Settings since it is not possible to remove plugin
+      // settings:
+      remove(m_Settings, "Plugins", plugin->name() + "/enabled");
+    });
   }
 }
 
@@ -1707,21 +1776,23 @@ QVariant PluginSettings::setting(const QString& pluginName, const QString& key) 
 void PluginSettings::setSetting(const QString& pluginName, const QString& key,
                                 const QVariant& value)
 {
-  auto iterPlugin = m_PluginSettings.find(pluginName);
+  m_WriteBarrier.runIfAllowed([&] {
+    auto iterPlugin = m_PluginSettings.find(pluginName);
 
-  if (iterPlugin == m_PluginSettings.end()) {
-    throw MyException(QObject::tr("attempt to store setting for unknown plugin \"%1\"")
-                          .arg(pluginName));
-  }
+    if (iterPlugin == m_PluginSettings.end()) {
+      throw MyException(QObject::tr("attempt to store setting for unknown plugin \"%1\"")
+                            .arg(pluginName));
+    }
 
-  QVariant oldValue = m_PluginSettings[pluginName][key];
+    QVariant oldValue = m_PluginSettings[pluginName][key];
 
-  // store the new setting both in memory and in the ini
-  m_PluginSettings[pluginName][key] = value;
-  set(m_Settings, "Plugins", pluginName + "/" + key, value);
+    // store the new setting both in memory and in the ini
+    m_PluginSettings[pluginName][key] = value;
+    set(m_Settings, "Plugins", pluginName + "/" + key, value);
 
-  // emit signal:
-  emit pluginSettingChanged(pluginName, key, oldValue, value);
+    // emit signal:
+    emit pluginSettingChanged(pluginName, key, oldValue, value);
+  });
 }
 
 QVariantMap PluginSettings::settings(const QString& pluginName) const
@@ -1731,31 +1802,33 @@ QVariantMap PluginSettings::settings(const QString& pluginName) const
 
 void PluginSettings::setSettings(const QString& pluginName, const QVariantMap& map)
 {
-  auto iterPlugin = m_PluginSettings.find(pluginName);
+  m_WriteBarrier.runIfAllowed([&] {
+    auto iterPlugin = m_PluginSettings.find(pluginName);
 
-  if (iterPlugin == m_PluginSettings.end()) {
-    throw MyException(QObject::tr("attempt to store setting for unknown plugin \"%1\"")
-                          .arg(pluginName));
-  }
-
-  QVariantMap oldSettings      = m_PluginSettings[pluginName];
-  m_PluginSettings[pluginName] = map;
-
-  // Emit signals for settings that have been changed or added:
-  for (auto& k : map.keys()) {
-    // .value() return a default-constructed QVariant if k is not in oldSettings:
-    QVariant oldValue = oldSettings.value(k);
-    if (oldValue != map[k]) {
-      emit pluginSettingChanged(pluginName, k, oldSettings.value(k), map[k]);
+    if (iterPlugin == m_PluginSettings.end()) {
+      throw MyException(QObject::tr("attempt to store setting for unknown plugin \"%1\"")
+                            .arg(pluginName));
     }
-  }
 
-  // Emit signals for settings that have been removed:
-  for (auto& k : oldSettings.keys()) {
-    if (!map.contains(k)) {
-      emit pluginSettingChanged(pluginName, k, oldSettings[k], QVariant());
+    QVariantMap oldSettings      = m_PluginSettings[pluginName];
+    m_PluginSettings[pluginName] = map;
+
+    // Emit signals for settings that have been changed or added:
+    for (auto& k : map.keys()) {
+      // .value() return a default-constructed QVariant if k is not in oldSettings:
+      QVariant oldValue = oldSettings.value(k);
+      if (oldValue != map[k]) {
+        emit pluginSettingChanged(pluginName, k, oldSettings.value(k), map[k]);
+      }
     }
-  }
+
+    // Emit signals for settings that have been removed:
+    for (auto& k : oldSettings.keys()) {
+      if (!map.contains(k)) {
+        emit pluginSettingChanged(pluginName, k, oldSettings[k], QVariant());
+      }
+    }
+  });
 }
 
 QVariantMap PluginSettings::descriptions(const QString& pluginName) const
@@ -1781,22 +1854,26 @@ QVariant PluginSettings::persistent(const QString& pluginName, const QString& ke
 void PluginSettings::setPersistent(const QString& pluginName, const QString& key,
                                    const QVariant& value, bool sync)
 {
-  if (!m_PluginSettings.contains(pluginName)) {
-    throw MyException(QObject::tr("attempt to store setting for unknown plugin \"%1\"")
-                          .arg(pluginName));
-  }
+  m_WriteBarrier.runIfAllowed([&] {
+    if (!m_PluginSettings.contains(pluginName)) {
+      throw MyException(QObject::tr("attempt to store setting for unknown plugin \"%1\"")
+                            .arg(pluginName));
+    }
 
-  set(m_Settings, "PluginPersistance", pluginName + "/" + key, value);
+    set(m_Settings, "PluginPersistance", pluginName + "/" + key, value);
 
-  if (sync) {
-    m_Settings.sync();
-  }
+    if (sync) {
+      m_Settings.sync();
+    }
+  });
 }
 
 void PluginSettings::addBlacklist(const QString& fileName)
 {
-  m_PluginBlacklist.insert(fileName);
-  writeBlacklist();
+  m_WriteBarrier.runIfAllowed([&] {
+    m_PluginBlacklist.insert(fileName);
+    writeBlacklist();
+  });
 }
 
 bool PluginSettings::blacklisted(const QString& fileName) const
@@ -1806,11 +1883,13 @@ bool PluginSettings::blacklisted(const QString& fileName) const
 
 void PluginSettings::setBlacklist(const QStringList& pluginNames)
 {
-  m_PluginBlacklist.clear();
+  m_WriteBarrier.runIfAllowed([&] {
+    m_PluginBlacklist.clear();
 
-  for (const auto& name : pluginNames) {
-    m_PluginBlacklist.insert(name);
-  }
+    for (const auto& name : pluginNames) {
+      m_PluginBlacklist.insert(name);
+    }
+  });
 }
 
 const QSet<QString>& PluginSettings::blacklist() const
@@ -1820,33 +1899,37 @@ const QSet<QString>& PluginSettings::blacklist() const
 
 void PluginSettings::save()
 {
-  for (auto iterPlugins = m_PluginSettings.begin();
-       iterPlugins != m_PluginSettings.end(); ++iterPlugins) {
-    for (auto iterSettings = iterPlugins->begin(); iterSettings != iterPlugins->end();
-         ++iterSettings) {
-      const auto key = iterPlugins.key() + "/" + iterSettings.key();
-      set(m_Settings, "Plugins", key, iterSettings.value());
+  m_WriteBarrier.runIfAllowed([&] {
+    for (auto iterPlugins = m_PluginSettings.begin();
+         iterPlugins != m_PluginSettings.end(); ++iterPlugins) {
+      for (auto iterSettings = iterPlugins->begin(); iterSettings != iterPlugins->end();
+           ++iterSettings) {
+        const auto key = iterPlugins.key() + "/" + iterSettings.key();
+        set(m_Settings, "Plugins", key, iterSettings.value());
+      }
     }
-  }
 
-  writeBlacklist();
+    writeBlacklist();
+  });
 }
 
 void PluginSettings::writeBlacklist()
 {
-  const auto current = readBlacklist();
+  m_WriteBarrier.runIfAllowed([&] {
+    const auto current = readBlacklist();
 
-  if (current.size() > m_PluginBlacklist.size()) {
-    // Qt can't remove array elements, the section must be cleared
-    removeSection(m_Settings, "pluginBlacklist");
-  }
+    if (current.size() > m_PluginBlacklist.size()) {
+      // Qt can't remove array elements, the section must be cleared
+      removeSection(m_Settings, "pluginBlacklist");
+    }
 
-  ScopedWriteArray swa(m_Settings, "pluginBlacklist", m_PluginBlacklist.size());
+    ScopedWriteArray swa(m_Settings, "pluginBlacklist", m_PluginBlacklist.size());
 
-  for (const QString& plugin : m_PluginBlacklist) {
-    swa.next();
-    swa.set("name", plugin);
-  }
+    for (const QString& plugin : m_PluginBlacklist) {
+      swa.next();
+      swa.set("name", plugin);
+    }
+  });
 }
 
 QSet<QString> PluginSettings::readBlacklist() const
@@ -2674,21 +2757,30 @@ void DiagnosticsSettings::setSpawnDelay(std::chrono::seconds t)
   set(m_Settings, "Settings", "spawn_delay", t.count());
 }
 
+namespace
+{
+SettingsWriteBarrier g_GlobalSettingsWriteBarrier;
+}
+
 void GlobalSettings::updateRegistryKey()
 {
-  const QString OldOrganization  = "Tannin";
-  const QString OldApplication   = "Mod Organizer";
-  const QString OldInstanceValue = "CurrentInstance";
+  g_GlobalSettingsWriteBarrier.runIfAllowed([&] {
+    const QString OldOrganization  = "Tannin";
+    const QString OldApplication   = "Mod Organizer";
+    const QString OldInstanceValue = "CurrentInstance";
 
-  const QString OldRootKey = "Software\\" + OldOrganization;
+    const QString OldRootKey = "Software\\" + OldOrganization;
 
-  if (env::registryValueExists(OldRootKey + "\\" + OldApplication, OldInstanceValue)) {
-    QSettings old(OldOrganization, OldApplication);
-    setCurrentInstance(old.value(OldInstanceValue).toString());
-    old.remove(OldInstanceValue);
-  }
+    if (env::registryValueExists(OldRootKey + "\\" + OldApplication,
+                                 OldInstanceValue)) {
+      QSettings old(OldOrganization, OldApplication);
+      settings().setValue("CurrentInstance",
+                          old.value(OldInstanceValue).toString());
+      old.remove(OldInstanceValue);
+    }
 
-  env::deleteRegistryKeyIfEmpty(OldRootKey);
+    env::deleteRegistryKeyIfEmpty(OldRootKey);
+  });
 }
 
 QString GlobalSettings::currentInstance()
@@ -2698,7 +2790,8 @@ QString GlobalSettings::currentInstance()
 
 void GlobalSettings::setCurrentInstance(const QString& s)
 {
-  settings().setValue("CurrentInstance", s);
+  g_GlobalSettingsWriteBarrier.runIfAllowed(
+      [&] { settings().setValue("CurrentInstance", s); });
 }
 
 QSettings GlobalSettings::settings()
@@ -2716,7 +2809,8 @@ bool GlobalSettings::hideCreateInstanceIntro()
 
 void GlobalSettings::setHideCreateInstanceIntro(bool b)
 {
-  settings().setValue("HideCreateInstanceIntro", b);
+  g_GlobalSettingsWriteBarrier.runIfAllowed(
+      [&] { settings().setValue("HideCreateInstanceIntro", b); });
 }
 
 bool GlobalSettings::hideTutorialQuestion()
@@ -2726,7 +2820,8 @@ bool GlobalSettings::hideTutorialQuestion()
 
 void GlobalSettings::setHideTutorialQuestion(bool b)
 {
-  settings().setValue("HideTutorialQuestion", b);
+  g_GlobalSettingsWriteBarrier.runIfAllowed(
+      [&] { settings().setValue("HideTutorialQuestion", b); });
 }
 
 bool GlobalSettings::hideCategoryReminder()
@@ -2736,7 +2831,8 @@ bool GlobalSettings::hideCategoryReminder()
 
 void GlobalSettings::setHideCategoryReminder(bool b)
 {
-  settings().setValue("HideCategoryReminder", b);
+  g_GlobalSettingsWriteBarrier.runIfAllowed(
+      [&] { settings().setValue("HideCategoryReminder", b); });
 }
 
 bool GlobalSettings::hideAssignCategoriesQuestion()
@@ -2746,7 +2842,8 @@ bool GlobalSettings::hideAssignCategoriesQuestion()
 
 void GlobalSettings::setHideAssignCategoriesQuestion(bool b)
 {
-  settings().setValue("HideAssignCategoriesQuestion", b);
+  g_GlobalSettingsWriteBarrier.runIfAllowed(
+      [&] { settings().setValue("HideAssignCategoriesQuestion", b); });
 }
 
 namespace
@@ -2781,13 +2878,15 @@ bool GlobalSettings::nexusApiKey(QString& apiKey)
 
 bool GlobalSettings::setNexusApiKey(const QString& apiKey)
 {
-  if (!setWindowsCredential(NexusLegacyCredentialKey, apiKey)) {
-    const auto e = GetLastError();
-    log::error("Storing API key failed: {}", formatSystemMessage(e));
-    return false;
-  }
-
-  return true;
+  bool stored = false;
+  g_GlobalSettingsWriteBarrier.runIfAllowed([&] {
+    stored = setWindowsCredential(NexusLegacyCredentialKey, apiKey);
+    if (!stored) {
+      const auto e = GetLastError();
+      log::error("Storing API key failed: {}", formatSystemMessage(e));
+    }
+  });
+  return stored;
 }
 
 bool GlobalSettings::clearNexusApiKey()
@@ -2814,25 +2913,90 @@ bool GlobalSettings::nexusOAuthTokens(NexusOAuthTokens& tokens)
 
 bool GlobalSettings::setNexusOAuthTokens(const NexusOAuthTokens& tokens)
 {
-  const auto payload = QJsonDocument(tokens.toJson()).toJson(QJsonDocument::Compact);
-
-  if (!setWindowsCredential(NexusOAuthCredentialKey, payload)) {
-    const auto e = GetLastError();
-    log::error("Storing OAuth tokens failed: {}", formatSystemMessage(e));
-    return false;
-  }
-
-  return true;
+  bool stored = false;
+  g_GlobalSettingsWriteBarrier.runIfAllowed([&] {
+    const auto payload =
+        QJsonDocument(tokens.toJson()).toJson(QJsonDocument::Compact);
+    stored = setWindowsCredential(NexusOAuthCredentialKey, payload);
+    if (!stored) {
+      const auto e = GetLastError();
+      log::error("Storing OAuth tokens failed: {}", formatSystemMessage(e));
+    }
+  });
+  return stored;
 }
 
 bool GlobalSettings::clearNexusOAuthTokens()
 {
-  return setWindowsCredential(NexusOAuthCredentialKey, "");
+  bool cleared = false;
+  g_GlobalSettingsWriteBarrier.runIfAllowed(
+      [&] { cleared = setWindowsCredential(NexusOAuthCredentialKey, ""); });
+  return cleared;
 }
 
 bool GlobalSettings::hasNexusOAuthTokens()
 {
   return !getWindowsCredential(NexusOAuthCredentialKey).isEmpty();
+}
+
+std::optional<NexusCredentialStoreSnapshot>
+GlobalSettings::captureNexusCredentials()
+{
+  if (!syncWindowsCredentials()) {
+    log::error("failed to synchronize the Nexus credential store");
+    return std::nullopt;
+  }
+
+  NexusCredentialStoreSnapshot snapshot;
+
+  QString apiKey;
+  if (nexusApiKey(apiKey)) {
+    snapshot.apiKey = apiKey;
+  }
+
+  if (hasNexusOAuthTokens()) {
+    NexusOAuthTokens oauthTokens;
+    if (!nexusOAuthTokens(oauthTokens)) {
+      // A present entry that cannot be parsed cannot be restored exactly, so
+      // fail before opening a dialog that could overwrite it.
+      log::error("the stored Nexus OAuth credential could not be parsed");
+      return std::nullopt;
+    }
+    snapshot.oauthTokens = oauthTokens;
+  }
+
+  return snapshot;
+}
+
+bool GlobalSettings::restoreNexusCredentials(
+    const NexusCredentialStoreSnapshot& snapshot)
+{
+  // Attempt both writes even if the first one fails. This avoids needlessly
+  // leaving the other credential in its edited state.
+  const bool oauthRestored = snapshot.oauthTokens
+                                 ? setNexusOAuthTokens(*snapshot.oauthTokens)
+                                 : clearNexusOAuthTokens();
+  const bool apiKeyRestored = snapshot.apiKey ? setNexusApiKey(*snapshot.apiKey)
+                                               : clearNexusApiKey();
+
+  return oauthRestored && apiKeyRestored && verifyNexusCredentials(snapshot);
+}
+
+bool GlobalSettings::verifyNexusCredentials(
+    const NexusCredentialStoreSnapshot& snapshot)
+{
+  const auto current = captureNexusCredentials();
+  return current && *current == snapshot;
+}
+
+void GlobalSettings::suppressWritesForFailedRollback() noexcept
+{
+  g_GlobalSettingsWriteBarrier.suppress();
+}
+
+bool GlobalSettings::failedRollbackWritesDrained() noexcept
+{
+  return g_GlobalSettingsWriteBarrier.suppressionDrained();
 }
 
 void GlobalSettings::resetDialogs()
@@ -2848,19 +3012,23 @@ QStringList GlobalSettings::portableInstances()
 
 void GlobalSettings::addPortableInstance(const QString& path)
 {
-  const QString canonical = QDir(path).absolutePath();
-  QStringList list = portableInstances();
-  if (!list.contains(canonical)) {
-    list.append(canonical);
-    settings().setValue("PortableInstances", list);
-  }
+  g_GlobalSettingsWriteBarrier.runIfAllowed([&] {
+    const QString canonical = QDir(path).absolutePath();
+    QStringList list = portableInstances();
+    if (!list.contains(canonical)) {
+      list.append(canonical);
+      settings().setValue("PortableInstances", list);
+    }
+  });
 }
 
 void GlobalSettings::removePortableInstance(const QString& path)
 {
-  const QString canonical = QDir(path).absolutePath();
-  QStringList list = portableInstances();
-  if (list.removeAll(canonical) > 0) {
-    settings().setValue("PortableInstances", list);
-  }
+  g_GlobalSettingsWriteBarrier.runIfAllowed([&] {
+    const QString canonical = QDir(path).absolutePath();
+    QStringList list = portableInstances();
+    if (list.removeAll(canonical) > 0) {
+      settings().setValue("PortableInstances", list);
+    }
+  });
 }

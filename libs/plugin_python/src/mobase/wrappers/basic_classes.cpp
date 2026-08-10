@@ -699,6 +699,15 @@ namespace mo2::python {
                         result, static_cast<std::make_signed_t<DWORD>>(returnCode));
                 },
                 "handle"_a, "refresh"_a = true)
+            .def(
+                "releaseApplicationHandle",
+                [](IOrganizer* o, std::uintptr_t handle) {
+                    auto* handles =
+                        qobject_cast<IOrganizerApplicationHandles*>(o);
+                    return handles != nullptr &&
+                           handles->releaseApplicationHandle((HANDLE)handle);
+                },
+                "handle"_a)
 
             .def("refresh", &IOrganizer::refresh, "save_changes"_a = true)
             .def("managedGame", &IOrganizer::managedGame,

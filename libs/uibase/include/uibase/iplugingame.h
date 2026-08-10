@@ -30,10 +30,21 @@ public:
   virtual bool enforcePluginRelationships() const = 0;
 };
 
+class IPluginGameProcessLifetime
+{
+public:
+  virtual ~IPluginGameProcessLifetime() = default;
+
+  virtual QStringList executableProcessNames(const QString& executable,
+                                             const QStringList& arguments) const = 0;
+};
+
 }  // namespace MOBase
 
 Q_DECLARE_INTERFACE(MOBase::IPluginGamePolicies,
                     "com.tannin.ModOrganizer.PluginGamePolicies/1.0")
+Q_DECLARE_INTERFACE(MOBase::IPluginGameProcessLifetime,
+                    "com.fluorine.ModOrganizer.PluginGameProcessLifetime/1.0")
 
 namespace MOBase
 {
@@ -501,6 +512,28 @@ public:
       return policies->enforcePluginRelationships();
     }
     return true;
+  }
+
+  /**
+   * @brief Get additional process names that determine an executable's lifetime.
+   *
+   * ProcessRunner always tracks the launched executable itself. Games whose
+   * launcher starts a differently named process can return that process name
+   * through IPluginGameProcessLifetime so the run remains active until the
+   * companion exits.
+   *
+   * @param executable absolute path of the selected executable
+   * @param arguments parsed command-line arguments for this launch
+   * @return additional executable base names to track, case-insensitively
+   */
+  QStringList executableProcessNames(const QString& executable,
+                                     const QStringList& arguments) const
+  {
+    if (const auto* lifetime =
+            qobject_cast<const IPluginGameProcessLifetime*>(this)) {
+      return lifetime->executableProcessNames(executable, arguments);
+    }
+    return {};
   }
 };
 

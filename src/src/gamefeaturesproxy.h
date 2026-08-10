@@ -3,6 +3,9 @@
 
 #include "igamefeatures.h"
 
+#include <mutex>
+#include <unordered_map>
+
 class GameFeatures;
 class OrganizerProxy;
 
@@ -27,8 +30,15 @@ protected:
   int unregisterFeaturesImpl(std::type_info const& info) override;
 
 private:
+  std::shared_ptr<MOBase::GameFeature>
+  gameFeatureImplAllowed(std::type_info const& info) const;
+
   GameFeatures& m_Features;
   OrganizerProxy& m_CoreProxy;
+  mutable std::mutex m_FeatureProxyMutex;
+  mutable std::unordered_map<MOBase::GameFeature*,
+                             std::weak_ptr<MOBase::GameFeature>>
+      m_FeatureProxies;
 };
 
 #endif

@@ -116,6 +116,9 @@ public:
   void writeModlistNow(bool onlyIfPending = false);
 
   void cancelModlistWrite();
+  void suppressWritesForFailedRollback() noexcept;
+  static void suppressAllWritesForFailedRollback() noexcept;
+  static bool allWritesDrainedForFailedRollback() noexcept;
 
   /**
    * @brief test if this profile uses archive invalidation
@@ -399,7 +402,7 @@ private:
 private:
   QDir m_Directory;
 
-  QSettings* m_Settings;
+  QSettings* m_Settings{nullptr};
 
   const GameFeatures& m_GameFeatures;
   const MOBase::IPluginGame* m_GamePlugin;

@@ -159,13 +159,7 @@ GameFeatures::GameFeatures(OrganizerCore* core, PluginContainer* plugins)
   connect(plugins, &PluginContainer::pluginUnregistered,
           [this, updateFeatures](MOBase::IPlugin* plugin) {
             // remove features from the current plugin
-            for (auto& [_, features] : m_allFeatures) {
-              features.erase(std::remove_if(features.begin(), features.end(),
-                                            [plugin](const auto& feature) {
-                                              return feature.plugin() == plugin;
-                                            }),
-                             features.end());
-            }
+            m_allFeatures.unregisterPlugin(plugin);
 
             // update current features
             updateFeatures();
@@ -185,7 +179,7 @@ GameFeatures::CombinedModDataContent& GameFeatures::modDataContent() const
 
 void GameFeatures::updateCurrentFeatures(std::type_index const& index)
 {
-  auto& features = m_allFeatures[index];
+  auto& features = m_allFeatures.features(index);
 
   m_currentFeatures[index].clear();
 
@@ -246,7 +240,7 @@ void GameFeatures::updateCurrentFeatures()
   // plugin is disabled or unregistered)
   //
 
-  for (auto& [info, _] : m_allFeatures) {
+  for (auto& [info, _] : m_allFeatures.inventory()) {
     updateCurrentFeatures(info);
   }
 }
@@ -256,73 +250,44 @@ bool GameFeatures::registerGameFeature(MOBase::IPlugin* plugin,
                                        std::shared_ptr<MOBase::GameFeature> feature,
                                        int priority)
 {
-  auto& features = m_allFeatures[feature->typeInfo()];
+  if (!feature) {
+    log::error("cannot register a null game feature");
+    return false;
+  }
 
-  if (std::find_if(features.begin(), features.end(), [&feature](const auto& data) {
-        return data.feature() == feature;
-      }) != features.end()) {
+  const auto info = std::type_index(feature->typeInfo());
+  if (!m_allFeatures.registerFeature(plugin, games, feature, priority,
+                                     dynamic_cast<IPluginGame*>(plugin) != nullptr)) {
     log::error("cannot register feature multiple time");
     return false;
   }
 
-  std::decay_t<decltype(features)>::iterator it;
-  if (dynamic_cast<IPluginGame*>(plugin)) {
-    it = features.end();
-  } else {
-    it = std::lower_bound(features.begin(), features.end(), priority,
-                          [](const auto& feature, int priority) {
-                            return feature.priority() > priority;
-                          });
-  }
-
-  features.emplace(it, feature, plugin, games, std::numeric_limits<int>::min());
-
   // TODO: only update if relevant
-  updateCurrentFeatures(feature->typeInfo());
+  updateCurrentFeatures(info);
 
   return true;
 }
 
 // unregister game features
 //
-bool GameFeatures::unregisterGameFeature(std::shared_ptr<MOBase::GameFeature> feature)
+bool GameFeatures::unregisterGameFeature(
+    MOBase::IPlugin* plugin, std::shared_ptr<MOBase::GameFeature> feature)
 {
-  bool removed = false;
-  for (auto& [_, features] : m_allFeatures) {
-    auto it =
-        std::find_if(features.begin(), features.end(), [&feature](const auto& data) {
-          return data.feature() == feature;
-        });
-
-    // the feature can only exist for one kind of features and cannot be duplicated
-    if (it != features.end()) {
-      features.erase(it);
-      removed = true;
-      break;
-    }
+  if (!feature) {
+    return false;
   }
 
+  const auto info = std::type_index(feature->typeInfo());
+  const bool removed = m_allFeatures.unregisterFeature(plugin, feature);
   if (removed) {
-    updateCurrentFeatures();
+    updateCurrentFeatures(info);
   }
-
   return removed;
 }
-
 int GameFeatures::unregisterGameFeatures(MOBase::IPlugin* plugin,
                                          std::type_info const& info)
 {
-  auto& features = m_allFeatures[info];
-
-  const auto initialSize = features.size();
-
-  features.erase(std::remove_if(features.begin(), features.end(),
-                                [plugin](const auto& feature) {
-                                  return feature.plugin() == plugin;
-                                }),
-                 features.end());
-
-  const int removed = features.size() - initialSize;
+  const int removed = m_allFeatures.unregisterFeatures(plugin, info);
 
   if (removed) {
     updateCurrentFeatures();

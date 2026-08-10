@@ -26,6 +26,8 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <uibase/log.h>
 #include <uibase/versioning.h>
 
+#include "exitstate.h"
+
 class Executable;
 
 namespace MOShared
@@ -81,7 +83,8 @@ const int ReselectExitCode = INT_MAX - 1;
 using ExitFlags = QFlags<Exit>;
 Q_DECLARE_OPERATORS_FOR_FLAGS(ExitFlags);
 
-bool ExitModOrganizer(ExitFlags e = Exit::Normal);
+ExitRequestResult ExitModOrganizer(ExitFlags e = Exit::Normal,
+                                   bool silentActiveLaunch = false);
 bool ModOrganizerExiting();
 bool ModOrganizerCanCloseNow();
 void ResetExitFlag();

@@ -1,6 +1,8 @@
 #include "protonlauncher.h"
 
 #include "fluorinepaths.h"
+#include "processlifetime.h"
+#include "rootprocesscompletion.h"
 #include "steamdetection.h"
 #include "slrmanager.h"
 #include "vfsbackend.h"
@@ -466,10 +468,13 @@ void wrapInTerminal(QString& program, QStringList& arguments)
 
 bool startWithEnv(const QString& program, const QStringList& arguments,
                   const QString& workingDir,
-                  const QProcessEnvironment& environment, qint64& pid,
-                  bool forwardAllChannels = false)
+                  const QProcessEnvironment& environment,
+                  process_lifetime::LaunchReceipt& receipt,
+                  bool forwardAllChannels)
 {
   auto* process = new QProcess();
+  auto completion =
+      std::make_shared<process_lifetime::RootProcessCompletion>();
   process->setProgram(program);
   process->setArguments(arguments);
 
@@ -511,6 +516,7 @@ bool startWithEnv(const QString& program, const QStringList& arguments,
     });
   }
 
+  process_lifetime::observeQProcessRoot(*process, completion);
   QObject::connect(process,
                    QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
                    process, &QProcess::deleteLater);
@@ -520,8 +526,12 @@ bool startWithEnv(const QString& program, const QStringList& arguments,
     delete process;
     return false;
   }
-
-  pid = process->processId();
+  completion->markStarted();
+  receipt.pid = static_cast<pid_t>(process->processId());
+  receipt.startTime =
+      process_lifetime::processStartTime(receipt.pid)
+          .value_or(process_lifetime::UnknownProcessStartTime);
+  receipt.completion = std::move(completion);
   return true;
 }
 
@@ -722,18 +732,21 @@ bool ProtonLauncher::unprivilegedBindMountSupported()
   return true;
 }
 
-std::pair<bool, qint64> ProtonLauncher::launch() const
+process_lifetime::LaunchReceipt ProtonLauncher::launch() const
 {
-  qint64 pid = -1;
+  process_lifetime::LaunchReceipt receipt;
 
   if (!m_protonPath.isEmpty()) {
-    return {launchWithProton(pid), pid};
+    return launchWithProton(receipt) ? receipt
+                                     : process_lifetime::LaunchReceipt{};
   }
 
-  return {launchDirect(pid), pid};
+  return launchDirect(receipt) ? receipt
+                               : process_lifetime::LaunchReceipt{};
 }
 
-bool ProtonLauncher::launchWithProton(qint64& pid) const
+bool ProtonLauncher::launchWithProton(
+    process_lifetime::LaunchReceipt& receipt) const
 {
   if (m_binary.isEmpty() || m_protonPath.isEmpty()) {
     return false;
@@ -1064,10 +1077,12 @@ bool ProtonLauncher::launchWithProton(qint64& pid) const
     wrapInTerminal(program, arguments);
   }
 
-  return startWithEnv(program, arguments, m_workingDir, env, pid);
+  return startWithEnv(program, arguments, m_workingDir, env, receipt,
+                      /*forwardAllChannels=*/false);
 }
 
-bool ProtonLauncher::launchDirect(qint64& pid) const
+bool ProtonLauncher::launchDirect(
+    process_lifetime::LaunchReceipt& receipt) const
 {
   if (m_binary.isEmpty()) {
     return false;
@@ -1113,7 +1128,7 @@ bool ProtonLauncher::launchDirect(qint64& pid) const
   // Native direct launch: forward both channels so a launcher-spawned engine
   // (openmw-launcher -> openmw) can't be SIGPIPE'd when the launcher exits and
   // the QProcess closes its stderr pipe. See startWithEnv for the full rationale.
-  return startWithEnv(program, arguments, m_workingDir, env, pid,
+  return startWithEnv(program, arguments, m_workingDir, env, receipt,
                       /*forwardAllChannels=*/true);
 }
 

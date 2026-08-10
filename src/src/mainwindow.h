@@ -150,7 +150,7 @@ public:
   void displayModInformation(ModInfo::Ptr modInfo, unsigned int modIndex,
                              ModInfoTabIDs tabID) override;
 
-  bool canExit();
+  bool canExit(bool force = false, bool silentActiveLaunch = false);
   void onBeforeClose();
 
   bool closeWindow() override;
@@ -343,6 +343,8 @@ private:
   bool m_HideCategoryReminderAfterImport{false};
 
   Executable* getSelectedExecutable();
+
+  void failStopAfterSettingsRollback();
 
 private slots:
   void updateWindowTitle(const APIUserAccount& user);

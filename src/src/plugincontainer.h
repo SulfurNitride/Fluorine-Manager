@@ -1,6 +1,7 @@
 #ifndef PLUGINCONTAINER_H
 #define PLUGINCONTAINER_H
 
+#include "plugincallgate.h"
 #include "previewgenerator.h"
 
 class OrganizerCore;
@@ -8,6 +9,7 @@ class IUserInterface;
 
 #include <QFile>
 #include <QPluginLoader>
+#include <QSet>
 #include <QtPlugin>
 #include <iplugindiagnose.h>
 #include <ipluginfilemapper.h>
@@ -21,7 +23,9 @@ class IUserInterface;
 #include <boost/fusion/include/at_key.hpp>
 #include <boost/mp11.hpp>
 #endif  // Q_MOC_RUN
+#include <map>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "game_features.h"
@@ -206,7 +210,7 @@ public:
    */
   void loadPlugin(QString const& filepath);
   void unloadPlugin(QString const& filepath);
-  void reloadPlugin(QString const& filepath);
+  bool reloadPlugin(QString const& filepath);
 
   /**
    * @brief Load all plugins.
@@ -227,6 +231,28 @@ public:
     typename boost::fusion::result_of::at_key<const PluginMap, T>::type temp =
         boost::fusion::at_key<T>(m_Plugins);
     return temp;
+  }
+
+  /**
+   * Return a shared gate that remains safe to capture by queued host callbacks.
+   * The callback must enter the gate before dereferencing its raw plugin
+   * pointer. A gate captured from an unloaded generation stays closed forever.
+   */
+  std::shared_ptr<PluginCallGate>
+  pluginCallGate(MOBase::IPlugin* plugin) const;
+
+  template <typename PluginInterface>
+  std::shared_ptr<PluginCallGate>
+  pluginCallGate(PluginInterface* pluginInterface) const
+  {
+    return pluginCallGate(dynamic_cast<MOBase::IPlugin*>(pluginInterface));
+  }
+
+  template <typename PluginInterface, typename Call>
+  bool callPluginIfActive(PluginInterface* pluginInterface, Call&& call) const
+  {
+    const auto gate = pluginCallGate(pluginInterface);
+    return gate && gate->runIfAllowed(std::forward<Call>(call));
   }
 
   /**
@@ -306,6 +332,13 @@ public:
    *     be disabled (see PluginRequirements::requiredFor).
    */
   void setEnabled(MOBase::IPlugin* plugin, bool enable, bool dependencies = true);
+
+  /**
+   * Emit the exact notification needed after persistent enabled state was
+   * restored transactionally. This deliberately performs no persistence and
+   * no child/dependency traversal; callers notify each changed plugin once.
+   */
+  void notifyEnabledStateRestored(MOBase::IPlugin* plugin, bool enabled);
 
   /**
    * @brief Retrieve the requirements for the given plugin.
@@ -419,17 +452,6 @@ private:
   // that can be used when loading plugins after initialization. This uses the
   // user interface in m_UserInterface.
   void startPluginsImpl(const std::vector<QObject*>& plugins) const;
-
-  /**
-   * @brief Unload the given plugin.
-   *
-   * This function is not public because it's kind of dangerous trying to unload
-   * plugin directly since some plugins are linked together.
-   *
-   * @param plugin The plugin to unload/unregister.
-   * @param object The QObject corresponding to the plugin.
-   */
-  void unloadPlugin(MOBase::IPlugin* plugin, QObject* object);
 
   /**
    * @brief Retrieved the (localized) names of interfaces implemented by the given

@@ -603,6 +603,7 @@ int MOApplication::run(MOMultiProcess& multiProcess)
     } else {
       mainWindow.activateWindow();
       res = exec();
+      mainWindowStartupFailed = mainWindow.startupFailed();
       mainWindow.close();
     }
 

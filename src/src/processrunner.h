@@ -1,15 +1,24 @@
 #ifndef PROCESSRUNNER_H
 #define PROCESSRUNNER_H
 
+#include "asynctask.h"
 #include "envmodule.h"
 #include "spawn.h"
 #include "uilocker.h"
 #include <executableinfo.h>
 
+#include <memory>
+
 #include <sys/types.h>
 #include <sys/wait.h>
 
 class OrganizerCore;
+class ApplicationCompletion;
+struct PreparedProcessObserver;
+namespace process_lifetime
+{
+class RootProcessCompletion;
+}
 class IUserInterface;
 class Executable;
 class MOShortcut;
@@ -131,6 +140,15 @@ public:
   //
   Results attachToProcess(pid_t pid);
 
+  // Starts the sole lifetime monitor for a successful plugin API launch.
+  // The returned compact state is safe to retain after this runner is gone.
+  std::shared_ptr<ApplicationCompletion> monitorApplication();
+
+  // Waits for a monitor started by monitorApplication(). No PID is attached
+  // or inspected here; early and late callers consume the same cached result.
+  Results waitForApplicationCompletion(
+      const std::shared_ptr<ApplicationCompletion>& completion);
+
   // exit code of the process, will return -1 if the process wasn't waited for
   //
   DWORD exitCode() const;
@@ -164,9 +182,16 @@ private:
   QFileInfo m_shellOpen;
   env::HandlePtr m_handle;
   DWORD m_exitCode{static_cast<DWORD>(-1)};
+  bool m_ownsVfs{true};
+  QStringList m_expectedExecutables;
+  QStringList m_companionProcessNames;
+  bool m_lifetimeTrackingPrepared{false};
+  std::shared_ptr<process_lifetime::RootProcessCompletion> m_rootCompletion;
+  async_task::ManagedTaskExecutor::LeasePtr m_asyncTaskLease;
+  std::shared_ptr<PreparedProcessObserver> m_preparedObserver;
+  bool m_observerActivated{false};
 
   bool shouldRunShell() const;
-  bool shouldRefresh(Results r) const;
 
   // runs the command in m_shellOpen; returns empty if it can be waited for
   //
@@ -175,6 +200,10 @@ private:
   // runs the binary; returns empty if it can be waited for
   //
   std::optional<Results> runBinary();
+
+  bool prepareLaunchObserver(bool ownsVfs);
+  bool activatePreparedObserver(bool applicationMode, DWORD preservedExitCode,
+                                bool triggerRefresh) noexcept;
 
   // waits for process completion if required
   //

@@ -26,8 +26,15 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <cstdint>
+
 class QProcess;
 class Settings;
+
+namespace process_lifetime
+{
+struct LaunchReceipt;
+}
 
 namespace spawn
 {
@@ -66,6 +73,13 @@ struct SpawnParameters
   // Versioned request consumed by the Wine-side USVFS controller. Empty means
   // launch the target normally (the FUSE path).
   QString usvfsRequestPath;
+  // Unique per-launch provenance inherited by wrappers and detached children.
+  // ProcessRunner uses it to adopt companions without name-only global scans.
+  QString lifetimeToken;
+  // Linux PIDs are reusable. Capture the root's /proc start time immediately
+  // after spawn so a delayed wait cannot attach launch metadata to a newer
+  // process that happens to receive the same PID.
+  std::uint64_t lifetimeRootStartTime = 0;
 };
 
 bool checkSteam(QWidget* parent, const SpawnParameters& sp, const QDir& gameDirectory,
@@ -76,7 +90,8 @@ bool checkBlacklist(QWidget* parent, const SpawnParameters& sp, Settings& settin
 /**
  * @brief spawn a binary, returning the new pid (or -1 on failure)
  **/
-pid_t startBinary(QWidget* parent, const SpawnParameters& sp);
+process_lifetime::LaunchReceipt startBinary(QWidget* parent,
+                                            const SpawnParameters& sp);
 
 enum class FileExecutionTypes
 {

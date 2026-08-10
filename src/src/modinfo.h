@@ -22,6 +22,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "ifiletree.h"
 #include "imodinterface.h"
+#include "settingswritebarrier.h"
 #include "versioninfo.h"
 
 class OrganizerCore;
@@ -124,6 +125,16 @@ public:  // Static functions:
     s_Collection.clear();
     s_ModsByName.clear();
     s_ModsByModID.clear();
+  }
+
+  static void suppressAllWritesForFailedRollback() noexcept
+  {
+    s_MetaWriteBarrier.suppress();
+  }
+
+  static bool allWritesDrained() noexcept
+  {
+    return s_MetaWriteBarrier.suppressionDrained();
   }
 
   /**
@@ -825,6 +836,10 @@ public:  // Methods after this do not come from IModInterface:
    */
   virtual void saveMeta() {}
 
+  // Prevent destructor-time metadata persistence after an incomplete Settings
+  // rollback has put the process into fail-stop shutdown.
+  virtual void suppressWritesForFailedRollback() {}
+
   /**
    * @brief Sets whether this mod uses a custom url.
    */
@@ -852,8 +867,10 @@ public:  // Methods after this do not come from IModInterface:
    */
   void setUrl(QString const& url) override
   {
-    setHasCustomURL(true);
-    setCustomURL(url);
+    metaWriteBarrier().runIfAllowed([&] {
+      setHasCustomURL(true);
+      setCustomURL(url);
+    });
   }
 
   /**
@@ -1004,6 +1021,8 @@ protected:
   static bool ByName(const ModInfo::Ptr& LHS, const ModInfo::Ptr& RHS);
 
 protected:
+  static SettingsWriteBarrier& metaWriteBarrier() { return s_MetaWriteBarrier; }
+
   // the mod list
   OrganizerCore& m_Core;
 
@@ -1018,6 +1037,8 @@ protected:
   // empty set that can be returned in overwrite functions by
   // default
   static const std::set<unsigned int> s_EmptySet;
+  inline static SettingsWriteBarrier s_MetaWriteBarrier{
+      SettingsWriteBarrier::Concurrency::Serialized};
 
 protected:
   friend class OrganizerCore;

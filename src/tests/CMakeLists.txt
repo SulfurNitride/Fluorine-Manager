@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-find_package(Qt6 REQUIRED COMPONENTS Core)
+find_package(Qt6 REQUIRED COMPONENTS Core Network)
 find_package(GTest REQUIRED)
 find_package(SQLite3 REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -35,6 +35,11 @@ add_test(
 add_test(
     NAME test_openmw_loot_sort
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_openmw_loot_sort.py
+)
+add_test(
+    NAME test_openmw_process_lifetime
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_openmw_process_lifetime.py
 )
 
 # ---------------------------------------------------------------------------
@@ -138,6 +143,138 @@ target_link_libraries(test_settingsmigration PRIVATE
     GTest::gtest_main
 )
 add_test(NAME test_settingsmigration COMMAND test_settingsmigration)
+
+# ---------------------------------------------------------------------------
+# Launcher/companion process lifetime tracking tests
+# ---------------------------------------------------------------------------
+add_executable(test_processlifetime EXCLUDE_FROM_ALL
+    test_processlifetime.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/processlifetime.cpp
+)
+set_target_properties(test_processlifetime PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_processlifetime PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_processlifetime PRIVATE
+    Qt6::Core
+    mo2::uibase
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_processlifetime COMMAND test_processlifetime)
+set_tests_properties(test_processlifetime PROPERTIES TIMEOUT 60)
+
+# ---------------------------------------------------------------------------
+# Launch ownership and refresh-generation coordination tests
+# ---------------------------------------------------------------------------
+add_executable(test_launchcoordination EXCLUDE_FROM_ALL
+    test_launchcoordination.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/apiuseraccount.cpp
+)
+set_target_properties(test_launchcoordination PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_launchcoordination PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_launchcoordination PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_launchcoordination COMMAND test_launchcoordination)
+
+# ---------------------------------------------------------------------------
+# Game-feature facade provenance and owner-scoped registration tests
+# ---------------------------------------------------------------------------
+add_executable(test_gamefeatureownership EXCLUDE_FROM_ALL
+    test_gamefeatureownership.cpp
+)
+set_target_properties(test_gamefeatureownership PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_gamefeatureownership PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+    ${CMAKE_SOURCE_DIR}/libs/uibase/include/uibase/game_features
+)
+target_link_libraries(test_gamefeatureownership PRIVATE
+    Qt6::Core
+    mo2::uibase
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_gamefeatureownership COMMAND test_gamefeatureownership)
+
+# ---------------------------------------------------------------------------
+# Steam Linux Runtime fail-stop admission/cancellation tests
+# ---------------------------------------------------------------------------
+add_executable(test_slroperationcontext EXCLUDE_FROM_ALL
+    test_slroperationcontext.cpp
+)
+set_target_properties(test_slroperationcontext PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_slroperationcontext PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_slroperationcontext PRIVATE
+    Qt6::Core
+    Qt6::Network
+    mo2::uibase
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_slroperationcontext COMMAND test_slroperationcontext)
+
+# ---------------------------------------------------------------------------
+# Plugin loaded-generation reload refusal and callback gate tests
+# ---------------------------------------------------------------------------
+add_executable(test_pluginreloadpolicy EXCLUDE_FROM_ALL
+    test_pluginreloadpolicy.cpp
+)
+set_target_properties(test_pluginreloadpolicy PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_pluginreloadpolicy PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_pluginreloadpolicy PRIVATE
+    Qt6::Core
+    GTest::gtest
+)
+add_test(NAME test_pluginreloadpolicy COMMAND test_pluginreloadpolicy)
+
+# ---------------------------------------------------------------------------
+# Launch teardown exception safety and synchronous refresh wake-up tests
+# ---------------------------------------------------------------------------
+add_executable(test_launchlifecycle EXCLUDE_FROM_ALL
+    test_launchlifecycle.cpp
+)
+set_target_properties(test_launchlifecycle PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_launchlifecycle PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_launchlifecycle PRIVATE
+    Qt6::Core
+    GTest::gtest
+)
+add_test(NAME test_launchlifecycle COMMAND test_launchlifecycle)
 
 # ---------------------------------------------------------------------------
 # Per-instance FUSE/USVFS selection and Wine launch-request serialization
@@ -458,9 +595,12 @@ set_tests_properties(test_python_module_switch PROPERTIES
 add_custom_target(fluorine-tests
     DEPENDS test_esptk_tes3 test_bsatk_extraction
             test_plugincompatibility test_pluginrefreshcoalescing
-            test_settingsmigration test_metainiutils
+            test_settingsmigration test_processlifetime
+            test_launchcoordination test_gamefeatureownership
+            test_slroperationcontext test_pluginreloadpolicy test_launchlifecycle
+            test_metainiutils
             test_vfs_backend
-            test_fluorineconfigownership
+            test_fluorineconfigownership test_protonsettingsedit
             test_heroicjson test_protondetection
             test_external_dir_mapping test_vfs_file_ops
             test_vfs_descriptor_cleanup test_vfs_runtime_index

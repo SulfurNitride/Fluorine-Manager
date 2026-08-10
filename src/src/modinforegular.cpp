@@ -90,6 +90,10 @@ ModInfoRegular::ModInfoRegular(const QDir& path, OrganizerCore& core)
 
 ModInfoRegular::~ModInfoRegular()
 {
+  if (metaWriteBarrier().suppressed()) {
+    return;
+  }
+
   try {
     saveMeta();
   } catch (const std::exception& e) {
@@ -275,6 +279,11 @@ void ModInfoRegular::readMeta()
 
 void ModInfoRegular::saveMeta()
 {
+  metaWriteBarrier().runIfAllowed([this] { saveMetaImpl(); });
+}
+
+void ModInfoRegular::saveMetaImpl()
+{
   // only write meta data if the mod directory exists
   if (m_MetaInfoChanged && QFile::exists(absolutePath())) {
     const QString metaPath = absolutePath().append("/meta.ini");
@@ -354,6 +363,11 @@ void ModInfoRegular::saveMeta()
                  metaFile.status());
     }
   }
+}
+
+void ModInfoRegular::suppressWritesForFailedRollback()
+{
+  suppressAllWritesForFailedRollback();
 }
 
 bool ModInfoRegular::updateAvailable() const
@@ -564,28 +578,36 @@ void ModInfoRegular::setNotes(const QString& notes)
 
 void ModInfoRegular::setGameName(const QString& gameName)
 {
-  m_GameName        = gameName;
-  m_MetaInfoChanged = true;
+  metaWriteBarrier().runIfAllowed([&] {
+    m_GameName        = gameName;
+    m_MetaInfoChanged = true;
+  });
 }
 
 void ModInfoRegular::setNexusID(int modID)
 {
-  m_NexusID         = modID;
-  m_MetaInfoChanged = true;
+  metaWriteBarrier().runIfAllowed([&] {
+    m_NexusID         = modID;
+    m_MetaInfoChanged = true;
+  });
 }
 
 void ModInfoRegular::setVersion(const VersionInfo& version)
 {
-  m_Version         = version;
-  m_MetaInfoChanged = true;
+  metaWriteBarrier().runIfAllowed([&] {
+    m_Version         = version;
+    m_MetaInfoChanged = true;
+  });
 }
 
 void ModInfoRegular::setNewestVersion(const VersionInfo& version)
 {
-  if (version != m_NewestVersion) {
-    m_NewestVersion   = version;
-    m_MetaInfoChanged = true;
-  }
+  metaWriteBarrier().runIfAllowed([&] {
+    if (version != m_NewestVersion) {
+      m_NewestVersion   = version;
+      m_MetaInfoChanged = true;
+    }
+  });
 }
 
 void ModInfoRegular::setNexusDescription(const QString& description)
@@ -614,20 +636,27 @@ void ModInfoRegular::setTrackedState(TrackedState trackedState)
 
 void ModInfoRegular::setInstallationFile(const QString& fileName)
 {
-  m_InstallationFile = fileName;
-  m_MetaInfoChanged  = true;
+  metaWriteBarrier().runIfAllowed([&] {
+    m_InstallationFile = fileName;
+    m_MetaInfoChanged  = true;
+  });
 }
 
 void ModInfoRegular::addNexusCategory(int categoryID)
 {
-  m_Categories.insert(CategoryFactory::instance().resolveNexusID(categoryID));
+  metaWriteBarrier().runIfAllowed([&] {
+    m_Categories.insert(CategoryFactory::instance().resolveNexusID(categoryID));
+    m_MetaInfoChanged = true;
+  });
 }
 
 void ModInfoRegular::setIsEndorsed(bool endorsed)
 {
-  m_EndorsedState =
-      endorsed ? EndorsedState::ENDORSED_TRUE : EndorsedState::ENDORSED_FALSE;
-  m_MetaInfoChanged = true;
+  metaWriteBarrier().runIfAllowed([&] {
+    m_EndorsedState =
+        endorsed ? EndorsedState::ENDORSED_TRUE : EndorsedState::ENDORSED_FALSE;
+    m_MetaInfoChanged = true;
+  });
 }
 
 void ModInfoRegular::setNeverEndorse()
@@ -934,8 +963,10 @@ void ModInfoRegular::setUploaderUrl(const QString& uploaderUrl)
 
 void ModInfoRegular::setCustomURL(QString const& url)
 {
-  m_CustomURL       = url;
-  m_MetaInfoChanged = true;
+  metaWriteBarrier().runIfAllowed([&] {
+    m_CustomURL       = url;
+    m_MetaInfoChanged = true;
+  });
 }
 
 QString ModInfoRegular::url() const
@@ -945,8 +976,10 @@ QString ModInfoRegular::url() const
 
 void ModInfoRegular::setHasCustomURL(bool b)
 {
-  m_HasCustomURL    = b;
-  m_MetaInfoChanged = true;
+  metaWriteBarrier().runIfAllowed([&] {
+    m_HasCustomURL    = b;
+    m_MetaInfoChanged = true;
+  });
 }
 
 bool ModInfoRegular::hasCustomURL() const
@@ -1027,21 +1060,26 @@ QVariant ModInfoRegular::pluginSetting(const QString& pluginName, const QString&
 bool ModInfoRegular::setPluginSetting(const QString& pluginName, const QString& key,
                                       const QVariant& value)
 {
-  m_PluginSettings[pluginName][key] = value;
-  m_MetaInfoChanged                 = true;
-  saveMeta();
-  return true;
+  return metaWriteBarrier().runIfAllowed([&] {
+    m_PluginSettings[pluginName][key] = value;
+    m_MetaInfoChanged                 = true;
+    saveMeta();
+  });
 }
 
 std::map<QString, QVariant>
 ModInfoRegular::clearPluginSettings(const QString& pluginName)
 {
-  auto itp = m_PluginSettings.find(pluginName);
-  if (itp == std::end(m_PluginSettings)) {
-    return {};
-  }
-  auto settings = itp->second;
-  m_PluginSettings.erase(itp);
-  saveMeta();
+  std::map<QString, QVariant> settings;
+  metaWriteBarrier().runIfAllowed([&] {
+    auto itp = m_PluginSettings.find(pluginName);
+    if (itp == std::end(m_PluginSettings)) {
+      return;
+    }
+    settings = itp->second;
+    m_PluginSettings.erase(itp);
+    m_MetaInfoChanged = true;
+    saveMeta();
+  });
   return settings;
 }

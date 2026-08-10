@@ -1,4 +1,5 @@
 #include "organizercore.h"
+#include "categories.h"
 #include "categoriesdialog.h"
 #include "credentialsdialog.h"
 #include "fluorine_build_info.h"
@@ -16,6 +17,7 @@
 #include "instancemanager.h"
 #include "iplugingame.h"
 #include "iuserinterface.h"
+#include "launchlifecycle.h"
 #include "messagedialog.h"
 #include "metainiutils.h"
 #include "modlistsortproxy.h"
@@ -94,8 +96,10 @@
 #include <atomic>
 #include <exception>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <set>
+#include <stdexcept>
 #include <string>  //for wstring
 #include <tuple>
 #include <utility>
@@ -181,6 +185,10 @@ bool usvfsRuntimeSupportsResolvedSnapshots()
 
 void promptSlrUpdate(QWidget* parent, const SlrUpdateInfo& info)
 {
+  if (slrOperationAdmissionSuppressed()) {
+    return;
+  }
+
   if (parent == nullptr) {
     parent = qApp->activeWindow();
   }
@@ -204,17 +212,26 @@ void promptSlrUpdate(QWidget* parent, const SlrUpdateInfo& info)
 
   box.exec();
 
+  if (slrOperationAdmissionSuppressed()) {
+    return;
+  }
   if (box.clickedButton() == updateButton) {
     installSlrUpdate(parent, info);
   } else if (box.clickedButton() == skipButton) {
-    QSettings settings = globalSettings();
-    settings.setValue(QStringLiteral("SteamLinuxRuntime/skipped_build_id"),
-                      info.remoteBuildId);
+    runSlrUiCommitIfAllowed([&] {
+      QSettings settings = globalSettings();
+      settings.setValue(QStringLiteral("SteamLinuxRuntime/skipped_build_id"),
+                        info.remoteBuildId);
+    });
   }
 }
 
 void installSlrUpdate(QWidget* parent, const SlrUpdateInfo& info)
 {
+  if (slrOperationAdmissionSuppressed()) {
+    return;
+  }
+
   if (parent == nullptr) {
     parent = qApp->activeWindow();
   }
@@ -229,21 +246,22 @@ void installSlrUpdate(QWidget* parent, const SlrUpdateInfo& info)
   progress->setWindowModality(Qt::WindowModal);
   progress->setMinimumDuration(0);
 
-  auto* cancelFlag = new int(0);
-  QObject::connect(progress, &QProgressDialog::canceled, progress, [cancelFlag] {
-    *cancelFlag = 1;
+  const SlrCancellationSource cancellation;
+  QObject::connect(progress, &QProgressDialog::canceled, progress,
+                   [cancellation] {
+    cancellation.cancel();
   });
 
   auto* watcher = new QFutureWatcher<QString>(progress);
   QObject::connect(watcher, &QFutureWatcher<QString>::finished, progress,
-                   [watcher, progress, cancelFlag] {
+                   [watcher, progress, cancellation] {
                      progress->close();
                      const QString err = watcher->result();
                      watcher->deleteLater();
                      progress->deleteLater();
 
-                     if (*cancelFlag != 0) {
-                       delete cancelFlag;
+                     if (cancellation.isCancellationRequested() ||
+                         slrOperationAdmissionSuppressed()) {
                        return;
                      }
 
@@ -256,23 +274,59 @@ void installSlrUpdate(QWidget* parent, const SlrUpdateInfo& info)
                                        "The existing runtime was kept.")
                                .arg(err));
                      } else {
-                       QSettings settings = globalSettings();
-                       settings.remove(
-                           QStringLiteral("SteamLinuxRuntime/skipped_build_id"));
+                       if (!runSlrUiCommitIfAllowed([] {
+                             QSettings settings = globalSettings();
+                             settings.remove(QStringLiteral(
+                                 "SteamLinuxRuntime/skipped_build_id"));
+                           })) {
+                         return;
+                       }
                        MOBase::log::info("Steam Linux Runtime updated successfully");
                        QMessageBox::information(
                            qApp->activeWindow(),
                            QObject::tr("Steam Linux Runtime"),
                            QObject::tr("Steam Linux Runtime updated successfully."));
                      }
-                     delete cancelFlag;
                    });
 
-  int* cancelPtr = cancelFlag;
-  watcher->setFuture(QtConcurrent::run([cancelPtr]() -> QString {
-    return downloadSlr(nullptr, nullptr, cancelPtr);
-  }));
+  watcher->setFuture(
+      QtConcurrent::run([token = cancellation.token()]() -> QString {
+        return downloadSlr(nullptr, nullptr, token);
+      }));
   progress->show();
+}
+
+int cleanupRetryDelayMs(unsigned int retryCount)
+{
+  constexpr unsigned int maxShift = 5;
+  const auto shift = std::min(retryCount, maxShift);
+  return std::min(100 * (1 << shift), 5000);
+}
+
+QString cleanupFailureMessage(const std::exception_ptr& failure)
+{
+  if (!failure) {
+    return QStringLiteral("unknown cleanup state transition failure");
+  }
+
+  try {
+    std::rethrow_exception(failure);
+  } catch (const std::exception& e) {
+    return QString::fromUtf8(e.what());
+  } catch (...) {
+    return QStringLiteral("unknown exception");
+  }
+}
+
+void logQueuedCleanupFailure(const char* operation, const QString& launchToken,
+                             std::exception_ptr failure) noexcept
+{
+  try {
+    log::error("{} for '{}' escaped unexpectedly: {}; ownership remains retained",
+               operation, launchToken.toStdString(),
+               cleanupFailureMessage(failure).toStdString());
+  } catch (...) {
+  }
 }
 
 }  // namespace
@@ -508,14 +562,18 @@ OrganizerCore::OrganizerCore(Settings& settings)
 
 OrganizerCore::~OrganizerCore()
 {
-  try {
-    saveCurrentProfileForShutdown();
-  } catch (const std::exception& e) {
-    log::error("failed to save current profile during OrganizerCore shutdown: {}",
-               e.what());
-  } catch (...) {
-    log::error(
-        "failed to save current profile during OrganizerCore shutdown: unknown exception");
+  if (!m_PersistenceSuppressed) {
+    try {
+      saveCurrentProfileForShutdown();
+    } catch (const std::exception& e) {
+      log::error("failed to save current profile during OrganizerCore shutdown: {}",
+                 e.what());
+    } catch (...) {
+      log::error("failed to save current profile during OrganizerCore shutdown: "
+                 "unknown exception");
+    }
+  } else {
+    m_PluginListsWriter.cancel();
   }
 
   try {
@@ -550,6 +608,10 @@ OrganizerCore::~OrganizerCore()
 
 void OrganizerCore::storeSettings()
 {
+  if (m_PersistenceSuppressed) {
+    return;
+  }
+
   if (m_CurrentProfile != nullptr) {
     m_Settings.game().setSelectedProfileName(m_CurrentProfile->name());
   }
@@ -625,6 +687,69 @@ void OrganizerCore::setUserInterface(IUserInterface* ui)
   checkForUpdates();
 }
 
+void OrganizerCore::suppressPersistenceForFailedRollback() noexcept
+{
+  m_PluginMutationBarrier->suppress();
+  m_DownloadManager.suppressOperationAdmissionForFailedRollback();
+  m_ProcessLaunchContext.suppressNewReservations();
+  suppressSlrOperationsForFailedRollback();
+  m_PersistenceSuppressed = true;
+  m_CurrentProfileSavedForShutdown = true;
+  CategoryFactory::instance().suppressWritesForFailedRollback();
+  suppressModInfoPersistenceForFailedRollback();
+  Profile::suppressAllWritesForFailedRollback();
+  m_Settings.suppressWritesForFailedRollback();
+  if (m_CurrentProfile != nullptr) {
+    m_CurrentProfile->suppressWritesForFailedRollback();
+  }
+}
+
+void OrganizerCore::cancelPersistenceWritersForFailedRollback() noexcept
+{
+  try {
+    m_PluginListsWriter.cancel();
+    if (m_UserInterface != nullptr) {
+      m_UserInterface->archivesWriter().cancel();
+    }
+  } catch (...) {
+    // Admission was already closed by suppressPersistenceForFailedRollback;
+    // fail-stop shutdown must never be interrupted by cleanup bookkeeping.
+  }
+}
+
+void OrganizerCore::suppressModInfoPersistenceForFailedRollback() noexcept
+{
+  ModInfo::suppressAllWritesForFailedRollback();
+}
+
+bool OrganizerCore::failedRollbackMutationsDrained() const noexcept
+{
+  if (!m_PluginMutationBarrier->suppressionDrained() ||
+      !m_DownloadManager.failedRollbackMutationsDrained() ||
+      !CategoryFactory::instance().failedRollbackWritesDrained() ||
+      !m_Settings.failedRollbackWritesDrained() ||
+      !GlobalSettings::failedRollbackWritesDrained() ||
+      !Profile::allWritesDrainedForFailedRollback() ||
+      !slrOperationsDrainedForFailedRollback()) {
+    return false;
+  }
+
+  if (!ModInfo::allWritesDrained()) {
+    return false;
+  }
+  return true;
+}
+
+void OrganizerCore::cancelDownloadOperationsForFailedRollback() noexcept
+{
+  m_DownloadManager.cancelOperationsForFailedRollback();
+}
+
+bool OrganizerCore::failedRollbackDownloadOperationsDrained() const noexcept
+{
+  return m_DownloadManager.failedRollbackOperationsDrained();
+}
+
 void OrganizerCore::checkForUpdates()
 {
   // this currently wouldn't work reliably if the ui isn't initialized yet to
@@ -650,6 +775,9 @@ void OrganizerCore::checkForSlrUpdates()
   if (!isSlrInstalled()) {
     return;
   }
+  if (slrOperationAdmissionSuppressed()) {
+    return;
+  }
 
   bool expected = false;
   if (!s_slrUpdateCheckInProgress.compare_exchange_strong(expected, true)) {
@@ -671,6 +799,10 @@ void OrganizerCore::checkForSlrUpdates()
       }
 
       s_slrUpdateCheckInProgress = false;
+
+      if (slrOperationAdmissionSuppressed()) {
+        return;
+      }
 
       if (!info.error.isEmpty()) {
         MOBase::log::warn("SLR update check failed: {}", info.error);
@@ -1064,6 +1196,119 @@ void OrganizerCore::unmountVFS()
   movePGPatcherLogsToLogsFolder();
 }
 
+OrganizerCore::VfsPreviewSessionResult
+OrganizerCore::beginVfsPreviewSession(const QString& launchToken,
+                                      const QString& profileName)
+{
+  if (launchToken.isEmpty() || profileName.isEmpty() ||
+      m_CurrentProfile == nullptr || m_CurrentProfile->name() != profileName) {
+    log::warn("VFS preview refused: missing or non-current launch profile '{}'; "
+              "token='{}'",
+              profileName.toStdString(), launchToken.toStdString());
+    return VfsPreviewSessionResult::Unavailable;
+  }
+
+  ScopedProcessLaunchReservation reservation(
+      m_ProcessLaunchContext, launchToken, profileName, /*ownsVfs=*/true);
+  if (!reservation) {
+    const auto active = m_ProcessLaunchContext.activeLaunches();
+    log::warn("VFS preview refused: organizer VFS is already reserved "
+              "({} active launch context(s))",
+              active.total);
+    return VfsPreviewSessionResult::Busy;
+  }
+
+  try {
+    prepareVFS();
+    if (!m_USVFS.isMounted()) {
+      log::info("VFS preview unavailable: the managed game does not use the "
+                "organizer VFS");
+      return VfsPreviewSessionResult::Unavailable;
+    }
+  } catch (...) {
+    // A failed preparation may still have mounted or deployed part of the VFS.
+    // Transfer the reservation to the same retrying mandatory-cleanup path used
+    // by failed launches; never abandon ownership merely because unmount threw.
+    reservation.retain();
+    abortProcessLaunchPreparation(launchToken, profileName, /*ownsVfs=*/true);
+    throw;
+  }
+
+  reservation.retain();
+  log::info("VFS preview session '{}' started for profile '{}'",
+            launchToken.toStdString(), profileName.toStdString());
+  return VfsPreviewSessionResult::Started;
+}
+
+bool OrganizerCore::endVfsPreviewSession(const QString& launchToken,
+                                         const QString& profileName)
+{
+  return continueVfsPreviewTeardown(launchToken, profileName, /*retry=*/false,
+                                    /*retryCount=*/0);
+}
+
+bool OrganizerCore::continueVfsPreviewTeardown(const QString& launchToken,
+                                               const QString& profileName,
+                                               bool retry,
+                                               unsigned int retryCount)
+{
+  const auto attempt = launch_cleanup::attemptMandatoryCleanup(
+      m_ProcessLaunchContext, launchToken, profileName, /*ownsVfs=*/true,
+      retry ? launch_cleanup::AttemptKind::Retry
+            : launch_cleanup::AttemptKind::Initial,
+      [this]() { m_USVFS.unmount(); });
+
+  if (attempt.state == launch_cleanup::AttemptState::Rejected) {
+    log::warn("VFS preview close ignored for unknown or mismatched session "
+              "'{}' and profile '{}'; mounted VFS left untouched",
+              launchToken.toStdString(), profileName.toStdString());
+    return false;
+  }
+
+  if (attempt.state == launch_cleanup::AttemptState::RetryRequired) {
+    const int delay = cleanupRetryDelayMs(retryCount);
+    log::error("VFS preview session '{}' cleanup failed: {}; retaining launch "
+               "ownership and retrying in {} ms",
+               launchToken.toStdString(),
+               cleanupFailureMessage(attempt.failure).toStdString(), delay);
+    try {
+      QTimer::singleShot(
+          delay, this,
+          [this, launchToken, profileName, retryCount]() {
+            try {
+              continueVfsPreviewTeardown(launchToken, profileName,
+                                         /*retry=*/true, retryCount + 1);
+            } catch (...) {
+              logQueuedCleanupFailure("VFS preview cleanup retry", launchToken,
+                                      std::current_exception());
+            }
+          });
+    } catch (const std::exception& e) {
+      log::error("unable to schedule VFS preview cleanup retry for '{}': {}; "
+                 "launch ownership remains retained",
+                 launchToken.toStdString(), e.what());
+    } catch (...) {
+      log::error("unable to schedule VFS preview cleanup retry for '{}'; "
+                 "launch ownership remains retained",
+                 launchToken.toStdString());
+    }
+    return false;
+  }
+
+  m_ProcessLaunchContext.finishCompletion(launchToken);
+  if (!m_PersistenceSuppressed) {
+    try {
+      movePGPatcherLogsToLogsFolder();
+    } catch (...) {
+      logQueuedCleanupFailure("VFS preview post-cleanup", launchToken,
+                              std::current_exception());
+    }
+  }
+  log::info("VFS preview session '{}' ended for profile '{}'",
+            launchToken.toStdString(), profileName.toStdString());
+  return true;
+}
+
 void OrganizerCore::movePGPatcherLogsToLogsFolder()
 {
   const QString dataPath = qApp->property("dataPath").toString();
@@ -1388,6 +1633,9 @@ QVariant OrganizerCore::pluginSetting(const QString& pluginName,
 void OrganizerCore::setPluginSetting(const QString& pluginName, const QString& key,
                                      const QVariant& value)
 {
+  if (m_PersistenceSuppressed) {
+    return;
+  }
   m_Settings.plugins().setSetting(pluginName, key, value);
 }
 
@@ -1400,6 +1648,9 @@ QVariant OrganizerCore::persistent(const QString& pluginName, const QString& key
 void OrganizerCore::setPersistent(const QString& pluginName, const QString& key,
                                   const QVariant& value, bool sync)
 {
+  if (m_PersistenceSuppressed) {
+    return;
+  }
   m_Settings.plugins().setPersistent(pluginName, key, value, sync);
 }
 
@@ -1978,6 +2229,10 @@ boost::signals2::connection
 OrganizerCore::onNextRefresh(std::function<void()> const& func,
                              RefreshCallbackGroup group, RefreshCallbackMode mode)
 {
+  if (m_PersistenceSuppressed) {
+    return {};
+  }
+
   if (m_DirectoryUpdate || mode == RefreshCallbackMode::FORCE_WAIT_FOR_REFRESH) {
     return m_OnNextRefreshCallbacks.connect(static_cast<int>(group), func);
   } else {
@@ -2313,6 +2568,7 @@ void OrganizerCore::refreshDirectoryStructure()
 
   log::debug("refreshing structure");
   m_DirectoryUpdate = true;
+  m_ActiveDirectoryRefreshGeneration = ++m_NextDirectoryRefreshGeneration;
 
   m_CurrentProfile->writeModlistNow(true);
   const auto activeModList = m_CurrentProfile->getActiveMods();
@@ -2327,6 +2583,7 @@ void OrganizerCore::refreshDirectoryStructure()
 
 void OrganizerCore::onDirectoryRefreshed()
 {
+  const auto completedGeneration = m_ActiveDirectoryRefreshGeneration;
   log::debug("directory refreshed, finishing up");
   TimeThis const tt("OrganizerCore::onDirectoryRefreshed()");
 
@@ -2361,6 +2618,17 @@ void OrganizerCore::onDirectoryRefreshed()
   // needs to be done before post refresh tasks
   m_DirectoryUpdate = false;
 
+  if (m_PersistenceSuppressed) {
+    // Retire internal generation state and mandatory application-refresh
+    // waiters, but never dispatch queued plugin/core callbacks or run list
+    // refreshes after fail-stop admission has closed.
+    m_OnNextRefreshCallbacks.disconnect_all_slots();
+    completeAllAfterRunRefreshForFailStop();
+    emit directoryRefreshRetired();
+    log::debug("directory refresh retired during fail-stop");
+    return;
+  }
+
   log::debug("running post refresh tasks");
   const auto pluginRefreshesBeforeCallbacks =
       m_PluginRefreshCoalescing.snapshot();
@@ -2391,6 +2659,16 @@ void OrganizerCore::onDirectoryRefreshed()
     }
   }
 
+  // Complete only requests assigned to the generation that just finished.
+  // A request made while this generation was active is deliberately queued
+  // for a subsequent refresh so it cannot be satisfied by stale work.
+  // Start that subsequent generation before releasing waiters for this one;
+  // a new launch awakened by the signal will then see m_DirectoryUpdate and
+  // wait for the queued post-run refresh as well.
+  schedulePendingAfterRunRefresh();
+  completeAfterRunRefresh(completedGeneration);
+
+  emit directoryRefreshRetired();
   emit directoryStructureReady();
 
   log::debug("refresh done");
@@ -2733,6 +3011,10 @@ void OrganizerCore::startGuidedFix(unsigned int) const {}
 
 bool OrganizerCore::saveCurrentLists()
 {
+  if (m_PersistenceSuppressed) {
+    return false;
+  }
+
   if (m_DirectoryUpdate) {
     log::warn("not saving lists during directory update");
     return false;
@@ -2752,8 +3034,15 @@ bool OrganizerCore::saveCurrentLists()
 
 void OrganizerCore::savePluginList()
 {
+  if (m_PersistenceSuppressed) {
+    return;
+  }
+
   onNextRefresh(
       [this]() {
+        if (m_PersistenceSuppressed) {
+          return;
+        }
         m_PluginList.saveTo(m_CurrentProfile->getLockedOrderFileName());
         m_PluginList.saveLoadOrder(*m_DirectoryStructure);
       },
@@ -2762,7 +3051,7 @@ void OrganizerCore::savePluginList()
 
 void OrganizerCore::saveCurrentProfile()
 {
-  if (m_CurrentProfile == nullptr) {
+  if (m_PersistenceSuppressed || m_CurrentProfile == nullptr) {
     return;
   }
 
@@ -2774,6 +3063,15 @@ void OrganizerCore::saveCurrentProfile()
 
 void OrganizerCore::saveCurrentProfileForShutdown()
 {
+  if (m_PersistenceSuppressed) {
+    m_PluginListsWriter.cancel();
+    if (m_CurrentProfile != nullptr) {
+      m_CurrentProfile->suppressWritesForFailedRollback();
+    }
+    m_CurrentProfileSavedForShutdown = true;
+    return;
+  }
+
   if (m_CurrentProfileSavedForShutdown) {
     return;
   }
@@ -2932,11 +3230,25 @@ bool OrganizerCore::beforeRun(
     const QFileInfo& binary, const QDir& cwd, const QString& arguments,
     const QString& profileName, const QString& customOverwrite,
     const QList<MOBase::ExecutableForcedLoadSetting>& forcedLibraries,
-    bool useProton, QString* usvfsRequestPath,
+    bool useProton, const QString& launchToken, bool ownsVfs,
+    QString* usvfsRequestPath,
     QString* saveBindMountSource, QString* saveBindMountTarget)
 {
   saveCurrentProfile();
-  {
+
+  std::shared_ptr<Profile> launchProfile = m_CurrentProfile;
+  if (launchProfile == nullptr || launchProfile->name() != profileName) {
+    const QDir profileDir(
+        QDir(m_Settings.paths().profiles()).filePath(profileName));
+    if (!profileDir.exists()) {
+      log::error("beforeRun: launch profile '{}' does not exist",
+                 profileName.toStdString());
+      return false;
+    }
+    launchProfile =
+        std::make_shared<Profile>(profileDir, managedGame(), gameFeatures());
+  }
+  const auto setIndexPublicationContext = [this, &profileName]() {
     const auto instance = InstanceManager::singleton().currentInstance();
     m_USVFS.setIndexPublicationContext(
         {.output_base=basePath().toStdString(),
@@ -2950,30 +3262,54 @@ bool OrganizerCore::beforeRun(
          .consumer_path_style=VfsIndexConsumerPathStyle::Wine
 #endif
         });
-  }
+  };
+  setIndexPublicationContext();
   if (saveBindMountSource) saveBindMountSource->clear();
   if (saveBindMountTarget) saveBindMountTarget->clear();
   if (usvfsRequestPath) usvfsRequestPath->clear();
 
-  // need to wait until directory structure is ready
-  if (m_DirectoryUpdate) {
-    QEventLoop loop;
-    connect(this, &OrganizerCore::directoryStructureReady, &loop, &QEventLoop::quit,
-            Qt::ConnectionType::QueuedConnection);
-    loop.exec();
+  // A completed generation can synchronously schedule another generation
+  // before waking us. Do not prepare a launch against that intermediate
+  // directory state.
+  if (!waitForDirectoryRefreshes()) {
+    return false;
   }
 
   movePGPatcherLogsToLogsFolder();
 
   // need to make sure all data is saved before we start the application
-  if (m_CurrentProfile != nullptr) {
-    m_CurrentProfile->writeModlistNow(true);
+  if (launchProfile != nullptr) {
+    launchProfile->writeModlistNow(true);
+  }
+
+  // An about-to-run callback may synchronously launch and wait for a helper
+  // through the same public API (Cyberpunk REDmod does this). Hand off only
+  // this not-yet-started launch's VFS reservation while callbacks run. A
+  // synchronous helper cleans up before returning; an asynchronous helper
+  // keeps ownership and makes the outer re-reservation fail safely.
+  if (ownsVfs &&
+      !m_ProcessLaunchContext.handoffVfsReservation(launchToken)) {
+    log::error("beforeRun: launch '{}' could not hand off its VFS reservation",
+               launchToken.toStdString());
+    return false;
   }
 
   if (!m_AboutToRun(binary.absoluteFilePath(), cwd, arguments)) {
     log::debug("start of \"{}\" cancelled by plugin", binary.absoluteFilePath());
     return false;
   }
+
+  if (ownsVfs &&
+      !m_ProcessLaunchContext.reclaimVfsReservation(launchToken)) {
+    log::error("beforeRun: launch '{}' could not reclaim VFS ownership after "
+               "an about-to-run callback started another application",
+               launchToken.toStdString());
+    return false;
+  }
+
+  // A synchronous nested launch overwrites this shared publication metadata.
+  // Restore the outer generation after it has reclaimed VFS ownership.
+  setIndexPublicationContext();
 
   // Pandora Behaviour Engine+ workaround: normalize paths in
   // PreviousOutput.txt to lowercase to avoid case-sensitivity issues
@@ -3194,11 +3530,9 @@ bool OrganizerCore::beforeRun(
     }
   } catch (const FuseConnectorException& e) {
     log::error("VFS mount failed: {}", e.what());
-    if (usvfsRequestPath && !usvfsRequestPath->isEmpty()) {
-      QFile::remove(*usvfsRequestPath);
-      usvfsRequestPath->clear();
-    }
-    m_USVFS.unmount();
+    // ProcessRunner's already-armed preparation guard owns rollback. Preserve
+    // the request path and any partial mount so its mandatory cleanup can
+    // remove/unmount transactionally and retain the tracker on failure.
     return false;
   } catch (const std::exception& e) {
     QWidget* w = nullptr;
@@ -3206,16 +3540,14 @@ bool OrganizerCore::beforeRun(
       w = m_UserInterface->mainWindow();
     }
     QMessageBox::warning(w, tr("Error"), e.what());
-    if (usvfsRequestPath && !usvfsRequestPath->isEmpty()) {
-      QFile::remove(*usvfsRequestPath);
-      usvfsRequestPath->clear();
-    }
-    m_USVFS.unmount();
+    // As above, leave rollback to the caller's preparation guard. Clearing a
+    // failed request removal here would make that prepared artifact impossible
+    // to retry safely.
     return false;
   }
 
   // Deploy plugins.txt and loadorder.txt to the Wine prefix before launch.
-  if (m_CurrentProfile != nullptr) {
+  if (launchProfile != nullptr) {
     const QString prefixPathStr = resolveWinePrefixPath(m_Settings, managedGame());
 
     if (!prefixPathStr.isEmpty()) {
@@ -3233,7 +3565,7 @@ bool OrganizerCore::beforeRun(
         const auto localSavesFeature = gameFeatures().gameFeature<LocalSavegames>();
         const QString absoluteSaveDir =
             resolveAbsoluteSaveDir(prefix, managedGame(),
-                                   localSavesFeature.get(), m_CurrentProfile);
+                                   localSavesFeature.get(), launchProfile);
         log::info("Wine prefix save target: '{}'", absoluteSaveDir);
 
         // If the prefix's plugin-list file is newer than the profile's
@@ -3254,7 +3586,7 @@ bool OrganizerCore::beforeRun(
           }
           if (preMech != WinePrefix::PluginListMechanism::None) {
             const QString profilePluginsPath =
-                m_CurrentProfile->getPluginsFileName();
+                launchProfile->getPluginsFileName();
             const QDateTime prefixMTime =
                 prefix.prefixPluginsMTime(dataDirName);
             const QDateTime profileMTime =
@@ -3277,7 +3609,7 @@ bool OrganizerCore::beforeRun(
         }
 
         // Read plugin lines from profile's plugins.txt
-        QFile pluginsFile(m_CurrentProfile->getPluginsFileName());
+        QFile pluginsFile(launchProfile->getPluginsFileName());
         if (pluginsFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
           QStringList plugins;
           QTextStream stream(&pluginsFile);
@@ -3323,13 +3655,13 @@ bool OrganizerCore::beforeRun(
           }
         }
 
-        if (m_CurrentProfile->localSettingsEnabled()) {
+        if (launchProfile->localSettingsEnabled()) {
           const QString targetIniBase =
               resolvePrefixGameDocumentsDir(prefix, dataDirName);
           int deployedIniCount = 0;
           for (const QString& iniFile : managedGame()->iniFiles()) {
             const QString sourceIni =
-                m_CurrentProfile->absoluteIniFilePath(iniFile);
+                launchProfile->absoluteIniFilePath(iniFile);
             const QString targetIni =
                 QDir(targetIniBase).filePath(QFileInfo(iniFile).fileName());
             log::info("INI deploy target: '{}' -> '{}' (exists={})", sourceIni,
@@ -3350,9 +3682,9 @@ bool OrganizerCore::beforeRun(
                      managedGame()->documentsDirectory().absolutePath());
         }
 
-        if (m_CurrentProfile->localSavesEnabled()) {
+        if (launchProfile->localSavesEnabled()) {
           const QString profileSavesDir =
-              QDir(m_CurrentProfile->absolutePath()).filePath("saves");
+              QDir(launchProfile->absolutePath()).filePath("saves");
 
           const bool useBindMount =
               saveBindMountSource && saveBindMountTarget &&
@@ -3430,203 +3762,668 @@ bool OrganizerCore::beforeRun(
   return true;
 }
 
-void OrganizerCore::afterRun(const QFileInfo& binary, DWORD exitCode)
+bool OrganizerCore::reserveProcessLaunch(const QString& launchToken,
+                                         const QString& profileName,
+                                         bool ownsVfs)
 {
-  const bool fileTimeLoadOrder =
-      managedGame()->loadOrderMechanism() ==
-      IPluginGame::LoadOrderMechanism::FileTime;
-
-  // Unmount the FUSE VFS now that the application has exited. unmount()
-  // flushes the staging directory (moves new/changed files to overwrite)
-  // and tears down the FUSE session. This mirrors Windows behaviour where
-  // USVFS is only active while a hooked process is running.
-  m_USVFS.unmount();
-  migrateGameLocalSavesFromOverwrite(managedGame(), overwritePath());
-  movePGPatcherLogsToLogsFolder();
-
-  // Restore write permissions on the game directory.  In rare cases
-  // (crashes, unclean Wine shutdown) file permissions can be changed to
-  // read-only, preventing subsequent launches from working.
-  //
-  // Use error_code-based iteration: a previous run may have left a stale
-  // FUSE mount under the game dir (zombie Wine process holding open
-  // handles), and the throwing iterator would unwind out of afterRun()
-  // leaving the rest of the post-run sync untouched.
-  {
-    const auto t0 = std::chrono::steady_clock::now();
-    const QString gameDir = managedGame()->gameDirectory().absolutePath();
-    const PermissionRepairStats repair =
-        repairGameDirectoryPermissions(gameDir.toStdString());
-    if (repair.traversal_error == ENOTCONN) {
-      log::warn("afterRun: stale FUSE mount encountered under '{}'; cleaning up",
-                gameDir.toStdString());
-      FuseConnector::tryCleanupStaleMount(gameDir);
-    }
-    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - t0).count();
-    std::fprintf(stderr,
-                 "[VFS] permission repair inspected=%llu repaired=%llu "
-                 "skipped=%llu failed=%llu elapsed_ms=%lld\n",
-                 static_cast<unsigned long long>(repair.inspected),
-                 static_cast<unsigned long long>(repair.repaired),
-                 static_cast<unsigned long long>(repair.skipped),
-                 static_cast<unsigned long long>(repair.failed),
-                 static_cast<long long>(ms));
-  }
-
-  if (m_CurrentProfile != nullptr) {
-    const QString prefixPathStr = resolveWinePrefixPath(m_Settings, managedGame());
-    if (!prefixPathStr.isEmpty()) {
-      WinePrefix const prefix(prefixPathStr);
-      if (prefix.isValid()) {
-        const QString dataDirName = resolveWineDataDirName(managedGame());
-        const auto localSavesFeature = gameFeatures().gameFeature<LocalSavegames>();
-        const QString absoluteSaveDir =
-            resolveAbsoluteSaveDir(prefix, managedGame(),
-                                   localSavesFeature.get(), m_CurrentProfile);
-
-        if (m_CurrentProfile->localSavesEnabled()) {
-          const QString profileSavesDir =
-              QDir(m_CurrentProfile->absolutePath()).filePath("saves");
-
-          // Bind-mount path: writes already landed live in the profile via
-          // the per-launch mount namespace, which teardown automatically
-          // when the game exited.  Nothing to sync and nothing to undeploy.
-          // The symlink path below only runs on kernels without
-          // unprivileged user namespaces.
-          const bool usedBindMount =
-              !QFileInfo(absoluteSaveDir).isSymLink() &&
-              ProtonLauncher::unprivilegedBindMountSupported();
-          if (!usedBindMount) {
-            log::info("Save sync target: '{}' <- '{}'", profileSavesDir,
-                      absoluteSaveDir);
-            if (!prefix.syncSavesBack(profileSavesDir, absoluteSaveDir)) {
-              log::warn("Failed to sync saves back from prefix '{}' to '{}'",
-                        prefixPathStr, profileSavesDir);
-            }
-
-            // Remove the __MO_Saves symlinks and revert the prefix INI so a
-            // vanilla launch outside MO2 uses the default Saves dir.
-            prefix.undeployProfileSaves(absoluteSaveDir);
-          }
-          const QStringList iniFiles = managedGame()->iniFiles();
-          if (!iniFiles.isEmpty()) {
-            const QString prefixIni =
-                QDir(resolvePrefixGameDocumentsDir(prefix, dataDirName))
-                    .filePath(QFileInfo(iniFiles.first()).fileName());
-            MOBase::WriteRegistryValue("General", "sLocalSavePath",
-                                       "Saves\\", prefixIni);
-            log::debug("Restored prefix INI '{}': sLocalSavePath=Saves\\",
-                       prefixIni);
-          }
-        }
-
-        if (m_CurrentProfile->localSettingsEnabled()) {
-          const QString targetIniBase =
-              resolvePrefixGameDocumentsDir(prefix, dataDirName);
-          QList<QPair<QString, QString>> iniMappings;
-          for (const QString& iniFile : managedGame()->iniFiles()) {
-            const QString profileIni =
-                m_CurrentProfile->absoluteIniFilePath(iniFile);
-            const QString targetIni =
-                QDir(targetIniBase).filePath(QFileInfo(iniFile).fileName());
-            iniMappings.append({profileIni, targetIni});
-            log::info("INI sync target: '{}' <- '{}'", profileIni, targetIni);
-          }
-
-          if (!iniMappings.isEmpty() &&
-              !prefix.syncProfileInisBack(iniMappings)) {
-            log::warn("Failed to sync profile INIs back from prefix '{}'",
-                      prefixPathStr);
-          }
-        }
-
-        // Sync the game's plugin-list file back from the prefix.  LOOT and
-        // similar tools edit the deployed copy in AppData/Local/<Game>/ —
-        // without this sync, their changes are lost when refreshESPList
-        // rereads the untouched profile copy and savePluginList clobbers
-        // them with the old in-memory order.  loadorder.txt is MO2-internal
-        // and not written to or read from the prefix.
-        WinePrefix::PluginListMechanism wineMech =
-            WinePrefix::PluginListMechanism::None;
-        switch (managedGame()->loadOrderMechanism()) {
-        case IPluginGame::LoadOrderMechanism::PluginsTxt:
-          wineMech = WinePrefix::PluginListMechanism::PluginsTxt;
-          break;
-        case IPluginGame::LoadOrderMechanism::FileTime:
-          wineMech = WinePrefix::PluginListMechanism::FileTime;
-          break;
-        case IPluginGame::LoadOrderMechanism::None:
-          wineMech = WinePrefix::PluginListMechanism::None;
-          break;
-        }
-        const QString profilePluginsPath = m_CurrentProfile->getPluginsFileName();
-        // Only sync the prefix Plugins.txt back to the profile when the game
-        // exited cleanly. Bethesda's engine rewrites Plugins.txt as part of
-        // its shutdown sequence, and on a crash it can serialize a partially
-        // cleared "active" set (file lists every plugin but only a handful
-        // still carry the leading '*'). Trusting that file would propagate
-        // the damage into the profile via refreshESPList + savePluginList.
-        // A non-zero exit code is a strong "do not trust the prefix file"
-        // signal. The active-count guard inside syncPluginsBack is a
-        // belt-and-suspenders backstop for cases where the engine catches
-        // its own crash and exits 0 anyway.
-        if (exitCode != 0) {
-          log::warn(
-              "Skipping plugins.txt sync-back: game exited with code {} "
-              "(non-zero / abnormal). Prefix Plugins.txt may have been "
-              "rewritten with a crash-time active set; profile preserved.",
-              exitCode);
-        } else if (!prefix.syncPluginsBack(profilePluginsPath, dataDirName,
-                                            wineMech)) {
-          log::warn("Failed to sync plugins.txt back from prefix '{}'",
-                    prefixPathStr);
-        }
-      }
-    }
-  }
-
-  // FileTime-based games (Skyrim LE, FO3, FNV) derive the load order from
-  // plugin file mtimes rather than loadorder.txt.  Drop the profile copy so
-  // refreshESPList falls back to file times — LOOT updates those directly
-  // on the .esp files via FUSE setattr.
-  if (fileTimeLoadOrder) {
-    log::debug("removing loadorder.txt (FileTime load order mechanism)");
-    QFile::remove(m_CurrentProfile->getLoadOrderFileName());
-  }
-
-  // Refresh directory structure after VFS is unmounted so the refresher
-  // reads the real (vanilla) data directory plus individual mod directories,
-  // matching Windows USVFS behaviour.
-  refreshDirectoryStructure();
-
-  refreshESPList(true);
-  savePluginList();
-  cycleDiagnostics();
-
-  // These callbacks should not fiddle with directory structure and ESPs.
-  m_FinishedRun(binary.absoluteFilePath(), exitCode);
+  return m_ProcessLaunchContext.reserve(launchToken, profileName, ownsVfs);
 }
 
-ProcessRunner::Results OrganizerCore::waitForAllUSVFSProcesses(UILocker::Reasons reason)
+void OrganizerCore::abandonProcessLaunch(const QString& launchToken)
 {
-  // The Win32 path called waitForAllUSVFSProcessesWithLock(), which iterated
-  // every USVFS-hooked process via the job-handle bookkeeping. The Linux
-  // FUSE-based VFS doesn't have a process job so there's nothing to wait
-  // for here — ProcessRunner::run() already handles the per-launch wait.
-  Q_UNUSED(reason);
+  m_ProcessLaunchContext.abandon(launchToken);
+}
+
+void OrganizerCore::abortProcessLaunchPreparation(const QString& launchToken,
+                                                  const QString& profileName,
+                                                  bool ownsVfs,
+                                                  QString usvfsRequestPath) noexcept
+{
+  try {
+    continueAbortedLaunchTeardown(launchToken, profileName, ownsVfs,
+                                  usvfsRequestPath,
+                                  /*retry=*/false, /*retryCount=*/0);
+  } catch (const std::exception& e) {
+    try {
+      log::error("launch preparation rollback failed before retry scheduling for "
+                 "'{}': {}; ownership remains retained",
+                 launchToken.toStdString(), e.what());
+    } catch (...) {
+    }
+  } catch (...) {
+    try {
+      log::error("launch preparation rollback failed before retry scheduling for "
+                 "'{}'; ownership remains retained",
+                 launchToken.toStdString());
+    } catch (...) {
+    }
+  }
+}
+
+void OrganizerCore::continueAbortedLaunchTeardown(
+    const QString& launchToken, const QString& profileName, bool ownsVfs,
+    const QString& usvfsRequestPath, bool retry, unsigned int retryCount)
+{
+  const auto attempt = launch_cleanup::attemptMandatoryCleanup(
+      m_ProcessLaunchContext, launchToken, profileName, ownsVfs,
+      retry ? launch_cleanup::AttemptKind::Retry
+            : launch_cleanup::AttemptKind::Initial,
+      [this, &usvfsRequestPath](bool cleanupVfs) {
+        if (!removePreparedLaunchArtifact(usvfsRequestPath)) {
+          throw std::runtime_error(
+              QStringLiteral("unable to remove aborted USVFS request '%1'")
+                  .arg(usvfsRequestPath)
+                  .toStdString());
+        }
+        if (cleanupVfs) {
+          m_USVFS.unmount();
+        }
+      },
+      /*additionalCleanupRequired=*/!usvfsRequestPath.isEmpty());
+
+  if (attempt.state == launch_cleanup::AttemptState::Rejected) {
+    log::error("launch preparation rollback rejected for token '{}' and profile "
+               "'{}'; no foreign VFS cleanup was attempted",
+               launchToken.toStdString(), profileName.toStdString());
+    return;
+  }
+
+  if (attempt.state == launch_cleanup::AttemptState::RetryRequired) {
+    const int delay = cleanupRetryDelayMs(retryCount);
+    log::error("launch preparation rollback for '{}' failed: {}; retaining "
+               "ownership and retrying in {} ms",
+               launchToken.toStdString(),
+               cleanupFailureMessage(attempt.failure).toStdString(), delay);
+    try {
+      QTimer::singleShot(
+          delay, this,
+          [this, launchToken, profileName, ownsVfs, usvfsRequestPath,
+           retryCount]() {
+            try {
+              continueAbortedLaunchTeardown(launchToken, profileName, ownsVfs,
+                                            usvfsRequestPath,
+                                            /*retry=*/true, retryCount + 1);
+            } catch (...) {
+              logQueuedCleanupFailure("launch preparation cleanup retry",
+                                      launchToken, std::current_exception());
+            }
+          });
+    } catch (const std::exception& e) {
+      log::error("unable to schedule launch rollback retry for '{}': {}; launch "
+                 "ownership remains retained",
+                 launchToken.toStdString(), e.what());
+    } catch (...) {
+      log::error("unable to schedule launch rollback retry for '{}'; launch "
+                 "ownership remains retained",
+                 launchToken.toStdString());
+    }
+    return;
+  }
+
+  m_ProcessLaunchContext.finishCompletion(launchToken);
+  if (!m_PersistenceSuppressed) {
+    try {
+      movePGPatcherLogsToLogsFolder();
+    } catch (...) {
+      logQueuedCleanupFailure("launch preparation post-cleanup", launchToken,
+                              std::current_exception());
+    }
+  }
+  log::debug("launch preparation rollback completed for '{}'",
+             launchToken.toStdString());
+}
+
+struct OrganizerCore::AfterRunWork
+{
+  QFileInfo binary;
+  DWORD exitCode{0};
+  bool unmountVfs{false};
+  QString launchToken;
+  QString profileName;
+  bool triggerRefresh{false};
+  std::function<void()> refreshComplete;
+  std::function<void(bool)> cleanupComplete;
+};
+
+OrganizerCore::AfterRunResult OrganizerCore::afterRun(
+    const QFileInfo& binary, DWORD exitCode, bool unmountVfs,
+    const QString& launchToken, const QString& profileName, bool triggerRefresh,
+    std::function<void()> refreshComplete,
+    std::function<void(bool refreshScheduled)> cleanupComplete)
+{
+  auto work = std::make_shared<AfterRunWork>(AfterRunWork{
+      binary, exitCode, unmountVfs, launchToken, profileName, triggerRefresh,
+      std::move(refreshComplete), std::move(cleanupComplete)});
+  return continueAfterRun(work, /*retry=*/false, /*retryCount=*/0);
+}
+
+OrganizerCore::AfterRunResult OrganizerCore::continueAfterRun(
+    const std::shared_ptr<AfterRunWork>& work, bool retry,
+    unsigned int retryCount)
+{
+  const bool trackedLaunch = !work->launchToken.isEmpty();
+  launch_cleanup::CleanupStage cleanupStage(launch_cleanup::AttemptResult{
+      launch_cleanup::AttemptState::Complete, {}});
+  if (trackedLaunch) {
+    cleanupStage = launch_cleanup::beginMandatoryCleanup(
+        m_ProcessLaunchContext, work->launchToken, work->profileName,
+        work->unmountVfs,
+        retry ? launch_cleanup::AttemptKind::Retry
+              : launch_cleanup::AttemptKind::Initial,
+        [this]() { m_USVFS.unmount(); });
+  } else if (work->unmountVfs) {
+    // Compatibility callers with no launch token historically owned no
+    // tracker. Keep their behavior, but never let an unmount exception escape
+    // the organizer event loop.
+    try {
+      m_USVFS.unmount();
+    } catch (...) {
+      cleanupStage = launch_cleanup::CleanupStage(
+          {launch_cleanup::AttemptState::RetryRequired,
+           std::current_exception()});
+    }
+  }
+
+  const auto& attempt = cleanupStage.attempt();
+
+  if (attempt.state == launch_cleanup::AttemptState::Rejected) {
+    log::warn("afterRun: ignoring unknown, mismatched, or already completed "
+              "launch '{}' for profile '{}'",
+              work->launchToken.toStdString(), work->profileName.toStdString());
+    return {AfterRunState::Rejected, false};
+  }
+
+  if (attempt.state == launch_cleanup::AttemptState::RetryRequired) {
+    const int delay = cleanupRetryDelayMs(retryCount);
+    log::error("afterRun: mandatory cleanup for launch '{}' failed: {}; retaining "
+               "ownership and retrying in {} ms",
+               work->launchToken.toStdString(),
+               cleanupFailureMessage(attempt.failure).toStdString(), delay);
+    try {
+      QTimer::singleShot(delay, this, [this, work, retryCount]() {
+        try {
+          continueAfterRun(work, /*retry=*/true, retryCount + 1);
+        } catch (...) {
+          logQueuedCleanupFailure("afterRun cleanup retry", work->launchToken,
+                                  std::current_exception());
+        }
+      });
+    } catch (const std::exception& e) {
+      log::error("afterRun: unable to schedule cleanup retry for '{}': {}; "
+                 "launch ownership remains retained",
+                 work->launchToken.toStdString(), e.what());
+    } catch (...) {
+      log::error("afterRun: unable to schedule cleanup retry for '{}'; launch "
+                 "ownership remains retained",
+                 work->launchToken.toStdString());
+    }
+    return {AfterRunState::CleanupPending, false};
+  }
+
+  // Mandatory cleanup has reached a known-safe state. Every later operation is
+  // best-effort and must neither escape the Qt event loop nor keep this launch
+  // registered forever.
+  bool refreshScheduled = false;
+  std::exception_ptr postRunFailure;
+  std::exception_ptr refreshFailure;
+  std::exception_ptr finishedRunFailure;
+  const auto finalization = cleanupStage.finalize(
+      trackedLaunch ? &m_ProcessLaunchContext : nullptr, work->launchToken,
+      [&]() {
+        if (m_PersistenceSuppressed) {
+          // Fail-stop still waits for mandatory physical teardown and exact
+          // tracker completion, but no launch-owned profile synchronization,
+          // refresh, or arbitrary finished-run callback may write afterward.
+          return;
+        }
+        const auto postRefresh = runPostThenRefresh(
+            [&]() {
+              std::shared_ptr<Profile> launchProfile = m_CurrentProfile;
+              if (!work->profileName.isEmpty() &&
+                  (launchProfile == nullptr ||
+                   launchProfile->name() != work->profileName)) {
+                const QDir profileDir(QDir(m_Settings.paths().profiles())
+                                          .filePath(work->profileName));
+                if (profileDir.exists()) {
+                  try {
+                    launchProfile = std::make_shared<Profile>(
+                        profileDir, managedGame(), gameFeatures());
+                  } catch (const std::exception &e) {
+                    log::error(
+                        "afterRun: failed to load launch profile '{}': {}; "
+                        "continuing launch-owned teardown without profile "
+                        "synchronization",
+                        work->profileName.toStdString(), e.what());
+                    launchProfile.reset();
+                  }
+                } else {
+                  log::error(
+                      "afterRun: launch profile '{}' no longer exists; "
+                      "continuing "
+                      "launch-owned teardown without profile synchronization",
+                      work->profileName.toStdString());
+                  launchProfile.reset();
+                }
+              }
+              const bool fileTimeLoadOrder =
+                  managedGame()->loadOrderMechanism() ==
+                  IPluginGame::LoadOrderMechanism::FileTime;
+
+              migrateGameLocalSavesFromOverwrite(managedGame(),
+                                                 overwritePath());
+              movePGPatcherLogsToLogsFolder();
+
+              // Restore write permissions on the game directory.  In rare cases
+              // (crashes, unclean Wine shutdown) file permissions can be
+              // changed to read-only, preventing subsequent launches from
+              // working.
+              //
+              // Use error_code-based iteration: a previous run may have left a
+              // stale FUSE mount under the game dir (zombie Wine process
+              // holding open handles), and the throwing iterator would unwind
+              // out of afterRun() leaving the rest of the post-run sync
+              // untouched.
+              {
+                const auto t0 = std::chrono::steady_clock::now();
+                const QString gameDir =
+                    managedGame()->gameDirectory().absolutePath();
+                const PermissionRepairStats repair =
+                    repairGameDirectoryPermissions(gameDir.toStdString());
+                if (repair.traversal_error == ENOTCONN) {
+                  log::warn("afterRun: stale FUSE mount encountered under "
+                            "'{}'; cleaning up",
+                            gameDir.toStdString());
+                  FuseConnector::tryCleanupStaleMount(gameDir);
+                }
+                const auto ms =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - t0)
+                        .count();
+                std::fprintf(
+                    stderr,
+                    "[VFS] permission repair inspected=%llu repaired=%llu "
+                    "skipped=%llu failed=%llu elapsed_ms=%lld\n",
+                    static_cast<unsigned long long>(repair.inspected),
+                    static_cast<unsigned long long>(repair.repaired),
+                    static_cast<unsigned long long>(repair.skipped),
+                    static_cast<unsigned long long>(repair.failed),
+                    static_cast<long long>(ms));
+              }
+
+              if (launchProfile != nullptr) {
+                const QString prefixPathStr =
+                    resolveWinePrefixPath(m_Settings, managedGame());
+                if (!prefixPathStr.isEmpty()) {
+                  WinePrefix const prefix(prefixPathStr);
+                  if (prefix.isValid()) {
+                    const QString dataDirName =
+                        resolveWineDataDirName(managedGame());
+                    const auto localSavesFeature =
+                        gameFeatures().gameFeature<LocalSavegames>();
+                    const QString absoluteSaveDir = resolveAbsoluteSaveDir(
+                        prefix, managedGame(), localSavesFeature.get(),
+                        launchProfile);
+
+                    if (launchProfile->localSavesEnabled()) {
+                      const QString profileSavesDir =
+                          QDir(launchProfile->absolutePath()).filePath("saves");
+
+                      // Bind-mount path: writes already landed live in the
+                      // profile via the per-launch mount namespace, which
+                      // teardown automatically when the game exited.  Nothing
+                      // to sync and nothing to undeploy. The symlink path below
+                      // only runs on kernels without unprivileged user
+                      // namespaces.
+                      const bool usedBindMount =
+                          !QFileInfo(absoluteSaveDir).isSymLink() &&
+                          ProtonLauncher::unprivilegedBindMountSupported();
+                      if (!usedBindMount) {
+                        log::info("Save sync target: '{}' <- '{}'",
+                                  profileSavesDir, absoluteSaveDir);
+                        if (!prefix.syncSavesBack(profileSavesDir,
+                                                  absoluteSaveDir)) {
+                          log::warn("Failed to sync saves back from prefix "
+                                    "'{}' to '{}'",
+                                    prefixPathStr, profileSavesDir);
+                        }
+
+                        // Remove the __MO_Saves symlinks and revert the prefix
+                        // INI so a vanilla launch outside MO2 uses the default
+                        // Saves dir.
+                        prefix.undeployProfileSaves(absoluteSaveDir);
+                      }
+                      const QStringList iniFiles = managedGame()->iniFiles();
+                      if (!iniFiles.isEmpty()) {
+                        const QString prefixIni =
+                            QDir(resolvePrefixGameDocumentsDir(prefix,
+                                                               dataDirName))
+                                .filePath(
+                                    QFileInfo(iniFiles.first()).fileName());
+                        MOBase::WriteRegistryValue("General", "sLocalSavePath",
+                                                   "Saves\\", prefixIni);
+                        log::debug(
+                            "Restored prefix INI '{}': sLocalSavePath=Saves\\",
+                            prefixIni);
+                      }
+                    }
+
+                    if (launchProfile->localSettingsEnabled()) {
+                      const QString targetIniBase =
+                          resolvePrefixGameDocumentsDir(prefix, dataDirName);
+                      QList<QPair<QString, QString>> iniMappings;
+                      for (const QString &iniFile : managedGame()->iniFiles()) {
+                        const QString profileIni =
+                            launchProfile->absoluteIniFilePath(iniFile);
+                        const QString targetIni =
+                            QDir(targetIniBase)
+                                .filePath(QFileInfo(iniFile).fileName());
+                        iniMappings.append({profileIni, targetIni});
+                        log::info("INI sync target: '{}' <- '{}'", profileIni,
+                                  targetIni);
+                      }
+
+                      if (!iniMappings.isEmpty() &&
+                          !prefix.syncProfileInisBack(iniMappings)) {
+                        log::warn(
+                            "Failed to sync profile INIs back from prefix '{}'",
+                            prefixPathStr);
+                      }
+                    }
+
+                    // Sync the game's plugin-list file back from the prefix.
+                    // LOOT and similar tools edit the deployed copy in
+                    // AppData/Local/<Game>/ — without this sync, their changes
+                    // are lost when refreshESPList rereads the untouched
+                    // profile copy and savePluginList clobbers them with the
+                    // old in-memory order.  loadorder.txt is MO2-internal and
+                    // not written to or read from the prefix.
+                    WinePrefix::PluginListMechanism wineMech =
+                        WinePrefix::PluginListMechanism::None;
+                    switch (managedGame()->loadOrderMechanism()) {
+                    case IPluginGame::LoadOrderMechanism::PluginsTxt:
+                      wineMech = WinePrefix::PluginListMechanism::PluginsTxt;
+                      break;
+                    case IPluginGame::LoadOrderMechanism::FileTime:
+                      wineMech = WinePrefix::PluginListMechanism::FileTime;
+                      break;
+                    case IPluginGame::LoadOrderMechanism::None:
+                      wineMech = WinePrefix::PluginListMechanism::None;
+                      break;
+                    }
+                    const QString profilePluginsPath =
+                        launchProfile->getPluginsFileName();
+                    // Only sync the prefix Plugins.txt back to the profile when
+                    // the game exited cleanly. Bethesda's engine rewrites
+                    // Plugins.txt as part of its shutdown sequence, and on a
+                    // crash it can serialize a partially cleared "active" set
+                    // (file lists every plugin but only a handful still carry
+                    // the leading '*'). Trusting that file would propagate the
+                    // damage into the profile via refreshESPList +
+                    // savePluginList. A non-zero exit code is a strong "do not
+                    // trust the prefix file" signal. The active-count guard
+                    // inside syncPluginsBack is a belt-and-suspenders backstop
+                    // for cases where the engine catches its own crash and
+                    // exits 0 anyway.
+                    if (work->exitCode != 0) {
+                      log::warn("Skipping plugins.txt sync-back: game exited "
+                                "with code {} "
+                                "(non-zero / abnormal). Prefix Plugins.txt may "
+                                "have been "
+                                "rewritten with a crash-time active set; "
+                                "profile preserved.",
+                                work->exitCode);
+                    } else if (!prefix.syncPluginsBack(profilePluginsPath,
+                                                       dataDirName, wineMech)) {
+                      log::warn(
+                          "Failed to sync plugins.txt back from prefix '{}'",
+                          prefixPathStr);
+                    }
+                  }
+                }
+              }
+
+              // FileTime-based games (Skyrim LE, FO3, FNV) derive the load
+              // order from plugin file mtimes rather than loadorder.txt.  Drop
+              // the profile copy so refreshESPList falls back to file times —
+              // LOOT updates those directly on the .esp files via FUSE setattr.
+              if (fileTimeLoadOrder && launchProfile != nullptr) {
+                log::debug(
+                    "removing loadorder.txt (FileTime load order mechanism)");
+                QFile::remove(launchProfile->getLoadOrderFileName());
+              }
+            },
+            [&]() {
+              // Refresh scheduling is a guaranteed stage after physical VFS
+              // teardown. Optional profile/plugin synchronization above may
+              // fail, but it must never turn WaitForRefresh into a false
+              // success without starting a directory generation.
+              if (!work->triggerRefresh) {
+                return false;
+              }
+              return refreshAfterRun(work->profileName, work->refreshComplete);
+            });
+        postRunFailure = postRefresh.postFailure;
+        refreshFailure = postRefresh.refreshFailure;
+        refreshScheduled = postRefresh.refreshScheduled;
+        if (work->triggerRefresh && !refreshScheduled && !refreshFailure) {
+          refreshFailure = std::make_exception_ptr(
+              std::runtime_error("post-run refresh was not scheduled"));
+        }
+
+        // These callbacks should not fiddle with directory structure and
+        // ESPs. The released VFS reservation permits a callback to start its
+        // successor, while the still-tracked context prevents in-process
+        // restart until this afterRun invocation has fully returned.
+        try {
+          m_FinishedRun(work->binary.absoluteFilePath(), work->exitCode);
+        } catch (...) {
+          finishedRunFailure = std::current_exception();
+        }
+      },
+      [&]() {
+        if (work->cleanupComplete) {
+          work->cleanupComplete(refreshScheduled);
+        }
+      });
+
+  if (postRunFailure) {
+    log::error(
+        "afterRun: optional post-run synchronization failed for '{}': {}",
+        work->binary.absoluteFilePath().toStdString(),
+        cleanupFailureMessage(postRunFailure).toStdString());
+  }
+  if (refreshFailure) {
+    log::error("afterRun: refresh startup failed for '{}': {}",
+               work->binary.absoluteFilePath().toStdString(),
+               cleanupFailureMessage(refreshFailure).toStdString());
+  }
+  if (finishedRunFailure) {
+    log::error("afterRun: finished-run callback failed for '{}': {}",
+               work->binary.absoluteFilePath().toStdString(),
+               cleanupFailureMessage(finishedRunFailure).toStdString());
+  }
+  if (finalization.postFailure) {
+    log::error(
+        "afterRun: non-mandatory post-run processing failed for '{}': {}",
+        work->binary.absoluteFilePath().toStdString(),
+        cleanupFailureMessage(finalization.postFailure).toStdString());
+  }
+  if (finalization.trackerFailure) {
+    log::error(
+        "afterRun: tracker release failed for '{}': {}; cleanup completion "
+        "was withheld and ownership remains retained",
+        work->launchToken.toStdString(),
+        cleanupFailureMessage(finalization.trackerFailure).toStdString());
+  }
+  if (finalization.completionFailure) {
+    log::error("afterRun: cleanup completion callback failed for '{}': {}",
+               work->launchToken.toStdString(),
+               cleanupFailureMessage(finalization.completionFailure).toStdString());
+  }
+
+  if (!finalization.trackerFinished) {
+    return {AfterRunState::CleanupPending, refreshScheduled};
+  }
+  if (refreshFailure) {
+    return {AfterRunState::RefreshFailed, false};
+  }
+  return {AfterRunState::Complete, refreshScheduled};
+}
+
+bool OrganizerCore::refreshAfterRun(const QString& profileName,
+                                    std::function<void()> refreshComplete)
+{
+  if (m_PersistenceSuppressed) {
+    // Fail-stop never starts another persistence-capable refresh generation,
+    // but WaitForRefresh completion is mandatory launch/mutation cleanup.
+    if (refreshComplete) {
+      try {
+        refreshComplete();
+      } catch (const std::exception& e) {
+        log::error("fail-stop refresh completion callback failed: {}", e.what());
+      } catch (...) {
+        log::error("fail-stop refresh completion callback failed");
+      }
+    }
+    return true;
+  }
+
+  AfterRunRefreshQueue::Request request{profileName,
+                                        std::move(refreshComplete)};
+  if (m_DirectoryUpdate) {
+    m_AfterRunRefreshQueue.enqueue(std::move(request));
+    return true;
+  }
+
+  std::vector<AfterRunRefreshQueue::Request> requests;
+  requests.push_back(std::move(request));
+  startAfterRunRefreshBatch(std::move(requests));
+  return true;
+}
+
+void OrganizerCore::startAfterRunRefreshBatch(
+    std::vector<AfterRunRefreshQueue::Request> requests)
+{
+  if (requests.empty()) {
+    return;
+  }
+
+  if (m_DirectoryUpdate) {
+    for (auto& request : requests) {
+      m_AfterRunRefreshQueue.enqueue(std::move(request));
+    }
+    return;
+  }
+
+  bool refreshCurrentPluginList = false;
+  std::vector<std::function<void()>> completions;
+  const QString currentProfile =
+      m_CurrentProfile != nullptr ? m_CurrentProfile->name() : QString{};
+  for (auto& request : requests) {
+    if (request.complete) {
+      completions.push_back(std::move(request.complete));
+    }
+    if (m_CurrentProfile != nullptr &&
+        (request.profileName.isEmpty() || request.profileName == currentProfile)) {
+      refreshCurrentPluginList = true;
+    }
+  }
+
+  refreshDirectoryStructure();
+  m_AfterRunRefreshQueue.assign(m_ActiveDirectoryRefreshGeneration,
+                                std::move(completions));
+
+  // The plugin-list model belongs to the active UI profile. A launch for a
+  // different profile still gets its own durable prefix/save/INI cleanup,
+  // while the directory refresh safely exposes physical mod/overwrite
+  // changes without importing that profile's plugin state into the UI.
+  if (refreshCurrentPluginList) {
+    refreshESPList(true);
+    savePluginList();
+  }
+  cycleDiagnostics();
+}
+
+void OrganizerCore::completeAfterRunRefresh(std::uint64_t generation)
+{
+  auto completions = m_AfterRunRefreshQueue.takeAssigned(generation);
+  for (auto& complete : completions) {
+    try {
+      complete();
+    } catch (const std::exception& e) {
+      log::error("post-run refresh completion callback failed: {}", e.what());
+    } catch (...) {
+      log::error("post-run refresh completion callback failed");
+    }
+  }
+}
+
+void OrganizerCore::completeAllAfterRunRefreshForFailStop()
+{
+  auto completions =
+      m_AfterRunRefreshQueue.takeAllCompletionsForFailStop();
+  for (auto& complete : completions) {
+    try {
+      complete();
+    } catch (const std::exception& e) {
+      log::error("fail-stop refresh completion callback failed: {}", e.what());
+    } catch (...) {
+      log::error("fail-stop refresh completion callback failed");
+    }
+  }
+}
+
+void OrganizerCore::schedulePendingAfterRunRefresh()
+{
+  if (!m_AfterRunRefreshQueue.hasPending() || m_DirectoryUpdate) {
+    return;
+  }
+
+  auto requests = m_AfterRunRefreshQueue.takePending();
+  startAfterRunRefreshBatch(std::move(requests));
+}
+
+ProcessRunner::Results
+OrganizerCore::waitForAllUSVFSProcesses(UILocker::Reasons reason) const
+{
+  // Lifetime observation is already asynchronous on Linux. Never block (or
+  // join a monitor) on the UI thread, but do keep OrganizerCore/FuseConnector
+  // alive until every VFS and native launch has completed afterRun cleanup.
+  const auto active = m_ProcessLaunchContext.activeLaunches();
+  if (!ProcessShutdownPolicy::allowsCoreDestruction(active)) {
+    if (reason != UILocker::NoReason) {
+      log::warn("exit/restart deferred: {} tracked application launch(es) are "
+                "still active ({} VFS, {} native)",
+                active.total, active.vfs, active.native);
+    }
+    return ProcessRunner::Cancelled;
+  }
+
   return ProcessRunner::Completed;
+}
+
+bool OrganizerCore::waitForDirectoryRefreshes()
+{
+  QPointer<OrganizerCore> self(this);
+  return process_coordination::waitUntilIdle(
+      [self]() {
+        return self && self->m_DirectoryUpdate.load(std::memory_order_acquire);
+      },
+      [this, self]() {
+        QEventLoop loop;
+        connect(this, &OrganizerCore::directoryRefreshRetired, &loop,
+                &QEventLoop::quit, Qt::QueuedConnection);
+        connect(this, &QObject::destroyed, &loop, &QEventLoop::quit);
+        loop.exec();
+        return !self.isNull();
+      });
 }
 
 std::vector<Mapping> OrganizerCore::fileMapping(const QString& profileName,
                                                 const QString& customOverwrite)
 {
-  // need to wait until directory structure is ready
-  if (m_DirectoryUpdate) {
-    QEventLoop loop;
-    connect(this, &OrganizerCore::directoryStructureReady, &loop, &QEventLoop::quit,
-            Qt::ConnectionType::QueuedConnection);
-    loop.exec();
+  if (!waitForDirectoryRefreshes()) {
+    return {};
   }
 
   IPluginGame* game = qApp->property("managed_game").value<IPluginGame*>();
@@ -3670,11 +4467,11 @@ std::vector<Mapping> OrganizerCore::fileMapping(const QString& profileName,
         tr("The designated write target \"%1\" is not enabled.").arg(customOverwrite));
   }
 
-  if (m_CurrentProfile->localSavesEnabled()) {
+  if (profile.localSavesEnabled()) {
     auto localSaves = gameFeatures().gameFeature<LocalSavegames>();
     if (localSaves != nullptr) {
       MappingType saveMap =
-          localSaves->mappings(currentProfile()->absolutePath() + "/saves");
+          localSaves->mappings(profile.absolutePath() + "/saves");
       result.reserve(result.size() + saveMap.size());
       result.insert(result.end(), saveMap.begin(), saveMap.end());
     } else {

@@ -79,6 +79,23 @@ ExitFlags SettingsDialog::exitNeeded() const
   return m_exit;
 }
 
+void SettingsDialog::reportUpdateFailure(const QString& detail)
+{
+  if (m_updateFailureDetail.isEmpty()) {
+    m_updateFailureDetail = detail;
+  }
+}
+
+bool SettingsDialog::updatesSucceeded() const
+{
+  return m_updateFailureDetail.isEmpty();
+}
+
+QString SettingsDialog::updateFailureDetail() const
+{
+  return m_updateFailureDetail;
+}
+
 void SettingsDialog::selectTabByLabel(const QString& label)
 {
   for (int i = 0; i < ui->tabWidget->count(); ++i) {

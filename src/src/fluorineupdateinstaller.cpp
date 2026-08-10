@@ -1,4 +1,6 @@
 #include "fluorineupdateinstaller.h"
+#include "processlifetime.h"
+#include "updaterrestartpolicy.h"
 
 #include "shared/util.h"
 
@@ -170,16 +172,7 @@ void FluorineUpdateInstaller::install(
                     fail(tr("Cannot write the update restart helper."));
                     return;
                   }
-                  helper.write(
-                      "#!/usr/bin/env bash\n"
-                      "set -u\n"
-                      "OLD_PID=\"$1\"\n"
-                      "NEW_LAUNCHER=\"$2\"\n"
-                      "for _ in $(seq 1 200); do\n"
-                      "  if ! kill -0 \"$OLD_PID\" 2>/dev/null; then break; fi\n"
-                      "  sleep 0.1\n"
-                      "done\n"
-                      "exec \"$NEW_LAUNCHER\"\n");
+                  helper.write(updater_restart::helperScript());
                   helper.close();
                   QFile::setPermissions(
                       helperPath,
@@ -187,12 +180,20 @@ void FluorineUpdateInstaller::install(
                           QFile::ReadGroup | QFile::ExeGroup |
                           QFile::ReadOther | QFile::ExeOther);
 
-                  emit statusChanged(
-                      tr("Update staged. Restarting Fluorine Manager…"));
+                  emit statusChanged(tr("Update staged. Restarting when running "
+                                        "applications have closed…"));
+                  const auto oldStartTime =
+                      process_lifetime::processStartTime(::getpid());
+                  if (!oldStartTime) {
+                    fail(tr("Unable to identify the current Fluorine process "
+                            "generation safely."));
+                    return;
+                  }
                   const bool helperStarted = QProcess::startDetached(
                       QStringLiteral("/usr/bin/env"),
                       {QStringLiteral("bash"), helperPath,
                        QString::number(static_cast<qint64>(::getpid())),
+                       QString::number(static_cast<qulonglong>(*oldStartTime)),
                        newLauncher});
                   if (!helperStarted) {
                     fail(tr("Unable to start the update restart helper."));
@@ -201,8 +202,17 @@ void FluorineUpdateInstaller::install(
                   MOBase::log::info(
                       "update installer: spawned helper to restart into {}",
                       newLauncher);
-                  QTimer::singleShot(
-                      250, qApp, []() { ExitModOrganizer(Exit::Force); });
+                  auto* exitRetry = new QTimer(qApp);
+                  exitRetry->setInterval(250);
+                  connect(exitRetry, &QTimer::timeout, qApp, [exitRetry]() {
+                    const auto result = ExitModOrganizer(
+                        Exit::Force, /*silentActiveLaunch=*/true);
+                    if (!updater_restart::shouldRetryExit(result)) {
+                      exitRetry->stop();
+                      exitRetry->deleteLater();
+                    }
+                  });
+                  exitRetry->start();
                 });
             extractor->start();
           });

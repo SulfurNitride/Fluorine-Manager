@@ -36,6 +36,8 @@ struct APILimits
 
   // remaining number of requests this hour
   int remainingHourlyRequests = 0;
+
+  bool operator==(const APILimits&) const = default;
 };
 
 /**
@@ -58,6 +60,8 @@ public:
   static constexpr int ThrottleThreshold = 200;
 
   APIUserAccount();
+
+  bool operator==(const APIUserAccount&) const = default;
 
   /**
    * whether the user is logged in

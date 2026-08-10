@@ -5,6 +5,7 @@
 #include "filesystemutilities.h"
 #include "instancemanager.h"
 #include "plugincontainer.h"
+#include "restarttransaction.h"
 #include "selectiondialog.h"
 #include "settings.h"
 #include "shared/appconfig.h"
@@ -425,22 +426,22 @@ void InstanceManagerDialog::openSelectedInstance()
     return;
   }
 
-  if (to.isPortable()) {
-    // Store the actual directory for portable instances so we can distinguish
-    // between the default portable path and user-selected portable locations.
-    // An empty string means "use default portable path".
-    auto& m = InstanceManager::singleton();
-    if (to.directory() == InstanceManager::portablePath()) {
-      InstanceManager::setCurrentInstance("");
-    } else {
-      InstanceManager::setCurrentInstance(to.directory());
-    }
-  } else {
-    InstanceManager::singleton().setCurrentInstance(to.displayName());
-  }
-
-  if (m_restartOnSelect) {
-    ExitModOrganizer(Exit::Restart);
+  const auto switchResult = restart_transaction::authorizeThenCommit(
+      m_restartOnSelect, [] { return ExitModOrganizer(Exit::Restart); }, [&] {
+        if (to.isPortable()) {
+          // Store the actual directory for portable instances so we can
+          // distinguish the default path from a user-selected portable path.
+          if (to.directory() == InstanceManager::portablePath()) {
+            InstanceManager::setCurrentInstance("");
+          } else {
+            InstanceManager::setCurrentInstance(to.directory());
+          }
+        } else {
+          InstanceManager::singleton().setCurrentInstance(to.displayName());
+        }
+      });
+  if (switchResult != ExitRequestResult::Authorized) {
+    return;
   }
 
   accept();
@@ -981,6 +982,9 @@ void InstanceManagerDialog::downloadCollection()
 
 void InstanceManagerDialog::downloadSLRIfNeeded()
 {
+  if (slrOperationAdmissionSuppressed()) {
+    return;
+  }
   if (isSlrInstalled()) {
     return;
   }
@@ -994,21 +998,25 @@ void InstanceManagerDialog::downloadSLRIfNeeded()
   progress->setAttribute(Qt::WA_ShowWithoutActivating);
   progress->setMinimumDuration(0);
 
-  auto* cancelFlag = new int(0);
+  const SlrCancellationSource cancellation;
 
-  connect(progress, &QProgressDialog::canceled, this, [cancelFlag] {
-    *cancelFlag = 1;
+  connect(progress, &QProgressDialog::canceled, this, [cancellation] {
+    cancellation.cancel();
   });
 
   auto* watcher = new QFutureWatcher<QString>(this);
 
   connect(watcher, &QFutureWatcher<QString>::finished, this,
-      [this, watcher, progress, cancelFlag] {
+      [this, watcher, progress, cancellation] {
         progress->close();
         watcher->deleteLater();
         progress->deleteLater();
 
         const QString err = watcher->result();
+        if (cancellation.isCancellationRequested() ||
+            slrOperationAdmissionSuppressed()) {
+          return;
+        }
         if (!err.isEmpty()) {
           MOBase::log::error("[SLR] Download failed: {}", err);
           QMessageBox::warning(this, tr("Steam Linux Runtime"),
@@ -1017,13 +1025,12 @@ void InstanceManagerDialog::downloadSLRIfNeeded()
           MOBase::log::info("[SLR] Steam Linux Runtime installed successfully");
           progress->setLabelText(tr("Steam Linux Runtime is ready."));
         }
-        delete cancelFlag;
       });
 
-  int* cancelPtr = cancelFlag;
-  watcher->setFuture(QtConcurrent::run([cancelPtr]() -> QString {
-    return downloadSlr(nullptr, nullptr, cancelPtr);
-  }));
+  watcher->setFuture(
+      QtConcurrent::run([token = cancellation.token()]() -> QString {
+        return downloadSlr(nullptr, nullptr, token);
+      }));
 
   progress->show();
 }

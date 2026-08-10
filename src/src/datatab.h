@@ -72,6 +72,8 @@ private:
   void onRefresh();
   void onBrowseVFS();
   void onBrowseRootBuilder();
+  void browseVfsSession(const QString& path, const QString& title,
+                        const QString& message);
   void onItemExpanded(QTreeWidgetItem* item);
   void onConflicts();
   void onArchives();

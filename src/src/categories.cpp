@@ -215,6 +215,13 @@ void CategoryFactory::cleanup()
 
 bool CategoryFactory::saveCategories()
 {
+  bool result = false;
+  m_WriteBarrier.runIfAllowed([&] { result = saveCategoriesImpl(); });
+  return result;
+}
+
+bool CategoryFactory::saveCategoriesImpl()
+{
   if (!m_CategoriesLoaded) {
     reportError(tr("Categories are unavailable because recovery did not "
                    "complete; reload them before saving"));
@@ -288,7 +295,23 @@ bool CategoryFactory::saveCategories()
   return true;
 }
 
+void CategoryFactory::suppressWritesForFailedRollback() noexcept
+{
+  m_WriteBarrier.suppress();
+}
+
 bool CategoryFactory::replaceCategoriesFromNexus(
+    const std::vector<NexusCategory>& nexusCats,
+    quint64 expectedSaveGeneration)
+{
+  bool result = false;
+  m_WriteBarrier.runIfAllowed([&] {
+    result = replaceCategoriesFromNexusImpl(nexusCats, expectedSaveGeneration);
+  });
+  return result;
+}
+
+bool CategoryFactory::replaceCategoriesFromNexusImpl(
     const std::vector<NexusCategory>& nexusCats,
     quint64 expectedSaveGeneration)
 {
@@ -372,6 +395,16 @@ CategoryFactory::countCategories(std::function<bool(const Category& category)> f
 int CategoryFactory::addCategory(const QString& name,
                                  const std::vector<NexusCategory>& nexusCats,
                                  int parentID)
+{
+  int result = -1;
+  m_WriteBarrier.runIfAllowed(
+      [&] { result = addCategoryImpl(name, nexusCats, parentID); });
+  return result;
+}
+
+int CategoryFactory::addCategoryImpl(
+    const QString& name, const std::vector<NexusCategory>& nexusCats,
+    int parentID)
 {
   const auto previousCategories = m_Categories;
   const auto previousNexusMap   = m_NexusMap;

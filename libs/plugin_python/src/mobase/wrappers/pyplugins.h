@@ -399,10 +399,12 @@ namespace mo2::python {
 
     // game
     class PyPluginGame : public PyPluginBaseNoFinal<IPluginGame>,
-                         public IPluginGamePolicies {
+                         public IPluginGamePolicies,
+                         public IPluginGameProcessLifetime {
         Q_OBJECT
         Q_INTERFACES(MOBase::IPlugin MOBase::IPluginGame
-                         MOBase::IPluginGamePolicies)
+                         MOBase::IPluginGamePolicies
+                         MOBase::IPluginGameProcessLifetime)
     public:
         void detectGame() override
         {
@@ -518,6 +520,15 @@ namespace mo2::python {
         QList<ExecutableInfo> executables() const override
         {
             PYBIND11_OVERRIDE(QList<ExecutableInfo>, IPluginGame, executables, );
+        }
+        QStringList executableProcessNames(
+            const QString& executable, const QStringList& arguments) const override
+        {
+            pybind11::gil_scoped_acquire gil;
+            pybind11::function override_fn = pybind11::get_override(
+                static_cast<const IPluginGame*>(this), "executableProcessNames");
+            return override_fn ? override_fn(executable, arguments).cast<QStringList>()
+                               : QStringList{};
         }
         QList<ExecutableForcedLoadSetting> executableForcedLoads() const override
         {

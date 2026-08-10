@@ -470,6 +470,22 @@ inline QSettings::Status syncAndVerifySettingsUnderLock(QSettings& settings)
   return QSettings::NoError;
 }
 
+inline std::optional<SettingsSnapshot> captureInteractiveSettingsSnapshot(
+    QSettings& settings, int lockTimeoutMs = SettingsLockTimeoutMs)
+{
+  QLockFile lock(settingsLockPath(settings.fileName()));
+  lock.setStaleLockTime(SettingsLockStaleMs);
+  if (!lock.tryLock(lockTimeoutMs) || settings.status() != QSettings::NoError) {
+    return std::nullopt;
+  }
+
+  settings.sync();
+  if (settings.status() != QSettings::NoError) {
+    return std::nullopt;
+  }
+  return captureSettingsSnapshot(settings);
+}
+
 inline bool snapshotEntryMatches(const SettingsSnapshot& left,
                                  const SettingsSnapshot& right,
                                  const QString& key)
@@ -559,6 +575,36 @@ inline bool restoreSettingsSnapshot(QSettings& settings,
     settings.sync();
   }
   return false;
+}
+
+inline bool restoreInteractiveSettingsSnapshot(
+    QSettings& settings, const SettingsSnapshot& original,
+    int lockTimeoutMs = SettingsLockTimeoutMs)
+{
+  QLockFile lock(settingsLockPath(settings.fileName()));
+  lock.setStaleLockTime(SettingsLockStaleMs);
+  if (!lock.tryLock(lockTimeoutMs) || settings.status() != QSettings::NoError) {
+    return false;
+  }
+
+  const auto rejected = captureSettingsSnapshot(settings);
+  if (!restoreSettingsSnapshot(settings, original, rejected) ||
+      settings.status() != QSettings::NoError) {
+    return false;
+  }
+
+  return syncAndVerifySettingsUnderLock(settings) == QSettings::NoError;
+}
+
+inline bool verifyInteractiveSettingsState(
+    QSettings& settings, int lockTimeoutMs = SettingsLockTimeoutMs)
+{
+  QLockFile lock(settingsLockPath(settings.fileName()));
+  lock.setStaleLockTime(SettingsLockStaleMs);
+  if (!lock.tryLock(lockTimeoutMs) || settings.status() != QSettings::NoError) {
+    return false;
+  }
+  return syncAndVerifySettingsUnderLock(settings) == QSettings::NoError;
 }
 
 inline bool finishSettingsRollback(

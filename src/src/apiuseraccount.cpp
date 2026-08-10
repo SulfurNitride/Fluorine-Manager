@@ -1,5 +1,7 @@
 #include "apiuseraccount.h"
 
+#include <QObject>
+
 QString localizedUserAccountType(APIUserAccountTypes t)
 {
   switch (t) {

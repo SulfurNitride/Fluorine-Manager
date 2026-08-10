@@ -21,7 +21,9 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #define SETTINGS_H
 
 #include "envdump.h"
+#include "nexuscredentialstate.h"
 #include "nexusoauthtokens.h"
+#include "settingswritebarrier.h"
 #include <questionboxmemory.h>
 #include <uibase/filterwidget.h>
 #include <uibase/log.h>
@@ -288,7 +290,7 @@ class PluginSettings : public QObject
   Q_OBJECT
 
 public:
-  PluginSettings(QSettings& settings);
+  PluginSettings(QSettings& settings, const SettingsWriteBarrier& writeBarrier);
 
   // forgets all the plugins
   //
@@ -363,6 +365,7 @@ Q_SIGNALS:
 
 private:
   QSettings& m_Settings;
+  const SettingsWriteBarrier& m_WriteBarrier;
   std::vector<MOBase::IPlugin*> m_Plugins;
   QMap<QString, QVariantMap> m_PluginSettings;
   QMap<QString, QVariantMap> m_PluginDescriptions;
@@ -934,6 +937,19 @@ public:
   //
   QSettings::Status sync() const;
 
+  // An incomplete interactive rollback makes the live QSettings cache
+  // untrustworthy. Prevent its destructor from retrying any pending write
+  // while the application performs a fail-stop shutdown.
+  void suppressWritesForFailedRollback() noexcept;
+  bool failedRollbackWritesDrained() const noexcept;
+
+  // Captures/restores an interactive edit as one transaction. This allows an
+  // accepted Settings dialog to be rolled back if its required restart is
+  // refused by the process/download shutdown gate.
+  std::optional<QMap<QString, QVariant>> captureEditSnapshot() const;
+  bool restoreEditSnapshot(const QMap<QString, QVariant>& snapshot);
+  bool verifyEditState() const;
+
   // last status of the ini file
   //
   QSettings::Status iniStatus() const;
@@ -961,6 +977,7 @@ private:
   std::unique_ptr<QLockFile> m_UpdateLock;
   QMap<QString, QVariant> m_UpdateSnapshot;
   bool m_UpdateProcessingStarted{false};
+  SettingsWriteBarrier m_WriteBarrier;
   std::unique_ptr<QSettings> m_SettingsOwner;
   QSettings& m_Settings;
 
@@ -1035,6 +1052,18 @@ public:
   // Returns whether OAuth tokens are currently stored.
   //
   static bool hasNexusOAuthTokens();
+
+  // Captures, restores and verifies both credential entries without logging
+  // their values. An empty optional means the entry was absent, rather than a
+  // present credential whose value happened to be unavailable.
+  static std::optional<NexusCredentialStoreSnapshot> captureNexusCredentials();
+  static bool restoreNexusCredentials(const NexusCredentialStoreSnapshot& snapshot);
+  static bool verifyNexusCredentials(const NexusCredentialStoreSnapshot& snapshot);
+
+  // Reject every process-global mutation after an incomplete interactive
+  // rollback while tracked launches drain toward fail-stop termination.
+  static void suppressWritesForFailedRollback() noexcept;
+  static bool failedRollbackWritesDrained() noexcept;
 
   // resets anything that the user can disable
   static void resetDialogs();

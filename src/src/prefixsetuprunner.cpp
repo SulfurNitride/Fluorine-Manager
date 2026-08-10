@@ -1110,7 +1110,7 @@ bool PrefixSetupRunner::stepProtonInit()
   // wrapper below exposes that exact directory and prepends it to PATH.
   emit logMessage("Ensuring xrandr helper is available...");
   if (!ensureXrandrInstalled(
-          nullptr, [this](const QString& msg) { emit logMessage(msg); })) {
+          {}, [this](const QString& msg) { emit logMessage(msg); })) {
     currentStep().errorMessage = "Failed to install xrandr helper";
     return false;
   }
@@ -2747,24 +2747,17 @@ bool PrefixSetupRunner::ensureSLRRunScript()
       "installing steamrt4...");
   emit downloadStarted(QStringLiteral("Steam Linux Runtime"));
 
-  int cancelFlag = 0;
-  QTimer cancelTimer;
-  connect(&cancelTimer, &QTimer::timeout, this, [this, &cancelFlag] {
-    if (isCancelled()) {
-      cancelFlag = 1;
-    }
-  });
-  cancelTimer.start(200);
+  const SlrCancellationSource cancellation([this] { return isCancelled(); });
 
   const QString err = downloadSlr(
       nullptr,
       [this](const QString& msg) { emit logMessage(msg); },
-      &cancelFlag);
+      cancellation.token());
 
-  cancelTimer.stop();
   emit downloadFinished();
 
-  if (cancelFlag != 0) {
+  if (cancellation.isCancellationRequested() ||
+      slrOperationAdmissionSuppressed()) {
     currentStep().errorMessage = "Steam Linux Runtime download cancelled";
     return false;
   }

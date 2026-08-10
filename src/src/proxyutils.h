@@ -11,15 +11,26 @@ namespace MOShared
 template <class Fn, class T = int>
 auto callIfPluginActive(OrganizerProxy* proxy, Fn&& callback, T defaultReturn = T{})
 {
-  return [fn = std::forward<Fn>(callback), proxy, defaultReturn](auto&&... args) {
-    if (proxy->isPluginEnabled(proxy->plugin())) {
-      return fn(std::forward<decltype(args)>(args)...);
+  const auto gate = proxy->mutationGate();
+  return [gate, fn = std::forward<Fn>(callback), proxy,
+          defaultReturn](auto&&... args) {
+    using Result =
+        std::invoke_result_t<std::decay_t<Fn>, decltype(args)...>;
+
+    if constexpr (std::is_same_v<Result, void>) {
+      gate->runIfAllowed([&] {
+        if (proxy->isPluginEnabled(proxy->plugin())) {
+          fn(std::forward<decltype(args)>(args)...);
+        }
+      });
     } else {
-      if constexpr (!std::is_same_v<
-                        std::invoke_result_t<std::decay_t<Fn>, decltype(args)...>,
-                        void>) {
-        return defaultReturn;
-      }
+      Result result = defaultReturn;
+      gate->runIfAllowed([&] {
+        if (proxy->isPluginEnabled(proxy->plugin())) {
+          result = fn(std::forward<decltype(args)>(args)...);
+        }
+      });
+      return result;
     }
   };
 }
@@ -38,10 +49,22 @@ auto callSignalIfPluginActive(OrganizerProxy* proxy, const Signal& signal,
 }
 
 template <class Signal, class T = int>
-auto callSignalAlways(const Signal& signal)
+auto callSignalAlways(OrganizerProxy* proxy, const Signal& signal,
+                      T defaultReturn = T{})
 {
-  return [&signal](auto&&... args) {
-    return signal(std::forward<decltype(args)>(args)...);
+  const auto gate     = proxy->mutationGate();
+  return [gate, signal = &signal,
+          defaultReturn](auto&&... args) {
+    using Result = std::invoke_result_t<Signal, decltype(args)...>;
+    if constexpr (std::is_same_v<Result, void>) {
+      gate->runIfAllowed(
+          [&] { (*signal)(std::forward<decltype(args)>(args)...); });
+    } else {
+      Result result = defaultReturn;
+      gate->runIfAllowed(
+          [&] { result = (*signal)(std::forward<decltype(args)>(args)...); });
+      return result;
+    }
   };
 }
 

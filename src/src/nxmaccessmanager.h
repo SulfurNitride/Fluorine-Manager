@@ -21,6 +21,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #define NXMACCESSMANAGER_H
 
 #include "apiuseraccount.h"
+#include "nexuscredentialstate.h"
 #include "nexusoauthtokens.h"
 #include "ui_validationprogressdialog.h"
 #include <QDialogButtonBox>
@@ -63,6 +64,7 @@ public:
   void start(NXMAccessManager& m, const NexusOAuthTokens& tokens);
   void cancel();
 
+  bool active() const;
   bool done() const;
   Result result() const;
   const QString& message() const;
@@ -187,6 +189,12 @@ public:
   bool validateAttempted() const;
   bool validateWaiting() const;
 
+  NexusLiveCredentialSnapshot
+  captureCredentialState(const APIUserAccount& account) const;
+  bool restoreCredentialState(const NexusLiveCredentialSnapshot& snapshot);
+  bool matchesCredentialState(const NexusLiveCredentialSnapshot& snapshot,
+                              const APIUserAccount& account) const;
+
   void connectOrRefresh(const NexusOAuthTokens tokens);
   void cancelAuth();
 
@@ -212,6 +220,10 @@ public:
   const QString& MOVersion() const;
 
   void clearCredentials();
+
+  // Stop OAuth/validation callbacks from issuing credential writes while the
+  // application performs a fail-stop after an incomplete Settings rollback.
+  void suppressPersistenceForFailedRollback() noexcept;
 
   void refuseValidation();
 
@@ -243,24 +255,29 @@ protected:
                                QIODevice* device) override;
 
 private:
-  enum States
-  {
-    NotChecked,
-    Valid,
-    Invalid
-  };
-
   QWidget* m_TopLevel;
   Settings* m_Settings;
   mutable std::unique_ptr<ValidationProgressDialog> m_ProgressDialog;
   QString m_MOVersion;
   NexusKeyValidator m_Validator;
-  States m_ValidationState{NotChecked};
+  NexusValidationState m_ValidationState{NexusValidationState::NotChecked};
   std::optional<NexusOAuthTokens> m_Tokens;
   std::unique_ptr<QOAuth2AuthorizationCodeFlow> m_NexusOAuth;
   std::unique_ptr<QOAuthHttpServerReplyHandler> m_NexusOAuthReplyHandler;
+  OAuthState m_OAuthState{OAuthState::Cancelled};
+  std::uint64_t m_OAuthFlowGeneration{0};
+  std::uint64_t m_OAuthAttemptGeneration{0};
+  NexusOAuthOperation m_RestoredOAuthOperation{NexusOAuthOperation::None};
+  std::uint64_t m_RestoredSourceFlowGeneration{0};
+  std::uint64_t m_RestoredSourceAttemptGeneration{0};
+  bool m_PersistenceSuppressed{false};
 
   void handleOAuthError(const QString& message);
+
+  void initializeOAuthFlow();
+  void resetOAuthFlow();
+  NexusOAuthOperation oauthOperation() const;
+  void beginOAuthAttempt(OAuthState state);
 
   void setOAuthState(OAuthState state, const QString& message = {});
   void notifyTokens();

@@ -10,6 +10,7 @@
 #include <QObject>
 
 #include "game_feature.h"
+#include "gamefeatureownership.h"
 #include "moddatachecker.h"
 #include "moddatacontent.h"
 
@@ -44,7 +45,8 @@ public:
 
   // unregister game features
   //
-  bool unregisterGameFeature(std::shared_ptr<MOBase::GameFeature> feature);
+  bool unregisterGameFeature(MOBase::IPlugin* plugin,
+                             std::shared_ptr<MOBase::GameFeature> feature);
   int unregisterGameFeatures(MOBase::IPlugin* plugin, std::type_info const& info);
 
   // retrieve a game feature
@@ -61,32 +63,6 @@ signals:
 
 private:
   friend class GameFeaturesProxy;
-
-  class GameFeatureWithData
-  {
-    // feature
-    std::shared_ptr<MOBase::GameFeature> m_feature;
-
-    // plugin that registered the feature
-    MOBase::IPlugin* m_plugin;
-
-    // games this plugin applies to - empty list indicates all games
-    QStringList m_games;
-
-    // priority of the plugin
-    int m_priority;
-
-  public:
-    GameFeatureWithData(std::shared_ptr<MOBase::GameFeature> feature,
-                        MOBase::IPlugin* plugin, QStringList games, int priority)
-        : m_feature(feature), m_plugin(plugin), m_games(games), m_priority(priority)
-    {}
-
-    const auto& feature() const { return m_feature; }
-    auto* const plugin() const { return m_plugin; }
-    const auto& games() const { return m_games; }
-    auto priority() const { return m_priority; }
-  };
 
   // retrieve a game feature from info
   //
@@ -106,7 +82,7 @@ private:
 
   PluginContainer& m_pluginContainer;
 
-  std::unordered_map<std::type_index, std::vector<GameFeatureWithData>> m_allFeatures;
+  game_feature_ownership::RegistrationStore m_allFeatures;
   std::unordered_map<std::type_index, std::vector<std::shared_ptr<MOBase::GameFeature>>>
       m_currentFeatures;
 

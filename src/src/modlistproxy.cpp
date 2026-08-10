@@ -57,13 +57,19 @@ IModInterface* ModListProxy::getMod(const QString& name) const
 
 bool ModListProxy::removeMod(MOBase::IModInterface* mod)
 {
-  return m_Proxied->removeMod(mod);
+  bool result = false;
+  m_OrganizerProxy->runMutationIfAllowed(
+      [&] { result = m_Proxied->removeMod(mod); });
+  return result;
 }
 
 MOBase::IModInterface* ModListProxy::renameMod(MOBase::IModInterface* mod,
                                                const QString& name)
 {
-  return m_Proxied->renameMod(mod, name);
+  MOBase::IModInterface* result = nullptr;
+  m_OrganizerProxy->runMutationIfAllowed(
+      [&] { result = m_Proxied->renameMod(mod, name); });
+  return result;
 }
 
 IModList::ModStates ModListProxy::state(const QString& name) const
@@ -73,12 +79,18 @@ IModList::ModStates ModListProxy::state(const QString& name) const
 
 bool ModListProxy::setActive(const QString& name, bool active)
 {
-  return m_Proxied->setActive(name, active);
+  bool result = false;
+  m_OrganizerProxy->runMutationIfAllowed(
+      [&] { result = m_Proxied->setActive(name, active); });
+  return result;
 }
 
 int ModListProxy::setActive(const QStringList& names, bool active)
 {
-  return m_Proxied->setActive(names, active);
+  int result = 0;
+  m_OrganizerProxy->runMutationIfAllowed(
+      [&] { result = m_Proxied->setActive(names, active); });
+  return result;
 }
 
 int ModListProxy::priority(const QString& name) const
@@ -88,7 +100,10 @@ int ModListProxy::priority(const QString& name) const
 
 bool ModListProxy::setPriority(const QString& name, int newPriority)
 {
-  return m_Proxied->setPriority(name, newPriority);
+  bool result = false;
+  m_OrganizerProxy->runMutationIfAllowed(
+      [&] { result = m_Proxied->setPriority(name, newPriority); });
+  return result;
 }
 
 bool ModListProxy::onModInstalled(const std::function<void(IModInterface*)>& func)

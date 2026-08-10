@@ -22,6 +22,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <QByteArray>
 #include <QString>
+#include "settingswritebarrier.h"
 #include <functional>
 #include <map>
 #include <vector>
@@ -138,6 +139,14 @@ public:
    * @brief save the categories to the categories.dat file
    **/
   bool saveCategories();
+
+  // Fail-stop after an incomplete Settings rollback. This closes admission;
+  // active work is observed through the drain query below.
+  void suppressWritesForFailedRollback() noexcept;
+  bool failedRollbackWritesDrained() const noexcept
+  {
+    return m_WriteBarrier.suppressionDrained();
+  }
 
   // Replaces the complete Nexus category inventory and writes it once. The
   // caller may acknowledge an asynchronous migration only after this returns
@@ -268,6 +277,12 @@ private:
   explicit CategoryFactory();
 
   void loadDefaultCategories();
+  bool saveCategoriesImpl();
+  bool replaceCategoriesFromNexusImpl(
+      const std::vector<NexusCategory>& nexusCats,
+      quint64 expectedSaveGeneration);
+  int addCategoryImpl(const QString& name,
+                      const std::vector<NexusCategory>& nexusCats, int parentID);
 
   void addCategory(int id, const QString& name,
                    const std::vector<NexusCategory>& nexusCats, int parentID);
@@ -286,6 +301,7 @@ private:
   bool m_CategoriesLoaded{false};
   quint64 m_SaveGeneration{0};
   QByteArray m_StorageVersion;
+  SettingsWriteBarrier m_WriteBarrier;
 
 private:
   // called by isDescendantOf()

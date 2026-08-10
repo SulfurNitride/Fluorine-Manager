@@ -25,6 +25,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "modinfoforeign.h"
 #include "registry.h"
 #include "settings.h"
+#include "settingswritebarrier.h"
 #include "shared/appconfig.h"
 #include "shared/util.h"
 #include <bsainvalidation.h>
@@ -36,7 +37,9 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <QApplication>
 #include <QBuffer>
+#include <QCoreApplication>
 #include <QDirIterator>
+#include <QEvent>
 #include <QFile>      // for QFile
 #include <QFlags>     // for operator|, QFlags
 #include <QIODevice>  // for QIODevice, etc
@@ -53,12 +56,61 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <algorithm>  // for max, min
 #include <exception>  // for exception
 #include <functional>
+#include <memory>
+#include <mutex>
 #include <set>  // for set
 #include <stdexcept>
+#include <unordered_set>
 #include <utility>  // for find
 
 using namespace MOBase;
 using namespace MOShared;
+
+namespace
+{
+SettingsWriteBarrier g_ProfileWriteBarrier;
+std::mutex g_ProfileSettingsMutex;
+std::unordered_set<QSettings*> g_ProfileSettings;
+
+void registerProfileSettings(QSettings* settings)
+{
+  const std::lock_guard lock(g_ProfileSettingsMutex);
+  g_ProfileSettings.insert(settings);
+}
+
+void unregisterProfileSettings(QSettings* settings) noexcept
+{
+  try {
+    const std::lock_guard lock(g_ProfileSettingsMutex);
+    g_ProfileSettings.erase(settings);
+  } catch (...) {
+  }
+}
+
+bool removeAllProfileSettingsSyncEvents() noexcept
+{
+  try {
+    const std::lock_guard lock(g_ProfileSettingsMutex);
+    for (auto* settings : g_ProfileSettings) {
+      if (settings != nullptr) {
+        QCoreApplication::removePostedEvents(settings, QEvent::UpdateRequest);
+      }
+    }
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+SettingsWriteBarrier::MutationLease admitProfileConstruction()
+{
+  auto lease = g_ProfileWriteBarrier.enterIfAllowed();
+  if (!lease) {
+    throw std::runtime_error("profile construction rejected during fail-stop");
+  }
+  return lease;
+}
+}  // namespace
 
 // MOBase::resolveFileCaseInsensitive moved to MOBase::resolveFileCaseInsensitive
 
@@ -78,6 +130,7 @@ Profile::Profile(const QString& name, IPluginGame const* gamePlugin,
     : m_ModListWriter(std::bind(&Profile::doWriteModlist, this)),
       m_GamePlugin(gamePlugin), m_GameFeatures(gameFeatures)
 {
+  auto writeLease = admitProfileConstruction();
   QString profilesDir = Settings::instance().paths().profiles();
   QDir profileBase(profilesDir);
   QString fixedName = name;
@@ -90,10 +143,12 @@ Profile::Profile(const QString& name, IPluginGame const* gamePlugin,
   }
   QString fullPath = profilesDir + "/" + fixedName;
   m_Directory      = QDir(fullPath);
-  m_Settings =
-      new QSettings(m_Directory.absoluteFilePath("settings.ini"), QSettings::IniFormat);
+  auto settings = std::make_unique<QSettings>(
+      m_Directory.absoluteFilePath("settings.ini"), QSettings::IniFormat);
+  m_Settings = settings.get();
 
   try {
+    registerProfileSettings(m_Settings);
     // create files. Needs to happen after m_Directory was set!
     touchFile("modlist.txt");
     touchFile("archives.txt");
@@ -107,12 +162,16 @@ Profile::Profile(const QString& name, IPluginGame const* gamePlugin,
 
     gamePlugin->initializeProfile(fullPath, settings);
     findProfileSettings();
+    refreshModStatus();
   } catch (...) {
+    unregisterProfileSettings(m_Settings);
+    settings.reset();
+    m_Settings = nullptr;
     // clean up in case of an error
     shellDelete(QStringList(profileBase.absoluteFilePath(fixedName)));
     throw;
   }
-  refreshModStatus();
+  settings.release();
 }
 
 Profile::Profile(const QDir& directory, IPluginGame const* gamePlugin,
@@ -120,21 +179,31 @@ Profile::Profile(const QDir& directory, IPluginGame const* gamePlugin,
     : m_Directory(directory), m_GamePlugin(gamePlugin), m_GameFeatures(gameFeatures),
       m_ModListWriter(std::bind(&Profile::doWriteModlist, this))
 {
+  auto writeLease = admitProfileConstruction();
   assert(gamePlugin != nullptr);
 
-  m_Settings =
-      new QSettings(directory.absoluteFilePath("settings.ini"), QSettings::IniFormat);
-  findProfileSettings();
+  auto settingsBackend = std::make_unique<QSettings>(
+      directory.absoluteFilePath("settings.ini"), QSettings::IniFormat);
+  m_Settings = settingsBackend.get();
+  registerProfileSettings(m_Settings);
+  try {
+    findProfileSettings();
 
-  if (!QFile::exists(m_Directory.filePath("modlist.txt"))) {
-    log::warn("missing modlist.txt in {}", directory.path());
-    touchFile(m_Directory.filePath("modlist.txt"));
+    if (!QFile::exists(m_Directory.filePath("modlist.txt"))) {
+      log::warn("missing modlist.txt in {}", directory.path());
+      touchFile(m_Directory.filePath("modlist.txt"));
+    }
+
+    IPluginGame::ProfileSettings settings =
+        IPluginGame::MODS | IPluginGame::SAVEGAMES;
+    gamePlugin->initializeProfile(directory, settings);
+
+    refreshModStatus();
+  } catch (...) {
+    unregisterProfileSettings(m_Settings);
+    throw;
   }
-
-  IPluginGame::ProfileSettings settings = IPluginGame::MODS | IPluginGame::SAVEGAMES;
-  gamePlugin->initializeProfile(directory, settings);
-
-  refreshModStatus();
+  settingsBackend.release();
 }
 
 Profile::Profile(const Profile& reference)
@@ -143,14 +212,38 @@ Profile::Profile(const Profile& reference)
       m_GamePlugin(reference.m_GamePlugin), m_GameFeatures(reference.m_GameFeatures)
 
 {
-  m_Settings =
-      new QSettings(m_Directory.absoluteFilePath("settings.ini"), QSettings::IniFormat);
-  findProfileSettings();
-  refreshModStatus();
+  auto writeLease = admitProfileConstruction();
+  auto settings = std::make_unique<QSettings>(
+      m_Directory.absoluteFilePath("settings.ini"), QSettings::IniFormat);
+  m_Settings = settings.get();
+  registerProfileSettings(m_Settings);
+  try {
+    findProfileSettings();
+    refreshModStatus();
+  } catch (...) {
+    unregisterProfileSettings(m_Settings);
+    throw;
+  }
+  settings.release();
 }
 
 Profile::~Profile()
 {
+  auto writeLease = g_ProfileWriteBarrier.enterIfAllowed();
+  if (!writeLease) {
+    try {
+      m_ModListWriter.cancel();
+    } catch (...) {
+    }
+    // QSettings synchronizes pending changes from its destructor. Fail-stop
+    // intentionally retains this process-lifetime backend until _Exit so a
+    // suppressed old profile cannot flush during an admitted profile switch.
+    (void)fail_stop::retainBackendForProcessLifetime(m_Settings);
+    return;
+  }
+
+  unregisterProfileSettings(m_Settings);
+
   try {
     m_ModListWriter.writeImmediately(true);
   } catch (const std::exception& e) {
@@ -234,12 +327,15 @@ bool Profile::exists() const
 
 void Profile::writeModlist()
 {
-  m_ModListWriter.write();
+  g_ProfileWriteBarrier.runIfAllowed([&] { m_ModListWriter.write(); });
 }
 
 void Profile::writeModlistNow(bool onlyIfPending)
 {
-  m_ModListWriter.writeImmediately(onlyIfPending);
+  if (!g_ProfileWriteBarrier.runIfAllowed(
+          [&] { m_ModListWriter.writeImmediately(onlyIfPending); })) {
+    m_ModListWriter.cancel();
+  }
 }
 
 void Profile::cancelModlistWrite()
@@ -247,48 +343,82 @@ void Profile::cancelModlistWrite()
   m_ModListWriter.cancel();
 }
 
+void Profile::suppressWritesForFailedRollback() noexcept
+{
+  suppressAllWritesForFailedRollback();
+  try {
+    m_ModListWriter.cancel();
+  } catch (...) {
+    // Admission remains fail-closed even if delayed-writer cancellation fails.
+  }
+}
+
+void Profile::suppressAllWritesForFailedRollback() noexcept
+{
+  g_ProfileWriteBarrier.suppress();
+  removeAllProfileSettingsSyncEvents();
+}
+
+bool Profile::allWritesDrainedForFailedRollback() noexcept
+{
+  if (!g_ProfileWriteBarrier.suppressionDrained()) {
+    return false;
+  }
+
+  // An admitted write can queue one last deferred sync after phase-one event
+  // removal. Remove it only once the global Profile active count reaches zero.
+  return removeAllProfileSettingsSyncEvents();
+}
+
 void Profile::doWriteModlist()
 {
-  if (!m_Directory.exists())
-    return;
-
-  try {
-    QString fileName = getModlistFileName();
-    SafeWriteFile file(fileName);
-
-    file->write(QString("# This file was automatically generated by Mod Organizer.\r\n")
-                    .toUtf8());
-    if (m_ModStatus.empty()) {
+  g_ProfileWriteBarrier.runIfAllowed([&] {
+    if (!m_Directory.exists())
       return;
-    }
 
-    for (auto iter = m_ModIndexByPriority.crbegin();
-         iter != m_ModIndexByPriority.crend(); iter++) {
-      // the priority order was inverted on load so it has to be inverted again
-      const auto index     = iter->second;
-      ModInfo::Ptr modInfo = ModInfo::getByIndex(index);
-      if (!modInfo->hasAutomaticPriority()) {
-        if (modInfo->isForeign()) {
-          file->write("*");
-        } else if (m_ModStatus[index].m_Enabled) {
-          file->write("+");
-        } else {
-          file->write("-");
-        }
-        file->write(modInfo->name().toUtf8());
-        file->write("\r\n");
+    try {
+      QString fileName = getModlistFileName();
+      SafeWriteFile file(fileName);
+
+      file->write(
+          QString("# This file was automatically generated by Mod Organizer.\r\n")
+              .toUtf8());
+      if (m_ModStatus.empty()) {
+        return;
       }
-    }
 
-    file->commit();
-  } catch (const std::exception& e) {
-    reportError(tr("failed to write mod list: %1").arg(e.what()));
-    return;
-  }
+      for (auto iter = m_ModIndexByPriority.crbegin();
+           iter != m_ModIndexByPriority.crend(); iter++) {
+        // the priority order was inverted on load so it has to be inverted again
+        const auto index     = iter->second;
+        ModInfo::Ptr modInfo = ModInfo::getByIndex(index);
+        if (!modInfo->hasAutomaticPriority()) {
+          if (modInfo->isForeign()) {
+            file->write("*");
+          } else if (m_ModStatus[index].m_Enabled) {
+            file->write("+");
+          } else {
+            file->write("-");
+          }
+          file->write(modInfo->name().toUtf8());
+          file->write("\r\n");
+        }
+      }
+
+      file->commit();
+    } catch (const std::exception& e) {
+      reportError(tr("failed to write mod list: %1").arg(e.what()));
+    }
+  });
 }
 
 void Profile::createTweakedIniFile()
 {
+  auto writeLease = g_ProfileWriteBarrier.enterIfAllowed();
+  if (!writeLease) {
+    return;
+  }
+
   QString tweakedIni = m_Directory.absoluteFilePath("initweaks.ini");
 
   if (QFile::exists(tweakedIni) && !shellDeleteQuiet(tweakedIni)) {
@@ -324,6 +454,11 @@ void Profile::createTweakedIniFile()
 // static
 void Profile::renameModInAllProfiles(const QString& oldName, const QString& newName)
 {
+  auto writeLease = g_ProfileWriteBarrier.enterIfAllowed();
+  if (!writeLease) {
+    return;
+  }
+
   QDir profilesDir(Settings::instance().paths().profiles());
   profilesDir.setFilter(QDir::AllDirs | QDir::NoDotAndDotDot);
   QDirIterator profileIter(profilesDir);
@@ -341,6 +476,11 @@ void Profile::renameModInAllProfiles(const QString& oldName, const QString& newN
 void Profile::renameModInList(QFile& modList, const QString& oldName,
                               const QString& newName)
 {
+  auto writeLease = g_ProfileWriteBarrier.enterIfAllowed();
+  if (!writeLease) {
+    return;
+  }
+
   if (!modList.open(QIODevice::ReadOnly | QIODevice::Text)) {
     reportError(tr("failed to open %1").arg(modList.fileName()));
     return;
@@ -402,6 +542,11 @@ void Profile::renameModInList(QFile& modList, const QString& oldName,
 
 void Profile::refreshModStatus()
 {
+  auto writeLease = g_ProfileWriteBarrier.enterIfAllowed();
+  if (!writeLease) {
+    return;
+  }
+
   // this function refreshes mod status (enabled/disabled) and priority
   // using the profile mod list file and the mods in the mods folder using
   // the following steps
@@ -638,6 +783,11 @@ std::vector<std::tuple<QString, QString, int>> Profile::getActiveMods()
 
 void Profile::setModEnabled(unsigned int index, bool enabled)
 {
+  auto writeLease = g_ProfileWriteBarrier.enterIfAllowed();
+  if (!writeLease) {
+    return;
+  }
+
   if (index >= m_ModStatus.size()) {
     throw MyException(tr("invalid mod index: %1").arg(index));
   }
@@ -662,6 +812,11 @@ void Profile::setModEnabled(unsigned int index, bool enabled)
 void Profile::setModsEnabled(const QList<unsigned int>& modsToEnable,
                              const QList<unsigned int>& modsToDisable)
 {
+  auto writeLease = g_ProfileWriteBarrier.enterIfAllowed();
+  if (!writeLease) {
+    return;
+  }
+
   QList<unsigned int> dirtyMods;
   for (auto idx : modsToEnable) {
     if (idx >= m_ModStatus.size()) {
@@ -714,6 +869,11 @@ int Profile::getModPriority(unsigned int index) const
 
 bool Profile::setModPriority(unsigned int index, int& newPriority)
 {
+  auto writeLease = g_ProfileWriteBarrier.enterIfAllowed();
+  if (!writeLease) {
+    return false;
+  }
+
   if (ModInfo::getByIndex(index)->hasAutomaticPriority()) {
     // can't change priority of overwrite/backups
     return false;
@@ -752,6 +912,11 @@ bool Profile::setModPriority(unsigned int index, int& newPriority)
 Profile* Profile::createPtrFrom(const QString& name, const Profile& reference,
                                 MOBase::IPluginGame const* gamePlugin)
 {
+  auto writeLease = g_ProfileWriteBarrier.enterIfAllowed();
+  if (!writeLease) {
+    return nullptr;
+  }
+
   QString profileDirectory = Settings::instance().paths().profiles() + "/" + name;
   reference.copyFilesTo(profileDirectory);
   return new Profile(QDir(profileDirectory), gamePlugin, reference.m_GameFeatures);
@@ -759,7 +924,8 @@ Profile* Profile::createPtrFrom(const QString& name, const Profile& reference,
 
 void Profile::copyFilesTo(QString& target) const
 {
-  copyDir(m_Directory.absolutePath(), target, false);
+  g_ProfileWriteBarrier.runIfAllowed(
+      [&] { copyDir(m_Directory.absolutePath(), target, false); });
 }
 
 std::vector<std::wstring> Profile::splitDZString(const wchar_t* buffer)
@@ -777,6 +943,11 @@ std::vector<std::wstring> Profile::splitDZString(const wchar_t* buffer)
 
 void Profile::mergeTweak(const QString& tweakName, const QString& tweakedIni)
 {
+  auto writeLease = g_ProfileWriteBarrier.enterIfAllowed();
+  if (!writeLease) {
+    return;
+  }
+
   // Parse the tweak INI file line-by-line and merge each key=value into the
   // destination using WriteRegistryValue (which uses the safe line-by-line
   // writer that does NOT interpret backslashes as line continuations or
@@ -813,6 +984,11 @@ void Profile::mergeTweak(const QString& tweakName, const QString& tweakedIni)
 
 void Profile::mergeTweaks(ModInfo::Ptr modInfo, const QString& tweakedIni) const
 {
+  auto writeLease = g_ProfileWriteBarrier.enterIfAllowed();
+  if (!writeLease) {
+    return;
+  }
+
   std::vector<QString> iniTweaks = modInfo->getIniTweaks();
   for (std::vector<QString>::iterator iter = iniTweaks.begin(); iter != iniTweaks.end();
        ++iter) {
@@ -836,6 +1012,11 @@ bool Profile::invalidationActive(bool* supported) const
 
 void Profile::deactivateInvalidation()
 {
+  auto writeLease = g_ProfileWriteBarrier.enterIfAllowed();
+  if (!writeLease) {
+    return;
+  }
+
   auto invalidation = m_GameFeatures.gameFeature<BSAInvalidation>();
 
   if (invalidation != nullptr) {
@@ -847,6 +1028,11 @@ void Profile::deactivateInvalidation()
 
 void Profile::activateInvalidation()
 {
+  auto writeLease = g_ProfileWriteBarrier.enterIfAllowed();
+  if (!writeLease) {
+    return;
+  }
+
   auto invalidation = m_GameFeatures.gameFeature<BSAInvalidation>();
 
   if (invalidation != nullptr) {
@@ -863,6 +1049,11 @@ bool Profile::localSavesEnabled() const
 
 bool Profile::enableLocalSaves(bool enable)
 {
+  auto writeLease = g_ProfileWriteBarrier.enterIfAllowed();
+  if (!writeLease) {
+    return false;
+  }
+
   if (enable) {
     if (!m_Directory.exists("saves")) {
       m_Directory.mkdir("saves");
@@ -894,6 +1085,11 @@ bool Profile::localSettingsEnabled() const
 {
   bool enabled =
       setting("", "LocalSettings", Settings::instance().profileLocalInis()).toBool();
+  auto writeLease = g_ProfileWriteBarrier.enterIfAllowed();
+  if (!writeLease) {
+    return enabled;
+  }
+
   if (enabled) {
     QStringList missingFiles;
     for (QString file : m_GamePlugin->iniFiles()) {
@@ -924,6 +1120,11 @@ bool Profile::localSettingsEnabled() const
 
 bool Profile::enableLocalSettings(bool enable)
 {
+  auto writeLease = g_ProfileWriteBarrier.enterIfAllowed();
+  if (!writeLease) {
+    return false;
+  }
+
   if (enable) {
     m_GamePlugin->initializeProfile(m_Directory.absolutePath(),
                                     IPluginGame::CONFIGURATION);
@@ -1035,6 +1236,11 @@ QString Profile::savePath() const
 
 void Profile::rename(const QString& newName)
 {
+  auto writeLease = g_ProfileWriteBarrier.enterIfAllowed();
+  if (!writeLease) {
+    return;
+  }
+
   QDir profileDir(Settings::instance().paths().profiles());
   profileDir.rename(name(), newName);
   m_Directory.setPath(profileDir.absoluteFilePath(newName));
@@ -1064,12 +1270,14 @@ QVariant Profile::setting(const QString& section, const QString& name,
 void Profile::storeSetting(const QString& section, const QString& name,
                            const QVariant& value)
 {
-  m_Settings->setValue(keyName(section, name), value);
+  g_ProfileWriteBarrier.runIfAllowed(
+      [&] { m_Settings->setValue(keyName(section, name), value); });
 }
 
 void Profile::removeSetting(const QString& section, const QString& name)
 {
-  m_Settings->remove(keyName(section, name));
+  g_ProfileWriteBarrier.runIfAllowed(
+      [&] { m_Settings->remove(keyName(section, name)); });
 }
 
 QVariantMap Profile::settingsByGroup(const QString& section) const
@@ -1085,11 +1293,13 @@ QVariantMap Profile::settingsByGroup(const QString& section) const
 
 void Profile::storeSettingsByGroup(const QString& section, const QVariantMap& values)
 {
-  m_Settings->beginGroup(section);
-  for (auto key : values.keys()) {
-    m_Settings->setValue(key, values[key]);
-  }
-  m_Settings->endGroup();
+  g_ProfileWriteBarrier.runIfAllowed([&] {
+    m_Settings->beginGroup(section);
+    for (auto key : values.keys()) {
+      m_Settings->setValue(key, values[key]);
+    }
+    m_Settings->endGroup();
+  });
 }
 
 QList<QVariantMap> Profile::settingsByArray(const QString& prefix) const
@@ -1111,14 +1321,16 @@ QList<QVariantMap> Profile::settingsByArray(const QString& prefix) const
 void Profile::storeSettingsByArray(const QString& prefix,
                                    const QList<QVariantMap>& values)
 {
-  m_Settings->beginWriteArray(prefix);
-  for (int i = 0; i < values.length(); i++) {
-    m_Settings->setArrayIndex(i);
-    for (auto key : values.at(i).keys()) {
-      m_Settings->setValue(key, values.at(i)[key]);
+  g_ProfileWriteBarrier.runIfAllowed([&] {
+    m_Settings->beginWriteArray(prefix);
+    for (int i = 0; i < values.length(); i++) {
+      m_Settings->setArrayIndex(i);
+      for (auto key : values.at(i).keys()) {
+        m_Settings->setValue(key, values.at(i)[key]);
+      }
     }
-  }
-  m_Settings->endArray();
+    m_Settings->endArray();
+  });
 }
 
 bool Profile::forcedLibrariesEnabled(const QString& executable) const
@@ -1194,7 +1406,7 @@ void Profile::storeForcedLibraries(const QString& executable,
 
 void Profile::removeForcedLibraries(const QString& executable)
 {
-  m_Settings->remove("forced_libraries/" + executable);
+  removeSetting("forced_libraries", executable);
 }
 
 void Profile::debugDump() const

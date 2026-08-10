@@ -73,6 +73,8 @@ namespace mo2::python {
             .def("documentsDirectory", &IPluginGame::documentsDirectory)
             .def("savesDirectory", &IPluginGame::savesDirectory)
             .def("executables", &IPluginGame::executables)
+            .def("executableProcessNames", &IPluginGame::executableProcessNames,
+                 "executable"_a, "arguments"_a)
             .def("executableForcedLoads", &IPluginGame::executableForcedLoads)
             .def("steamAPPId", &IPluginGame::steamAPPId)
             .def("primaryPlugins", &IPluginGame::primaryPlugins)

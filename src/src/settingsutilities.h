@@ -2,6 +2,7 @@
 #define SETTINGSUTILITIES_H
 
 #include <log.h>
+#include "settingswritebarrier.h"
 
 namespace MOBase
 {
@@ -40,6 +41,15 @@ struct ValueConverter<QStringList>
 
 bool shouldLogSetting(const QString& displayName);
 
+// Non-owning registration used by the common set/remove helpers. Settings
+// declares its barrier before its QSettings backend and unregisters while both
+// are alive, so a returned pointer remains valid for the backend's lifetime.
+void registerSettingsWriteBarrier(QSettings& settings,
+                                  const SettingsWriteBarrier& barrier);
+void unregisterSettingsWriteBarrier(QSettings& settings) noexcept;
+const SettingsWriteBarrier* registeredSettingsWriteBarrier(
+    QSettings& settings);
+
 template <class T>
 void logChange(const QString& displayName, std::optional<T> oldValue, const T& newValue)
 {
@@ -62,28 +72,40 @@ void logRemoval(const QString& name);
 QString settingName(const QString& section, const QString& key);
 
 template <class T>
+std::optional<T> getOptional(const QSettings& settings, const QString& section,
+                             const QString& key, std::optional<T> def = {});
+
+template <class T>
 void setImpl(QSettings& settings, const QString& displayName, const QString& section,
              const QString& key, const T& value)
 {
-  const auto current = getOptional<T>(settings, section, key);
+  const auto mutation = [&] {
+    const auto current = getOptional<T>(settings, section, key);
 
-  if (current && *current == value) {
-    // no change
-    return;
-  }
+    if (current && *current == value) {
+      // no change
+      return;
+    }
 
-  const auto name = settingName(section, key);
+    const auto name = settingName(section, key);
 
-  logChange(displayName, current, value);
+    logChange(displayName, current, value);
 
-  if constexpr (std::is_enum_v<T>) {
-    settings.setValue(name, static_cast<std::underlying_type_t<T>>(value));
-  } else if constexpr (std::is_integral_v<T> && std::is_unsigned_v<T> && sizeof(T) >= sizeof(long)) {
-    settings.setValue(name, static_cast<qulonglong>(value));
-  } else if constexpr (std::is_integral_v<T> && std::is_signed_v<T> && sizeof(T) >= sizeof(long)) {
-    settings.setValue(name, static_cast<qlonglong>(value));
+    if constexpr (std::is_enum_v<T>) {
+      settings.setValue(name, static_cast<std::underlying_type_t<T>>(value));
+    } else if constexpr (std::is_integral_v<T> && std::is_unsigned_v<T> && sizeof(T) >= sizeof(long)) {
+      settings.setValue(name, static_cast<qulonglong>(value));
+    } else if constexpr (std::is_integral_v<T> && std::is_signed_v<T> && sizeof(T) >= sizeof(long)) {
+      settings.setValue(name, static_cast<qlonglong>(value));
+    } else {
+      settings.setValue(name, value);
+    }
+  };
+
+  if (const auto* barrier = registeredSettingsWriteBarrier(settings)) {
+    barrier->runIfAllowed(mutation);
   } else {
-    settings.setValue(name, value);
+    mutation();
   }
 }
 
@@ -92,7 +114,7 @@ void removeImpl(QSettings& settings, const QString& displayName, const QString& 
 
 template <class T>
 std::optional<T> getOptional(const QSettings& settings, const QString& section,
-                             const QString& key, std::optional<T> def = {})
+                             const QString& key, std::optional<T> def)
 {
   if (settings.contains(settingName(section, key))) {
     const auto v = settings.value(settingName(section, key));
@@ -225,6 +247,9 @@ public:
   template <class T>
   void set(const QString& key, const T& value)
   {
+    if (!m_writeAllowed) {
+      return;
+    }
     const auto displayName = QString("%1/%2\\%3").arg(m_section).arg(m_i).arg(key);
 
     setImpl(m_settings, displayName, "", key, value);
@@ -234,6 +259,8 @@ private:
   QSettings& m_settings;
   QString m_section;
   int m_i{0};
+  std::optional<SettingsWriteBarrier::MutationLease> m_writeLease;
+  bool m_writeAllowed{false};
 };
 
 QString widgetNameWithTopLevel(const QWidget* widget);
@@ -268,5 +295,6 @@ void warnIfNotCheckable(const QAbstractButton* b);
 
 bool setWindowsCredential(const QString& key, const QString& data);
 QString getWindowsCredential(const QString& key);
+bool syncWindowsCredentials();
 
 #endif  // SETTINGSUTILITIES_H

@@ -14,6 +14,7 @@ public:
   QString proton_path;
   QString created;
 
+  static QString configFilePath();
   static std::optional<FluorineConfig> load();
 
   bool save() const;
@@ -28,8 +29,6 @@ public:
   static bool isSetup();
   static std::optional<QString> prefixPath();
 
-private:
-  static QString configFilePath();
 };
 
 #endif  // FLUORINECONFIG_H

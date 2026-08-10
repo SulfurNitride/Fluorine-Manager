@@ -20,6 +20,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #ifndef DOWNLOADMANAGER_H
 #define DOWNLOADMANAGER_H
 
+#include "downloadoperationcontext.h"
 #include "serverinfo.h"
 #include <QElapsedTimer>
 #include <QFile>
@@ -27,6 +28,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <QMap>
 #include <QNetworkReply>
 #include <QObject>
+#include <QPointer>
 #include <QQueue>
 #include <QSettings>
 #include <QStringList>
@@ -40,7 +42,9 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <boost/signals2.hpp>
 #include <idownloadmanager.h>
 #include <modrepositoryfileinfo.h>
+#include <optional>
 #include <set>
+#include <vector>
 using namespace boost::accumulators;
 
 namespace MOBase
@@ -90,7 +94,7 @@ private:
     unsigned int m_DownloadID;
     QString m_FileName;
     QFile m_Output;
-    QNetworkReply* m_Reply;
+    QPointer<QNetworkReply> m_Reply;
     QElapsedTimer m_StartTime;
     qint64 m_PreResumeSize;
     std::pair<int, QString> m_Progress;
@@ -115,6 +119,10 @@ private:
     MOBase::ModRepositoryFileInfo* m_FileInfo{nullptr};
 
     bool m_Hidden{false};
+
+    // Present only while this entry owns live network/API work. Ordinary
+    // ready/paused entries remain in the list without keeping fail-stop open.
+    std::optional<DownloadOperationContext::OperationLease> m_Operation;
 
     static DownloadInfo* createNew(const MOBase::ModRepositoryFileInfo* fileInfo,
                                    const QStringList& URLs,
@@ -447,6 +455,13 @@ public:  // IDownloadManager interface:
 
   void pauseAll();
 
+  // Terminal rollback is deliberately split into a nonblocking admission
+  // phase and a destructive post-drain phase. See DownloadOperationContext.
+  void suppressOperationAdmissionForFailedRollback() noexcept;
+  bool failedRollbackMutationsDrained() const noexcept;
+  void cancelOperationsForFailedRollback() noexcept;
+  bool failedRollbackOperationsDrained() const noexcept;
+
 Q_SIGNALS:
 
   void aboutToUpdate();
@@ -573,7 +588,7 @@ public:
   QString getDownloadFileName(const QString& baseName, bool rename = false) const;
 
 private:
-  void startDownload(QNetworkReply* reply, DownloadInfo* newDownload, bool resume);
+  bool startDownload(QNetworkReply* reply, DownloadInfo* newDownload, bool resume);
   void resumeDownloadInt(int index);
 
   /**
@@ -611,6 +626,14 @@ private:
   void writeData(DownloadInfo* info);
 
 private:
+  struct PendingDownload
+  {
+    QString gameName;
+    int modID;
+    int fileID;
+    DownloadOperationContext::OperationLease operation;
+  };
+
   static const int AUTOMATIC_RETRIES = 3;
 
 private:
@@ -619,7 +642,10 @@ private:
   OrganizerCore* m_OrganizerCore;
   QWidget* m_ParentWidget{nullptr};
 
-  QVector<std::tuple<QString, int, int>> m_PendingDownloads;
+  // Declared before every lease owner so it outlives their destruction.
+  DownloadOperationContext m_OperationContext;
+
+  std::vector<PendingDownload> m_PendingDownloads;
 
   QVector<DownloadInfo*> m_ActiveDownloads;
 

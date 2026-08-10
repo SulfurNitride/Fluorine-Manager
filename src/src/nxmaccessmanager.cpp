@@ -18,6 +18,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include "nxmaccessmanager.h"
+#include "nexusvalidationlifecycle.h"
 #include "iplugingame.h"
 #include "nexusinterface.h"
 #include "nexusoauthconfig.h"
@@ -240,6 +241,11 @@ bool ValidationAttempt::done() const
   return (m_Result != None);
 }
 
+bool ValidationAttempt::active() const
+{
+  return m_Reply && m_Result == None;
+}
+
 ValidationAttempt::Result ValidationAttempt::result() const
 {
   return m_Result;
@@ -405,9 +411,8 @@ void ValidationAttempt::setFailure(Result r, const QString& error)
   m_Result  = r;
   m_Message = error;
 
-  if (failure) {
-    failure();
-  }
+  success = {};
+  nexus_validation::invokeTerminalCallback(failure);
 }
 
 void ValidationAttempt::setSuccess(const APIUserAccount& user)
@@ -418,9 +423,8 @@ void ValidationAttempt::setSuccess(const APIUserAccount& user)
   m_Result  = Success;
   m_Message = "";
 
-  if (success) {
-    success(user);
-  }
+  failure = {};
+  nexus_validation::invokeTerminalCallback(success, user);
 }
 
 void ValidationAttempt::cleanup()
@@ -440,6 +444,10 @@ NexusKeyValidator::NexusKeyValidator(Settings* s, NXMAccessManager& am)
 
 NexusKeyValidator::~NexusKeyValidator()
 {
+  // Callbacks commonly capture the validator's owner and are no longer safe
+  // while that owner is being destroyed.
+  finished        = {};
+  attemptFinished = {};
   cancel();
 }
 
@@ -492,15 +500,28 @@ void NexusKeyValidator::cancel()
 {
   log::debug("nexus: connection cancelled");
 
-  for (auto&& a : m_Attempts) {
+  const bool wasActive = isActive();
+  auto attempts        = std::move(m_Attempts);
+  m_Tokens.reset();
+
+  // ValidationAttempt::cancel() invokes its failure callback synchronously.
+  // Detach those callbacks before cancellation so it cannot erase the attempt
+  // that is currently executing.
+  for (auto&& a : attempts) {
+    a->success = {};
+    a->failure = {};
     a->cancel();
+  }
+
+  if (wasActive && finished) {
+    finished(ValidationAttempt::Cancelled, QObject::tr("Cancelled"), {});
   }
 }
 
 bool NexusKeyValidator::isActive() const
 {
   for (auto&& a : m_Attempts) {
-    if (!a->done()) {
+    if (a->active()) {
       return true;
     }
   }
@@ -571,14 +592,19 @@ void NexusKeyValidator::onAttemptSuccess(const ValidationAttempt& a,
 
 void NexusKeyValidator::onAttemptFailure(const ValidationAttempt& a)
 {
+  // attemptFinished and the terminal handlers are external/re-entrant. They
+  // may cancel the validator and destroy this attempt, so retain its outcome
+  // before invoking any callback.
+  const auto [result, message] = nexus_validation::snapshotOutcome(a);
+
   if (attemptFinished) {
     attemptFinished(a);
   }
 
-  switch (a.result()) {
+  switch (result) {
   case ValidationAttempt::SoftError: {
     if (!nextTry()) {
-      setFinished(a.result(), a.message(), {});
+      setFinished(result, message, {});
     }
 
     break;
@@ -586,7 +612,7 @@ void NexusKeyValidator::onAttemptFailure(const ValidationAttempt& a)
 
   case ValidationAttempt::HardError: {
     cancel();
-    setFinished(a.result(), a.message(), {});
+    setFinished(result, message, {});
     break;
   }
 
@@ -609,59 +635,15 @@ void NexusKeyValidator::setFinished(ValidationAttempt::Result r, const QString& 
 NXMAccessManager::NXMAccessManager(QObject* parent, Settings* s,
                                    const QString& moVersion)
     : QNetworkAccessManager(parent), m_Settings(s), m_MOVersion(moVersion),
-      m_Validator(s, *this), m_ValidationState(NotChecked)
+      m_Validator(s, *this),
+      m_ValidationState(NexusValidationState::NotChecked)
 {
   NexusOAuthTokens tokens;
   GlobalSettings::nexusOAuthTokens(tokens);
   GlobalSettings::nexusApiKey(tokens.apiKey);
   m_Tokens = tokens;
-  m_NexusOAuth.reset(new QOAuth2AuthorizationCodeFlow);
-  m_NexusOAuthReplyHandler.reset(new QOAuthHttpServerReplyHandler(
-      QHostAddress::LocalHost, NexusOAuth::redirectPort(), this));
-  m_NexusOAuth->setReplyHandler(m_NexusOAuthReplyHandler.get());
 
-  connect(m_NexusOAuth.get(), &QOAuth2AuthorizationCodeFlow::requestFailed, this,
-          [&](QAbstractOAuth::Error error) {
-            handleOAuthError(QObject::tr("Authorization failed (%1)").arg(int(error)));
-          });
-
-  connect(m_NexusOAuth.get(), &QOAuth2AuthorizationCodeFlow::granted, this, [&]() {
-    notifyTokens();
-  });
-
-  connect(m_NexusOAuth.get(), &QOAuth2AuthorizationCodeFlow::authorizeWithBrowser, this,
-          [&](const QUrl& url) {
-            shell::Open(url);
-            setOAuthState(OAuthState::WaitingForBrowser);
-          });
-
-  connect(m_NexusOAuth.get(), &QOAuth2AuthorizationCodeFlow::accessTokenAboutToExpire,
-          this, [&] {
-            if (!m_NexusOAuthReplyHandler->isListening() &&
-                !m_NexusOAuthReplyHandler->listen(QHostAddress::LocalHost,
-                                                  NexusOAuth::redirectPort())) {
-              handleOAuthError(QObject::tr("Failed to bind to localhost on port %1.")
-                                   .arg(NexusOAuth::redirectPort()));
-              return;
-            }
-          });
-
-  connect(m_NexusOAuth.get(), &QOAuth2AuthorizationCodeFlow::statusChanged, this,
-          [&](QAbstractOAuth::Status status) {
-            switch (status) {
-            case QAbstractOAuth::Status::RefreshingToken:
-              setOAuthState(OAuthState::Refreshing);
-              break;
-            case QAbstractOAuth::Status::TemporaryCredentialsReceived:
-              setOAuthState(OAuthState::Authorizing);
-              break;
-            case QAbstractOAuth::Status::Granted:
-              setOAuthState(OAuthState::Finished);
-              break;
-            default:
-              break;
-            }
-          });
+  initializeOAuthFlow();
 
   connect(this, &NXMAccessManager::tokensReceived, this,
           &NXMAccessManager::saveRefreshedTokens);
@@ -678,6 +660,85 @@ NXMAccessManager::NXMAccessManager(QObject* parent, Settings* s,
     setCookieJar(new PersistentCookieJar(QDir::fromNativeSeparators(
         m_Settings->paths().cache() + "/nexus_cookies.dat")));
   }
+}
+
+void NXMAccessManager::initializeOAuthFlow()
+{
+  // Keep replies owned by this access manager rather than by the replaceable
+  // flow object. A Settings rollback may reset the OAuth flow while the
+  // dialog's one-shot credential validator still owns a reply pointer.
+  m_NexusOAuth.reset(new QOAuth2AuthorizationCodeFlow(this, this));
+  ++m_OAuthFlowGeneration;
+  if (m_OAuthFlowGeneration == 0) {
+    ++m_OAuthFlowGeneration;
+  }
+  m_NexusOAuthReplyHandler.reset(new QOAuthHttpServerReplyHandler(
+      QHostAddress::LocalHost, NexusOAuth::redirectPort(), this));
+  m_NexusOAuth->setReplyHandler(m_NexusOAuthReplyHandler.get());
+
+  connect(m_NexusOAuth.get(), &QOAuth2AuthorizationCodeFlow::requestFailed, this,
+          [this](QAbstractOAuth::Error error) {
+            handleOAuthError(QObject::tr("Authorization failed (%1)").arg(int(error)));
+          });
+
+  connect(m_NexusOAuth.get(), &QOAuth2AuthorizationCodeFlow::granted, this,
+          [this]() { notifyTokens(); });
+
+  connect(m_NexusOAuth.get(), &QOAuth2AuthorizationCodeFlow::authorizeWithBrowser, this,
+          [this](const QUrl& url) {
+            shell::Open(url);
+            setOAuthState(OAuthState::WaitingForBrowser);
+          });
+
+  connect(m_NexusOAuth.get(), &QOAuth2AuthorizationCodeFlow::accessTokenAboutToExpire,
+          this, [this] {
+            if (!m_NexusOAuthReplyHandler->isListening() &&
+                !m_NexusOAuthReplyHandler->listen(QHostAddress::LocalHost,
+                                                  NexusOAuth::redirectPort())) {
+              handleOAuthError(QObject::tr("Failed to bind to localhost on port %1.")
+                                   .arg(NexusOAuth::redirectPort()));
+              return;
+            }
+          });
+
+  connect(m_NexusOAuth.get(), &QOAuth2AuthorizationCodeFlow::statusChanged, this,
+          [this](QAbstractOAuth::Status status) {
+            switch (status) {
+            case QAbstractOAuth::Status::RefreshingToken:
+              if (oauthOperation() != NexusOAuthOperation::Refresh) {
+                beginOAuthAttempt(OAuthState::Refreshing);
+              } else {
+                setOAuthState(OAuthState::Refreshing);
+              }
+              break;
+            case QAbstractOAuth::Status::TemporaryCredentialsReceived:
+              setOAuthState(OAuthState::Authorizing);
+              break;
+            case QAbstractOAuth::Status::Granted:
+              setOAuthState(OAuthState::Finished);
+              break;
+            default:
+              break;
+            }
+          });
+}
+
+void NXMAccessManager::resetOAuthFlow()
+{
+  if (m_NexusOAuthReplyHandler) {
+    m_NexusOAuthReplyHandler->close();
+  }
+  m_NexusOAuth.reset();
+  m_NexusOAuthReplyHandler.reset();
+  m_OAuthState = OAuthState::Cancelled;
+  m_RestoredOAuthOperation = NexusOAuthOperation::None;
+  m_RestoredSourceFlowGeneration = 0;
+  m_RestoredSourceAttemptGeneration = 0;
+  ++m_OAuthAttemptGeneration;
+  if (m_OAuthAttemptGeneration == 0) {
+    ++m_OAuthAttemptGeneration;
+  }
+  initializeOAuthFlow();
 }
 
 void NXMAccessManager::setTopLevelWidget(QWidget* w)
@@ -742,15 +803,157 @@ std::optional<NexusOAuthTokens> NXMAccessManager::tokens() const
   return m_Tokens;
 }
 
+NexusLiveCredentialSnapshot NXMAccessManager::captureCredentialState(
+    const APIUserAccount& account) const
+{
+  return {m_Tokens,
+          m_ValidationState,
+          m_Validator.isActive(),
+          oauthOperation(),
+          m_OAuthFlowGeneration,
+          m_OAuthAttemptGeneration,
+          account};
+}
+
+bool NXMAccessManager::restoreCredentialState(
+    const NexusLiveCredentialSnapshot& snapshot)
+{
+  // Preserve an operation that predates Settings when the same flow is still
+  // active. If Settings replaced or cancelled it, restart the equivalent
+  // operation from the captured credentials instead of reporting a synthetic
+  // terminal state.
+  const bool preserveOAuth =
+      snapshot.oauthOperation != NexusOAuthOperation::None &&
+      snapshot.oauthFlowGeneration == m_OAuthFlowGeneration &&
+      snapshot.oauthAttemptGeneration == m_OAuthAttemptGeneration &&
+      snapshot.oauthOperation == oauthOperation();
+
+  m_Validator.cancel();
+  stopProgress();
+  if (!preserveOAuth) {
+    resetOAuthFlow();
+  }
+
+  m_Tokens          = snapshot.tokens;
+  m_ValidationState = snapshot.validationState;
+  if (!preserveOAuth && snapshot.tokens) {
+    m_NexusOAuth->setAuthorizationUrl(QUrl(NexusOAuth::authorizeUrl()));
+    m_NexusOAuth->setTokenUrl(QUrl(NexusOAuth::tokenUrl()));
+    m_NexusOAuth->setClientIdentifier(NexusOAuth::clientId());
+    m_NexusOAuth->setPkceMethod(QOAuth2AuthorizationCodeFlow::PkceMethod::S256);
+    QSet<QByteArray> scopes;
+    for (const auto& scope : snapshot.tokens->scope.split(' ', Qt::SkipEmptyParts)) {
+      scopes.insert(scope.toUtf8());
+    }
+    m_NexusOAuth->setRequestedScopeTokens(scopes);
+    m_NexusOAuth->setToken(snapshot.tokens->accessToken);
+    m_NexusOAuth->setRefreshToken(snapshot.tokens->refreshToken);
+  }
+
+  if (!preserveOAuth) {
+    switch (snapshot.oauthOperation) {
+    case NexusOAuthOperation::Authorization:
+      connectOrRefresh(NexusOAuthTokens{});
+      break;
+    case NexusOAuthOperation::Refresh:
+      if (!snapshot.tokens) {
+        return false;
+      }
+      connectOrRefresh(*snapshot.tokens);
+      break;
+    case NexusOAuthOperation::None:
+      setOAuthState(snapshot.tokens || snapshot.account.isValid()
+                        ? OAuthState::Finished
+                        : OAuthState::Cancelled);
+      emit authorizationEnded();
+      break;
+    }
+  }
+
+  if (snapshot.validationWaiting && snapshot.tokens) {
+    startValidationCheck(*snapshot.tokens);
+  }
+
+  // Reuse the established notification path: NexusInterface restores the
+  // account and request counters, while MainWindow refreshes its title. Values
+  // are deliberately never included in diagnostics.
+  emit credentialsReceived(snapshot.account);
+
+  if (snapshot.oauthOperation != NexusOAuthOperation::None &&
+      oauthOperation() == snapshot.oauthOperation) {
+    m_RestoredOAuthOperation = snapshot.oauthOperation;
+    m_RestoredSourceFlowGeneration = snapshot.oauthFlowGeneration;
+    m_RestoredSourceAttemptGeneration = snapshot.oauthAttemptGeneration;
+  }
+
+  return m_Tokens == snapshot.tokens &&
+         m_ValidationState == snapshot.validationState &&
+         m_Validator.isActive() == snapshot.validationWaiting &&
+         oauthOperation() == snapshot.oauthOperation;
+}
+
+bool NXMAccessManager::matchesCredentialState(
+    const NexusLiveCredentialSnapshot& snapshot,
+    const APIUserAccount& account) const
+{
+  const bool operationIdentityMatches =
+      snapshot.oauthOperation == NexusOAuthOperation::None ||
+      (snapshot.oauthFlowGeneration == m_OAuthFlowGeneration &&
+       snapshot.oauthAttemptGeneration == m_OAuthAttemptGeneration) ||
+      (snapshot.oauthOperation == m_RestoredOAuthOperation &&
+       snapshot.oauthFlowGeneration == m_RestoredSourceFlowGeneration &&
+       snapshot.oauthAttemptGeneration == m_RestoredSourceAttemptGeneration);
+
+  return m_Tokens == snapshot.tokens &&
+         m_ValidationState == snapshot.validationState &&
+         m_Validator.isActive() == snapshot.validationWaiting &&
+         oauthOperation() == snapshot.oauthOperation &&
+         operationIdentityMatches &&
+         account == snapshot.account;
+}
+
+NexusOAuthOperation NXMAccessManager::oauthOperation() const
+{
+  switch (m_OAuthState) {
+  case OAuthState::Initializing:
+  case OAuthState::WaitingForBrowser:
+  case OAuthState::Authorizing:
+    return NexusOAuthOperation::Authorization;
+  case OAuthState::Refreshing:
+    return NexusOAuthOperation::Refresh;
+  case OAuthState::Finished:
+  case OAuthState::Cancelled:
+  case OAuthState::Error:
+    return NexusOAuthOperation::None;
+  }
+  return NexusOAuthOperation::None;
+}
+
+void NXMAccessManager::beginOAuthAttempt(OAuthState state)
+{
+  m_RestoredOAuthOperation = NexusOAuthOperation::None;
+  m_RestoredSourceFlowGeneration = 0;
+  m_RestoredSourceAttemptGeneration = 0;
+  ++m_OAuthAttemptGeneration;
+  if (m_OAuthAttemptGeneration == 0) {
+    ++m_OAuthAttemptGeneration;
+  }
+  setOAuthState(state);
+}
+
 void NXMAccessManager::handleOAuthError(const QString& message)
 {
   m_NexusOAuthReplyHandler->close();
-  emit updateOAuthState(OAuthState::Error, message);
+  setOAuthState(OAuthState::Error, message);
   emit authorizationEnded();
 }
 
 void NXMAccessManager::notifyTokens()
 {
+  if (m_PersistenceSuppressed) {
+    return;
+  }
+
   if (!m_NexusOAuth) {
     handleOAuthError(QObject::tr("Internal error: OAuth flow is missing."));
     return;
@@ -787,6 +990,10 @@ void NXMAccessManager::notifyTokens()
 
 void NXMAccessManager::saveRefreshedTokens(const NexusOAuthTokens tokens)
 {
+  if (m_PersistenceSuppressed) {
+    return;
+  }
+
   NexusOAuthTokens finalTokens;
   if (GlobalSettings::hasNexusOAuthTokens() || GlobalSettings::hasNexusApiKey()) {
     NexusOAuthTokens oldTokens;
@@ -809,6 +1016,7 @@ void NXMAccessManager::saveRefreshedTokens(const NexusOAuthTokens tokens)
 
 void NXMAccessManager::setOAuthState(OAuthState state, const QString& message)
 {
+  m_OAuthState = state;
   emit updateOAuthState(state, message);
 }
 
@@ -839,7 +1047,7 @@ QString NXMAccessManager::stateToString(OAuthState state, const QString& details
 
 void NXMAccessManager::startValidationCheck(const NexusOAuthTokens& tokens)
 {
-  m_ValidationState = NotChecked;
+  m_ValidationState = NexusValidationState::NotChecked;
   m_Validator.start(tokens, NexusKeyValidator::Retry);
 
   if (m_ProgressDialog) {
@@ -856,14 +1064,14 @@ void NXMAccessManager::onValidatorFinished(ValidationAttempt::Result r,
   stopProgress();
 
   if (user) {
-    m_ValidationState = Valid;
+    m_ValidationState = NexusValidationState::Valid;
     emit credentialsReceived(*user);
     emit validateSuccessful(true);
   } else {
     if (r == ValidationAttempt::Cancelled) {
-      m_ValidationState = NotChecked;
+      m_ValidationState = NexusValidationState::NotChecked;
     } else {
-      m_ValidationState = Invalid;
+      m_ValidationState = NexusValidationState::Invalid;
       emit validateFailed(message);
     }
   }
@@ -892,7 +1100,7 @@ void NXMAccessManager::onValidatorAttemptFinished(const ValidationAttempt& a)
 
 bool NXMAccessManager::validated() const
 {
-  if (m_ValidationState == Valid) {
+  if (m_ValidationState == NexusValidationState::Valid) {
     return true;
   }
 
@@ -905,12 +1113,12 @@ bool NXMAccessManager::validated() const
 
 void NXMAccessManager::refuseValidation()
 {
-  m_ValidationState = Invalid;
+  m_ValidationState = NexusValidationState::Invalid;
 }
 
 bool NXMAccessManager::validateAttempted() const
 {
-  return (m_ValidationState != NotChecked);
+  return (m_ValidationState != NexusValidationState::NotChecked);
 }
 
 bool NXMAccessManager::validateWaiting() const
@@ -920,6 +1128,17 @@ bool NXMAccessManager::validateWaiting() const
 
 void NXMAccessManager::connectOrRefresh(const NexusOAuthTokens tokens)
 {
+  if (m_PersistenceSuppressed) {
+    return;
+  }
+
+  // QOAuth2AuthorizationCodeFlow remains NotAuthenticated while a browser
+  // grant is pending. Guard our own operation state so a second Settings
+  // click cannot silently replace the PKCE verifier of the pre-existing
+  // authorization on the same flow object.
+  if (oauthOperation() != NexusOAuthOperation::None) {
+    return;
+  }
   if (m_NexusOAuth->status() != QAbstractOAuth::Status::NotAuthenticated &&
       m_NexusOAuth->status() != QAbstractOAuth::Status::Granted)
     return;
@@ -928,7 +1147,7 @@ void NXMAccessManager::connectOrRefresh(const NexusOAuthTokens tokens)
     handleOAuthError(QObject::tr("No OAuth client id configured."));
     return;
   }
-  m_ValidationState = NotChecked;
+  m_ValidationState = NexusValidationState::NotChecked;
   m_NexusOAuth->setAuthorizationUrl(QUrl(NexusOAuth::authorizeUrl()));
   m_NexusOAuth->setTokenUrl(QUrl(NexusOAuth::tokenUrl()));
   m_NexusOAuth->setClientIdentifier(clientId);
@@ -975,23 +1194,33 @@ void NXMAccessManager::connectOrRefresh(const NexusOAuthTokens tokens)
     }
     m_NexusOAuth->setRequestedScopeTokens(scope);
 
-    setOAuthState(OAuthState::Refreshing);
+    beginOAuthAttempt(OAuthState::Refreshing);
     m_NexusOAuth->refreshTokens();
   } else {
-    setOAuthState(OAuthState::Initializing);
+    beginOAuthAttempt(OAuthState::Initializing);
     m_NexusOAuth->grant();
   }
 }
 
-void NXMAccessManager::cancelAuth()
+void NXMAccessManager::suppressPersistenceForFailedRollback() noexcept
 {
+  m_PersistenceSuppressed = true;
+  m_Validator.cancel();
+  stopProgress();
   if (m_NexusOAuthReplyHandler) {
     m_NexusOAuthReplyHandler->close();
   }
-
   m_NexusOAuth.reset();
   m_NexusOAuthReplyHandler.reset();
+  m_OAuthState = OAuthState::Cancelled;
+}
+
+void NXMAccessManager::cancelAuth()
+{
+  resetOAuthFlow();
+  m_ValidationState = NexusValidationState::NotChecked;
   setOAuthState(OAuthState::Cancelled);
+  emit authorizationEnded();
 }
 
 void NXMAccessManager::addAPIHeaders(QNetworkRequest& request)
@@ -1062,15 +1291,15 @@ void NXMAccessManager::apiCheck(const NexusOAuthTokens& tokens, bool force)
   setTokens(tokens);
 
   if (m_Settings && m_Settings->network().offlineMode()) {
-    m_ValidationState = NotChecked;
+    m_ValidationState = NexusValidationState::NotChecked;
     return;
   }
 
   if (force) {
-    m_ValidationState = NotChecked;
+    m_ValidationState = NexusValidationState::NotChecked;
   }
 
-  if (m_ValidationState == Valid) {
+  if (m_ValidationState == NexusValidationState::Valid) {
     emit validateSuccessful(false);
     return;
   }
@@ -1121,9 +1350,10 @@ void NXMAccessManager::clearCredentials()
   //  m_NexusOAuth->networkAccessManager()->post(
   //      request, params.toString(QUrl::FullyEncoded).toUtf8());
   //}
+  stopProgress();
   m_Tokens.reset();
-  m_NexusOAuth->setToken("");
-  m_NexusOAuthReplyHandler->close();
+  m_ValidationState = NexusValidationState::NotChecked;
+  resetOAuthFlow();
   emit credentialsReceived(APIUserAccount());
 }
 

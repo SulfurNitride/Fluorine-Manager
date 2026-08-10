@@ -3,6 +3,7 @@
 #include "fluorineconfig.h"
 #include "fluorinepaths.h"
 #include "prefixsetupdialog.h"
+#include "protonsettingsedit.h"
 #include "ui_settingsdialog.h"
 #include "vfsbackend.h"
 
@@ -43,6 +44,42 @@ std::atomic<ProtonSettingsTab*> g_activeInstallTab = nullptr;
 ProtonSettingsTab::ProtonSettingsTab(Settings& s, SettingsDialog& d)
     : QObject(&d), SettingsTab(s, d)
 {
+  connect(
+      &d, &QDialog::finished, this,
+      [this](int) {
+        m_settingsDialogClosing = true;
+        cancelAndWaitForSlrWorker();
+      },
+      Qt::DirectConnection);
+
+  connect(&m_slrWatcher, &QFutureWatcher<QString>::finished, this, [this] {
+    if (m_slrProgress) {
+      m_slrProgress->close();
+      m_slrProgress->deleteLater();
+      m_slrProgress.clear();
+    }
+
+    const QString err = m_slrWatcher.result();
+    if (m_settingsDialogClosing || slrOperationAdmissionSuppressed()) {
+      return;
+    }
+
+    ui->downloadSLRButton->setEnabled(true);
+    if (m_slrCancellation.isCancellationRequested()) {
+      return;
+    }
+    if (!err.isEmpty()) {
+      MOBase::log::error("[SLR] Download failed: {}", err);
+      QMessageBox::warning(parentWidget(), tr("Steam Linux Runtime"),
+                           tr("Download failed:\n%1").arg(err));
+    } else {
+      MOBase::log::info("[SLR] Steam Linux Runtime installed successfully");
+      QMessageBox::information(
+          parentWidget(), tr("Steam Linux Runtime"),
+          tr("Steam Linux Runtime installed successfully."));
+    }
+  });
+
   ui->protonProgressBar->setRange(0, 100);
   ui->protonProgressBar->setValue(0);
   ui->protonProgressBar->setVisible(false);
@@ -71,40 +108,6 @@ ProtonSettingsTab::ProtonSettingsTab(Settings& s, SettingsDialog& d)
       instanceSettings.value(kUsvfsSharedContextSetting, false).toBool());
 
   populateProtons();
-
-  QObject::connect(ui->protonVersionCombo, &QComboBox::currentIndexChanged, this,
-                   [this](int index) {
-                     if (index < 0) {
-                       return;
-                     }
-
-                     auto cfg = FluorineConfig::load();
-                     if (!cfg.has_value()) {
-                       return;
-                     }
-
-                     const QString protonName =
-                         ui->protonVersionCombo->currentText().trimmed();
-                     const QString protonPath = ui->protonVersionCombo
-                                                    ->itemData(index, Qt::UserRole + 1)
-                                                    .toString()
-                                                    .trimmed();
-
-                     if (protonName.isEmpty() || protonPath.isEmpty()) {
-                       MOBase::log::warn("Proton combo change: name='{}' path='{}' — "
-                                         "skipping save (empty)", protonName, protonPath);
-                       return;
-                     }
-
-                     if (cfg->proton_name != protonName ||
-                         cfg->proton_path != protonPath) {
-                       cfg->proton_name = protonName;
-                       cfg->proton_path = protonPath;
-                       cfg->save();
-                       MOBase::log::info("Updated Proton config: {} ({})",
-                                         protonName, protonPath);
-                     }
-                   });
 
   QObject::connect(ui->createPrefixButton, &QPushButton::clicked, this,
                    &ProtonSettingsTab::onCreatePrefix);
@@ -136,11 +139,37 @@ ProtonSettingsTab::ProtonSettingsTab(Settings& s, SettingsDialog& d)
   refreshState();
 }
 
+ProtonSettingsTab::~ProtonSettingsTab()
+{
+  cancelAndWaitForSlrWorker();
+}
+
+void ProtonSettingsTab::cancelAndWaitForSlrWorker() noexcept
+{
+  m_slrCancellation.cancel();
+  if (m_slrWatcher.isRunning()) {
+    m_slrWatcher.waitForFinished();
+  }
+}
+
 void ProtonSettingsTab::update()
 {
-  QSettings().setValue("fluorine/launch_wrapper", ui->launchWrapperEdit->text());
-  QSettings().setValue("fluorine/disable_vfs_cache",
-                       ui->disableVfsCacheCheckBox->isChecked());
+  const int protonIndex = ui->protonVersionCombo->currentIndex();
+  const QString protonName =
+      protonIndex >= 0 ? ui->protonVersionCombo->currentText().trimmed() : QString{};
+  const QString protonPath =
+      protonIndex >= 0
+          ? ui->protonVersionCombo->itemData(protonIndex, Qt::UserRole + 1)
+                .toString()
+                .trimmed()
+          : QString{};
+  if (!ProtonSettingsEdit::persist(ui->launchWrapperEdit->text(),
+                                   ui->disableVfsCacheCheckBox->isChecked(),
+                                   protonName, protonPath)) {
+    dialog().reportUpdateFailure(
+        tr("the Proton and launch settings could not be saved"));
+  }
+
   QSettings instanceSettings(settings().filename(), QSettings::IniFormat);
   instanceSettings.setValue(kVfsBackendSetting,
                             ui->vfsBackendComboBox->currentData().toString());
@@ -173,16 +202,12 @@ void ProtonSettingsTab::populateProtons()
     if (idx >= 0) {
       ui->protonVersionCombo->setCurrentIndex(idx);
     } else if (ui->protonVersionCombo->count() > 0) {
-      // Saved Proton version no longer exists — select first available and
-      // update the config so the stale path doesn't cause launch failures.
+      // Saved Proton version no longer exists. Select the first available in
+      // the editor, but do not persist it unless Settings is accepted.
       MOBase::log::warn("Saved Proton '{}' not found, defaulting to '{}'",
                         cfg->proton_name,
                         ui->protonVersionCombo->itemText(0));
       ui->protonVersionCombo->setCurrentIndex(0);
-      cfg->proton_name = ui->protonVersionCombo->itemText(0).trimmed();
-      cfg->proton_path = ui->protonVersionCombo->itemData(0, Qt::UserRole + 1)
-                             .toString().trimmed();
-      cfg->save();
     }
   }
 }
@@ -377,6 +402,9 @@ void ProtonSettingsTab::onOpenPrefixFolder()
 
 void ProtonSettingsTab::onDownloadSLR()
 {
+  if (slrOperationAdmissionSuppressed() || m_slrWatcher.isRunning()) {
+    return;
+  }
   if (isSlrInstalled()) {
     QMessageBox::information(parentWidget(), tr("Steam Linux Runtime"),
         tr("Steam Linux Runtime is already installed."));
@@ -384,46 +412,25 @@ void ProtonSettingsTab::onDownloadSLR()
   }
 
   ui->downloadSLRButton->setEnabled(false);
-  auto* progress = new QProgressDialog(
+  m_slrProgress = new QProgressDialog(
       tr("Downloading Steam Linux Runtime (~200 MB)...\n"
          "Check the MO2 log for progress details."),
       tr("Cancel"), 0, 0, parentWidget());
-  progress->setWindowTitle(tr("Steam Linux Runtime"));
-  progress->setWindowModality(Qt::WindowModal);
-  progress->setAttribute(Qt::WA_ShowWithoutActivating);
-  progress->setMinimumDuration(0);
+  m_slrProgress->setWindowTitle(tr("Steam Linux Runtime"));
+  m_slrProgress->setWindowModality(Qt::WindowModal);
+  m_slrProgress->setAttribute(Qt::WA_ShowWithoutActivating);
+  m_slrProgress->setMinimumDuration(0);
 
-  auto* cancelFlag = new int(0);
-  connect(progress, &QProgressDialog::canceled, this, [cancelFlag] {
-    *cancelFlag = 1;
+  m_slrCancellation = SlrCancellationSource();
+  connect(m_slrProgress, &QProgressDialog::canceled, this, [this] {
+    m_slrCancellation.cancel();
   });
 
-  auto* watcher = new QFutureWatcher<QString>(this);
-  connect(watcher, &QFutureWatcher<QString>::finished, this,
-      [this, watcher, progress, cancelFlag] {
-        progress->close();
-        watcher->deleteLater();
-        progress->deleteLater();
-        ui->downloadSLRButton->setEnabled(true);
-
-        const QString err = watcher->result();
-        if (!err.isEmpty()) {
-          MOBase::log::error("[SLR] Download failed: {}", err);
-          QMessageBox::warning(parentWidget(), tr("Steam Linux Runtime"),
-              tr("Download failed:\n%1").arg(err));
-        } else {
-          MOBase::log::info("[SLR] Steam Linux Runtime installed successfully");
-          QMessageBox::information(parentWidget(), tr("Steam Linux Runtime"),
-              tr("Steam Linux Runtime installed successfully."));
-        }
-        delete cancelFlag;
-      });
-
-  int* cancelPtr = cancelFlag;
-  watcher->setFuture(QtConcurrent::run([cancelPtr]() -> QString {
-    return downloadSlr(nullptr, nullptr, cancelPtr);
-  }));
-  progress->show();
+  m_slrWatcher.setFuture(
+      QtConcurrent::run([token = m_slrCancellation.token()]() -> QString {
+        return downloadSlr(nullptr, nullptr, token);
+      }));
+  m_slrProgress->show();
 }
 
 void ProtonSettingsTab::onBrowsePrefixLocation()
