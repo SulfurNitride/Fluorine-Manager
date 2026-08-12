@@ -22,8 +22,9 @@ int inferSchemaFromLegacyProductVersion(
   const auto& version = *productVersion;
 
   // Fluorine was forked from MO2 after the 2.5 migration baseline. Older
-  // Fluorine releases stored their 0.x product version in General/version but
-  // still ran all inherited migrations, so they are already current.
+  // Fluorine releases stored their 0.x product version as the root "version"
+  // key (the physical [General] section) but still ran all inherited
+  // migrations, so they are already current.
   if (version.majorVersion() == 0 || version >= QVersionNumber(2, 5)) {
     return CurrentSchema;
   }

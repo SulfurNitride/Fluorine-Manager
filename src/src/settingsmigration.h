@@ -33,12 +33,15 @@ inline constexpr int SettingsLockTimeoutMs = 5000;
 // Settings migrations can span interactive startup. Never expire a live lock
 // based on age; QLockFile can still recover locks whose owning process died.
 inline constexpr int SettingsLockStaleMs = 0;
-inline const QString ProductVersionKey = QStringLiteral("General/version");
+// QSettings maps root-level keys to the physical [General] INI section. Using
+// "General/..." addresses a distinct group that it serializes as [%General].
+// MO2's established version/first-start keys are root-level keys.
+inline const QString ProductVersionKey = QStringLiteral("version");
 inline const QString SettingsSchemaKey =
-    QStringLiteral("General/settings_schema_version");
-inline const QString FirstStartKey = QStringLiteral("General/first_start");
+    QStringLiteral("settings_schema_version");
+inline const QString FirstStartKey = QStringLiteral("first_start");
 inline const QString NewInstanceProvenanceKey =
-    QStringLiteral("General/new_instance_provenance");
+    QStringLiteral("new_instance_provenance");
 inline const QString CategoryMigrationRequestTag =
     QStringLiteral("fluorine-category-migration");
 // A present schema value that cannot be parsed is not equivalent to a missing

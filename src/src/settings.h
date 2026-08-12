@@ -796,7 +796,7 @@ public:
   std::optional<QVersionNumber> version() const;
 
   // monotonic settings schema stored independently from the product version;
-  // legacy instances without the key are mapped from General/version
+  // legacy instances without the key are mapped from [General] version
   //
   int settingsSchemaVersion() const;
 

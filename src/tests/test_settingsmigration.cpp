@@ -105,7 +105,7 @@ TEST(SettingsMigration, SetupOnlyWritesAreSyncedAndVerifiedWithoutMarkers)
   ASSERT_TRUE(temporaryDirectory.isValid());
   const QString path = temporaryDirectory.filePath(QStringLiteral("instance.ini"));
   QSettings settings(path, QSettings::IniFormat);
-  settings.setValue(QStringLiteral("General/selected_profile"),
+  settings.setValue(QStringLiteral("selected_profile"),
                     QStringLiteral("CLI Profile"));
 
   EXPECT_EQ(SettingsMigration::syncAndVerifySettingsUnderLock(settings),
@@ -113,7 +113,7 @@ TEST(SettingsMigration, SetupOnlyWritesAreSyncedAndVerifiedWithoutMarkers)
 
   const auto persisted = SettingsMigration::inspectSettingsFile(path);
   ASSERT_EQ(persisted.status, QSettings::NoError);
-  EXPECT_EQ(persisted.values.value(QStringLiteral("General/selected_profile")),
+  EXPECT_EQ(persisted.values.value(QStringLiteral("selected_profile")),
             QStringLiteral("CLI Profile"));
   EXPECT_FALSE(persisted.values.contains(SettingsMigration::SettingsSchemaKey));
   EXPECT_FALSE(persisted.values.contains(SettingsMigration::ProductVersionKey));
@@ -127,8 +127,7 @@ TEST(SettingsMigration, ExistingIniAliasesShareOneTransactionLock)
       temporaryDirectory.filePath(QStringLiteral("ModOrganizer.ini"));
   {
     QSettings settings(realPath, QSettings::IniFormat);
-    settings.setValue(QStringLiteral("General/version"),
-                      QStringLiteral("0.3.3"));
+    settings.setValue(QStringLiteral("version"), QStringLiteral("0.3.3"));
     settings.sync();
     ASSERT_EQ(settings.status(), QSettings::NoError);
   }
@@ -464,11 +463,37 @@ TEST(SettingsMigration, ProductionGeneralFixturesCommitCanonicalMarkers)
     EXPECT_EQ(reopened.value(SettingsMigration::ProductVersionKey).toString(),
               QStringLiteral("0.3.3"));
     EXPECT_FALSE(
-        reopened.contains(QStringLiteral("settings_schema_version")));
-    EXPECT_FALSE(reopened.contains(QStringLiteral("version")));
+        reopened.contains(QStringLiteral("General/settings_schema_version")));
+    EXPECT_FALSE(reopened.contains(QStringLiteral("General/version")));
     EXPECT_EQ(SettingsMigration::schemaFromSettings(reopened),
               SettingsMigration::CurrentSchema);
   }
+}
+
+TEST(SettingsMigration, ReadsRealMo2GeneralSectionAndSkipsCategoryPrompt)
+{
+  QTemporaryDir temporaryDirectory;
+  ASSERT_TRUE(temporaryDirectory.isValid());
+  const QString path = temporaryDirectory.filePath(QStringLiteral("instance.ini"));
+  {
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    const QByteArray fixture("[General]\n"
+                             "first_start=false\n"
+                             "version=2.5.2\n"
+                             "\n[Settings]\n"
+                             "category_mappings=false\n");
+    ASSERT_EQ(file.write(fixture), fixture.size());
+  }
+
+  QSettings settings(path, QSettings::IniFormat);
+  EXPECT_EQ(settings.value(SettingsMigration::ProductVersionKey).toString(),
+            QStringLiteral("2.5.2"));
+  EXPECT_FALSE(settings.contains(QStringLiteral("General/version")));
+  const int schema = SettingsMigration::schemaFromSettings(settings);
+  EXPECT_EQ(schema, SettingsMigration::CurrentSchema);
+  EXPECT_FALSE(SettingsMigration::categoryMigrationPending(std::nullopt,
+                                                            schema));
 }
 
 TEST(SettingsMigration, RejectedStagingIsRestoredBeforeBackendDestruction)
@@ -823,7 +848,7 @@ TEST(SettingsMigration, CategoryImportFailureSurvivesSchemaCompletion)
     QSettings settings(path, QSettings::IniFormat);
     settings.setValue(SettingsMigration::ProductVersionKey,
                       QStringLiteral("2.4.0"));
-    settings.setValue(QStringLiteral("General/category_migration_version"), 0);
+    settings.setValue(QStringLiteral("category_migration_version"), 0);
     settings.sync();
     EXPECT_EQ(SettingsMigration::commitCompletedUpdates(
                   settings, QVersionNumber(0, 3, 3),
@@ -838,10 +863,10 @@ TEST(SettingsMigration, CategoryImportFailureSurvivesSchemaCompletion)
     EXPECT_EQ(settings.value(SettingsMigration::SettingsSchemaKey).toInt(),
               SettingsMigration::CurrentSchema);
     EXPECT_TRUE(SettingsMigration::categoryMigrationPending(
-        settings.value(QStringLiteral("General/category_migration_version")),
+        settings.value(QStringLiteral("category_migration_version")),
         SettingsMigration::CurrentSchema));
 
-    settings.setValue(QStringLiteral("General/category_migration_version"),
+    settings.setValue(QStringLiteral("category_migration_version"),
                       SettingsMigration::CurrentCategoryMigration);
     settings.sync();
   }
@@ -849,7 +874,7 @@ TEST(SettingsMigration, CategoryImportFailureSurvivesSchemaCompletion)
   {
     QSettings settings(path, QSettings::IniFormat);
     EXPECT_FALSE(SettingsMigration::categoryMigrationPending(
-        settings.value(QStringLiteral("General/category_migration_version")),
+        settings.value(QStringLiteral("category_migration_version")),
         SettingsMigration::CurrentSchema));
   }
 }
