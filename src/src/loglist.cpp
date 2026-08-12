@@ -359,7 +359,7 @@ void initLogging()
 
   log::LoggerConfiguration conf;
   conf.maxLevel = MOBase::log::Debug;
-  conf.pattern  = "%^[%Y-%m-%d %H:%M:%S.%e %L] %v%$";
+  conf.pattern  = "%^[%Y-%m-%d %H:%M:%S.%eZ %L] %v%$";
   conf.utc      = true;
 
   log::createDefault(conf);
