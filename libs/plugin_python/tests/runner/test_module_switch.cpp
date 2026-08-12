@@ -65,3 +65,56 @@ TEST(ModuleSwitch, ReplacesSameNamedPackageFromAnotherDirectory)
         delete objects[0];
     }
 }
+
+TEST(ModuleSwitch, LoadsAndRetiresLegacySiblingDataModules)
+{
+    int argc = 1;
+    char applicationName[] = "legacy-data-test";
+    char* argv[] = {applicationName, nullptr};
+    QCoreApplication application(argc, argv);
+
+    const auto pluginsFolder = QString(std::getenv("PLUGIN_DIR"));
+    const auto firstIdentifier =
+        pluginsFolder + "/legacy_instance_a/plugins/configurator.py";
+    const auto secondIdentifier =
+        pluginsFolder + "/legacy_instance_b/plugins/configurator.py";
+    const auto noDataIdentifier =
+        pluginsFolder +
+        "/legacy_instance_without_data/plugins/configurator.py";
+    const auto failedIdentifier =
+        pluginsFolder + "/legacy_failed/plugins/configurator.py";
+    const auto emptyIdentifier =
+        pluginsFolder + "/legacy_empty/plugins/configurator.py";
+
+    auto runner = mo2::python::createPythonRunner();
+    ASSERT_TRUE(runner->initialize());
+
+    auto firstObjects = runner->load(firstIdentifier);
+    ASSERT_EQ(firstObjects.size(), 1);
+    const auto* firstPlugin = qobject_cast<IPlugin*>(firstObjects[0]);
+    ASSERT_NE(firstPlugin, nullptr);
+    EXPECT_EQ(firstPlugin->name(), "First legacy data directory");
+    EXPECT_NO_THROW(runner->unload(firstIdentifier));
+    delete firstObjects[0];
+
+    auto secondObjects = runner->load(secondIdentifier);
+    ASSERT_EQ(secondObjects.size(), 1);
+    const auto* secondPlugin = qobject_cast<IPlugin*>(secondObjects[0]);
+    ASSERT_NE(secondPlugin, nullptr);
+    EXPECT_EQ(secondPlugin->name(), "Second legacy data directory");
+    EXPECT_NO_THROW(runner->unload(secondIdentifier));
+    delete secondObjects[0];
+
+    // The embedded interpreter survives instance changes. Once the final user
+    // of an instance data directory unloads, that directory must not remain in
+    // sys.path and satisfy imports for a later instance which has no such data.
+    EXPECT_ANY_THROW(runner->load(noDataIdentifier));
+
+    // A failed or empty plugin load may already have imported a helper. Retiring
+    // only its sys.path entry is insufficient because Python would reuse the
+    // helper from sys.modules for the next instance.
+    EXPECT_ANY_THROW(runner->load(failedIdentifier));
+    EXPECT_ANY_THROW(runner->load(noDataIdentifier));
+    EXPECT_TRUE(runner->load(emptyIdentifier).isEmpty());
+    EXPECT_ANY_THROW(runner->load(noDataIdentifier));
+}

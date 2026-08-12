@@ -618,6 +618,28 @@ target_link_libraries(test_stylesheetpath PRIVATE
 )
 add_test(NAME test_stylesheetpath COMMAND test_stylesheetpath)
 
+# ---------------------------------------------------------------------------
+# Per-plugin legacy resource path compatibility tests
+# ---------------------------------------------------------------------------
+add_executable(test_plugindatapath EXCLUDE_FROM_ALL
+    test_plugindatapath.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/plugindatapath.cpp
+)
+set_target_properties(test_plugindatapath PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_plugindatapath PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_plugindatapath PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_plugindatapath COMMAND test_plugindatapath)
+
 # Register a "fluorine-tests" umbrella target that builds every test exe.
 add_custom_target(fluorine-tests
     DEPENDS test_esptk_tes3 test_bsatk_extraction
@@ -634,4 +656,4 @@ add_custom_target(fluorine-tests
             test_game_save_migration
             test_vfs_catalog test_vfs_index
             test_staging_promotion test_python_module_switch
-            test_stylesheetpath)
+            test_stylesheetpath test_plugindatapath)

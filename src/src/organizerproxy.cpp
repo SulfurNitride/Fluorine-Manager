@@ -9,6 +9,7 @@
 #include "modlistproxy.h"
 #include "organizercore.h"
 #include "plugincontainer.h"
+#include "plugindatapath.h"
 #include "pluginlistproxy.h"
 #include "proxyutils.h"
 #include "settings.h"
@@ -16,6 +17,7 @@
 #include "shared/util.h"
 
 #include <QApplication>
+#include <QDir>
 #include <QObject>
 
 #include <algorithm>
@@ -53,8 +55,13 @@ void pruneCompletionRegistry(const std::shared_ptr<CompletionRegistry>& registry
 
 OrganizerProxy::OrganizerProxy(OrganizerCore* organizer,
                                PluginContainer* pluginContainer,
-                               MOBase::IPlugin* plugin)
+                               MOBase::IPlugin* plugin,
+                               const QString& pluginIdentifier,
+                               const QString& instancePluginDirectory)
     : m_Proxied(organizer), m_PluginContainer(pluginContainer), m_Plugin(plugin),
+      m_PluginDataPath(PluginDataPath::select(OrganizerCore::pluginDataPath(),
+                                              instancePluginDirectory,
+                                              pluginIdentifier)),
       m_MutationGate(std::make_shared<OrganizerProxyMutationGate>(
           organizer->pluginMutationBarrier())),
       m_DownloadManagerProxy(
@@ -325,7 +332,7 @@ void OrganizerProxy::setPersistent(const QString& pluginName, const QString& key
 QString OrganizerProxy::pluginDataPath() const
 {
   QString result;
-  runPluginCallIfAllowed([&] { result = OrganizerCore::pluginDataPath(); });
+  runPluginCallIfAllowed([&] { result = m_PluginDataPath; });
   return result;
 }
 

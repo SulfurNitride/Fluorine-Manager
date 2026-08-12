@@ -56,6 +56,17 @@ namespace mo2::python {
          */
         void ensureFolderInPath(QString folder);
 
+        /**
+         * @brief Remove every occurrence of the given folder from sys.path.
+         */
+        void removeFolderFromPath(QString folder);
+
+        /**
+         * @brief Remove imported modules whose files belong to one of the roots.
+         */
+        void removeModulesFromRoots(const QList<QDir>& moduleRoots,
+                                    const QString& identifier);
+
     private:
         // for each "identifier" (python file or python module folder), contains the
         // list of python objects - this does not keep the objects alive, it simply used
@@ -309,6 +320,16 @@ namespace mo2::python {
 
     void PythonRunner::ensureFolderInPath(QString folder)
     {
+        removeFolderFromPath(folder);
+
+        py::module_ sys  = py::module_::import("sys");
+        py::list sysPath = sys.attr("path");
+
+        sysPath.insert(0, QDir::cleanPath(folder));
+    }
+
+    void PythonRunner::removeFolderFromPath(QString folder)
+    {
         py::module_ sys  = py::module_::import("sys");
         py::list sysPath = sys.attr("path");
 
@@ -335,7 +356,107 @@ namespace mo2::python {
                 }
             }
         }
-        sysPath.insert(0, cleanFolder);
+    }
+
+    void PythonRunner::removeModulesFromRoots(const QList<QDir>& moduleRoots,
+                                              const QString& identifier)
+    {
+        if (moduleRoots.isEmpty()) {
+            return;
+        }
+
+        py::object sys   = py::module_::import("sys");
+        py::dict modules = sys.attr("modules");
+        py::list keys    = modules.attr("keys")();
+
+        auto pathBelongsToPlugin = [&moduleRoots](const QString& path) {
+            if (path.isEmpty()) {
+                return false;
+            }
+
+            for (const QDir& root : moduleRoots) {
+                const QString relative = root.relativeFilePath(path);
+                if (relative == "." ||
+                    (!relative.startsWith("..") &&
+                     !QDir::isAbsolutePath(relative))) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        auto tryCastPath = [](const py::object& object) -> std::optional<QString> {
+            if (object.is_none() || !py::isinstance<py::str>(object)) {
+                return {};
+            }
+            return object.cast<QString>();
+        };
+
+        QStringList modulesToRemove;
+        for (std::size_t i = 0; i < py::len(keys); ++i) {
+            try {
+                py::object key = keys[i];
+                if (PyDict_Contains(modules.ptr(), key.ptr()) != 1) {
+                    continue;
+                }
+
+                py::object mod = modules[key];
+                bool remove    = false;
+                QString removePath;
+
+                if (PyObject_HasAttrString(mod.ptr(), "__file__")) {
+                    const auto path = tryCastPath(mod.attr("__file__"));
+                    if (path && pathBelongsToPlugin(*path)) {
+                        remove     = true;
+                        removePath = *path;
+                    }
+                }
+
+                if (!remove && PyObject_HasAttrString(mod.ptr(), "__path__")) {
+                    py::object paths = mod.attr("__path__");
+                    for (std::size_t j = 0; j < py::len(paths); ++j) {
+                        const auto path = tryCastPath(paths[py::int_(j)]);
+                        if (path && pathBelongsToPlugin(*path)) {
+                            remove     = true;
+                            removePath = *path;
+                            break;
+                        }
+                    }
+                }
+
+                if (remove) {
+                    const QString moduleName = key.cast<QString>();
+                    log::debug("Queueing module {} from {} for unload of {}.",
+                               moduleName, removePath, identifier);
+                    modulesToRemove.append(moduleName);
+                }
+            } catch (const py::error_already_set& ex) {
+                MOBase::log::warn("failed to inspect python module during "
+                                  "unload of {}: {}",
+                                  identifier, ex.what());
+            } catch (const std::exception& ex) {
+                MOBase::log::warn("failed to inspect python module during "
+                                  "unload of {}: {}",
+                                  identifier, ex.what());
+            }
+        }
+
+        std::sort(modulesToRemove.begin(), modulesToRemove.end(),
+                  [](const QString& lhs, const QString& rhs) {
+                      return lhs.count('.') > rhs.count('.');
+                  });
+
+        for (const auto& moduleName : modulesToRemove) {
+            py::str key(moduleName.toStdString());
+            if (PyDict_Contains(modules.ptr(), key.ptr()) == 1) {
+                log::debug("Unloading module {} for {}.", moduleName, identifier);
+                if (PyDict_DelItem(modules.ptr(), key.ptr()) != 0) {
+                    PyErr_Clear();
+                    log::warn("failed to remove python module {} during unload of {}",
+                              moduleName, identifier);
+                }
+            }
+        }
     }
 
     QList<QObject*> PythonRunner::load(const QString& identifier)
@@ -348,6 +469,43 @@ namespace mo2::python {
             log::debug("Skipping Python compatibility shim '{}'.", identifier);
             return {};
         }
+
+        const QFileInfo legacyDataInfo(
+            idInfo.absoluteDir().filePath(QStringLiteral("data")));
+        bool legacyDataActivated = false;
+
+        auto retireUnclaimedLegacyData = [&] {
+            if (!legacyDataActivated) {
+                return;
+            }
+
+            const QString canonicalLegacyData =
+                legacyDataInfo.canonicalFilePath();
+            const bool claimed = std::any_of(
+                m_PythonObjects.cbegin(), m_PythonObjects.cend(),
+                [&](const auto& entry) {
+                    const QFileInfo otherLegacyData(
+                        QFileInfo(entry.first)
+                            .absoluteDir()
+                            .filePath(QStringLiteral("data")));
+                    return !canonicalLegacyData.isEmpty() &&
+                           otherLegacyData.canonicalFilePath() ==
+                               canonicalLegacyData;
+                });
+            if (claimed) {
+                return;
+            }
+
+            try {
+                removeModulesFromRoots(
+                    {QDir(legacyDataInfo.absoluteFilePath())}, identifier);
+                removeFolderFromPath(legacyDataInfo.absoluteFilePath());
+                legacyDataActivated = false;
+            } catch (const std::exception& ex) {
+                log::warn("failed to retire legacy Python path for {}: {}",
+                          identifier, ex.what());
+            }
+        };
 
         // `pluginName` can either be a python file (single-file plugin or a folder
         // (whole module).
@@ -362,6 +520,14 @@ namespace mo2::python {
         // `instantiate`, we need to make sure to remove createPlugin(s) from
         // previous call.
         try {
+            // Legacy portable MO2 plugins commonly keep generated Python helpers
+            // next to their shared resources in plugins/data. Make that directory
+            // available before evaluating either a single-file plugin or a package
+            // entry point. Keep this inside the normal Python exception boundary.
+            if (legacyDataInfo.isDir() && legacyDataInfo.isReadable()) {
+                ensureFolderInPath(legacyDataInfo.absoluteFilePath());
+                legacyDataActivated = true;
+            }
 
             // dictionary that will contain createPlugin() or createPlugins().
             py::dict moduleDict;
@@ -525,6 +691,7 @@ namespace mo2::python {
             // If we have no plugins, there was an issue, and we already logged the
             // problem:
             if (plugins.empty()) {
+                retireUnclaimedLegacyData();
                 return QList<QObject*>();
             }
 
@@ -551,11 +718,15 @@ namespace mo2::python {
                 allInterfaceList.append(interfaceList);
             }
 
+            if (allInterfaceList.isEmpty()) {
+                retireUnclaimedLegacyData();
+            }
             return allInterfaceList;
         }
         catch (const py::error_already_set& ex) {
             MOBase::log::error("Failed to import plugin from {}: {}", identifier,
                                ex.what());
+            retireUnclaimedLegacyData();
             throw pyexcept::PythonError(ex);
         }
     }
@@ -567,102 +738,42 @@ namespace mo2::python {
 
             py::gil_scoped_acquire lock;
 
+            QList<QDir> moduleRoots;
+            bool retireLegacyDataPath = false;
             if (!identifier.endsWith(".py")) {
+                moduleRoots.emplace_back(identifier);
+            }
 
-                // At this point, the identifier is the full path to the module.
-                QDir folder(identifier);
-
-                // We want to "unload" (remove from sys.modules) modules that come
-                // from this plugin (whose __path__ points under this module,
-                // including the module of the plugin itself).
-                py::object sys   = py::module_::import("sys");
-                py::dict modules = sys.attr("modules");
-                py::list keys    = modules.attr("keys")();
-
-                auto pathBelongsToPlugin = [&folder](const QString& path) {
-                    if (path.isEmpty()) {
-                        return false;
-                    }
-
-                    const QString relative = folder.relativeFilePath(path);
-                    return relative == "." || (!relative.startsWith("..") &&
-                                               !QDir::isAbsolutePath(relative));
-                };
-
-                auto tryCastPath = [](const py::object& object) -> std::optional<QString> {
-                    if (object.is_none() || !py::isinstance<py::str>(object)) {
-                        return {};
-                    }
-                    return object.cast<QString>();
-                };
-
-                QStringList modulesToRemove;
-                for (std::size_t i = 0; i < py::len(keys); ++i) {
-                    try {
-                        py::object key = keys[i];
-                        if (PyDict_Contains(modules.ptr(), key.ptr()) != 1) {
-                            continue;
+            const QFileInfo legacyDataInfo(
+                QFileInfo(identifier).absoluteDir().filePath(
+                    QStringLiteral("data")));
+            if (legacyDataInfo.isDir()) {
+                const QString canonicalLegacyData =
+                    legacyDataInfo.canonicalFilePath();
+                const bool sharedByAnotherPlugin = std::any_of(
+                    m_PythonObjects.cbegin(), m_PythonObjects.cend(),
+                    [&](const auto& entry) {
+                        if (entry.first == identifier) {
+                            return false;
                         }
-
-                        py::object mod = modules[key];
-                        bool remove    = false;
-                        QString removePath;
-
-                        if (PyObject_HasAttrString(mod.ptr(), "__file__")) {
-                            const auto path = tryCastPath(mod.attr("__file__"));
-                            if (path && pathBelongsToPlugin(*path)) {
-                                remove     = true;
-                                removePath = *path;
-                            }
-                        }
-
-                        if (!remove && PyObject_HasAttrString(mod.ptr(), "__path__")) {
-                            py::object paths = mod.attr("__path__");
-                            for (std::size_t j = 0; j < py::len(paths); ++j) {
-                                const auto path = tryCastPath(paths[py::int_(j)]);
-                                if (path && pathBelongsToPlugin(*path)) {
-                                    remove     = true;
-                                    removePath = *path;
-                                    break;
-                                }
-                            }
-                        }
-
-                        if (remove) {
-                            const QString moduleName = key.cast<QString>();
-                            log::debug("Queueing module {} from {} for unload of {}.",
-                                       moduleName, removePath, identifier);
-                            modulesToRemove.append(moduleName);
-                        }
-                    } catch (const py::error_already_set& ex) {
-                        MOBase::log::warn("failed to inspect python module during "
-                                          "unload of {}: {}",
-                                          identifier, ex.what());
-                    } catch (const std::exception& ex) {
-                        MOBase::log::warn("failed to inspect python module during "
-                                          "unload of {}: {}",
-                                          identifier, ex.what());
-                    }
+                        const QFileInfo otherLegacyData(
+                            QFileInfo(entry.first)
+                                .absoluteDir()
+                                .filePath(QStringLiteral("data")));
+                        return !canonicalLegacyData.isEmpty() &&
+                               otherLegacyData.canonicalFilePath() ==
+                                   canonicalLegacyData;
+                    });
+                if (!sharedByAnotherPlugin) {
+                    moduleRoots.emplace_back(legacyDataInfo.absoluteFilePath());
+                    retireLegacyDataPath = true;
                 }
+            }
 
-                std::sort(modulesToRemove.begin(), modulesToRemove.end(),
-                          [](const QString& lhs, const QString& rhs) {
-                              return lhs.count('.') > rhs.count('.');
-                          });
+            removeModulesFromRoots(moduleRoots, identifier);
 
-                for (const auto& moduleName : modulesToRemove) {
-                    py::str key(moduleName.toStdString());
-                    if (PyDict_Contains(modules.ptr(), key.ptr()) == 1) {
-                        log::debug("Unloading module {} for {}.", moduleName,
-                                   identifier);
-                        if (PyDict_DelItem(modules.ptr(), key.ptr()) != 0) {
-                            PyErr_Clear();
-                            log::warn("failed to remove python module {} during "
-                                      "unload of {}",
-                                      moduleName, identifier);
-                        }
-                    }
-                }
+            if (retireLegacyDataPath) {
+                removeFolderFromPath(legacyDataInfo.absoluteFilePath());
             }
 
             // Boost.Python does not handle cyclic garbace collection, so we need to

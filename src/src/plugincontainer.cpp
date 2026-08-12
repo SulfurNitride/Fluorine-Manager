@@ -778,7 +778,16 @@ IPlugin* PluginContainer::registerPlugin(
     registration.stage(
         [&] {
           if (m_Organizer) {
-            organizerProxy = new OrganizerProxy(m_Organizer, this, pluginObj);
+            QString instancePluginDirectory;
+            const QString canonicalInstance = QDir(m_PluginPath).canonicalPath();
+            const QString canonicalBundled =
+                QDir(m_BundledPluginPath).canonicalPath();
+            if (!canonicalInstance.isEmpty() && !canonicalBundled.isEmpty() &&
+                canonicalInstance != canonicalBundled) {
+              instancePluginDirectory = m_PluginPath;
+            }
+            organizerProxy = new OrganizerProxy(
+                m_Organizer, this, pluginObj, filepath, instancePluginDirectory);
             organizerProxy->setParent(plugin);
           }
           const auto [requirement, inserted] = m_Requirements.emplace(

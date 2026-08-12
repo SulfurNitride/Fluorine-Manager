@@ -43,7 +43,8 @@ class OrganizerProxy : public MOBase::IOrganizer,
 
 public:
   OrganizerProxy(OrganizerCore* organizer, PluginContainer* pluginContainer,
-                 MOBase::IPlugin* plugin);
+                 MOBase::IPlugin* plugin, const QString& pluginIdentifier,
+                 const QString& instancePluginDirectory);
   ~OrganizerProxy() override;
 
 public:
@@ -197,6 +198,7 @@ private:
   PluginContainer* m_PluginContainer;
 
   MOBase::IPlugin* m_Plugin;
+  QString m_PluginDataPath;
 
   std::shared_ptr<OrganizerProxyMutationGate> m_MutationGate;
 
