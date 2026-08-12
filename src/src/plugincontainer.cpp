@@ -3,16 +3,22 @@
 #include "organizercore.h"
 #include "organizerproxy.h"
 #include "plugincompatibility.h"
+#include "pluginregistrationpolicy.h"
+#include "pluginregistrationtransaction.h"
 #include "report.h"
 #include "shared/appconfig.h"
 #include <QAction>
 #include <QCoreApplication>
 #include <QDirIterator>
+#include <QHash>
 #include <QMessageBox>
 #include <QSet>
 #include <QToolButton>
 #include <QSettings>
+#include <algorithm>
 #include <cstdio>
+#include <iterator>
+#include <stdexcept>
 #include <utility>
 #include <boost/fusion/algorithm/iteration/for_each.hpp>
 #include <boost/fusion/include/at_key.hpp>
@@ -498,8 +504,7 @@ QObject* PluginContainer::as_qobject(MOBase::IPlugin* plugin) const
   return *it;
 }
 
-bool PluginContainer::initPlugin(IPlugin* plugin, IPluginProxy* pluginProxy,
-                                 bool skipInit)
+bool PluginContainer::initPlugin(IPlugin* plugin, bool skipInit)
 {
   // when MO has no instance loaded, init() is not called on plugins, except
   // for proxy plugins, where init() is called with a null IOrganizer
@@ -512,17 +517,8 @@ bool PluginContainer::initPlugin(IPlugin* plugin, IPluginProxy* pluginProxy,
     return false;
   }
 
-  OrganizerProxy* proxy = nullptr;
-  if (m_Organizer) {
-    proxy = new OrganizerProxy(m_Organizer, this, plugin);
-    proxy->setParent(as_qobject(plugin));
-  }
-
   // Check if it is a proxy plugin:
   bool isProxy = dynamic_cast<IPluginProxy*>(plugin);
-
-  auto [it, bl] = m_Requirements.emplace(
-      plugin, PluginRequirements(this, plugin, proxy, pluginProxy));
 
   if (!m_Organizer && !isProxy) {
     return true;
@@ -532,6 +528,12 @@ bool PluginContainer::initPlugin(IPlugin* plugin, IPluginProxy* pluginProxy,
     return true;
   }
 
+  auto it = m_Requirements.find(plugin);
+  if (it == m_Requirements.end()) {
+    return false;
+  }
+
+  OrganizerProxy* proxy = it->second.m_Organizer;
   bool initialized = false;
   if (proxy) {
     const bool admitted = proxy->runPluginCallIfAllowed([&] {
@@ -547,19 +549,7 @@ bool PluginContainer::initPlugin(IPlugin* plugin, IPluginProxy* pluginProxy,
       it->second.fetchRequirements();
     }
   }
-  if (!initialized) {
-    QString pluginName;
-    try {
-      pluginName = plugin->name();
-    } catch (...) {
-    }
-    log::warn("plugin failed to initialize: {}",
-              pluginName.isEmpty() ? std::string("<unnamed>")
-                                   : pluginName.toStdString());
-    return false;
-  }
-
-  return true;
+  return initialized;
 }
 
 void PluginContainer::registerGame(IPluginGame* game)
@@ -625,11 +615,11 @@ void PluginContainer::reportCompatibilityBlock(
   }
 }
 
-IPlugin* PluginContainer::registerPlugin(QObject* plugin, const QString& filepath,
-                                         MOBase::IPluginProxy* pluginProxy,
-                                         bool compatibilityPreflighted)
+IPlugin* PluginContainer::registerPlugin(
+    QObject* plugin, const QString& filepath,
+    MOBase::IPluginProxy* pluginProxy,
+    std::optional<QString> compatibilityName)
 {
-
   // generic treatment for all plugins
   IPlugin* pluginObj = qobject_cast<IPlugin*>(plugin);
   if (pluginObj == nullptr) {
@@ -643,157 +633,350 @@ IPlugin* PluginContainer::registerPlugin(QObject* plugin, const QString& filepat
   // rule is active, the plugin's declared master before publishing this object
   // anywhere in the container. Master metadata that is unavailable before
   // init() remains fail-open and is covered by the later runtime check.
-  if (!compatibilityPreflighted) {
+  QString pluginName;
+  if (compatibilityName) {
+    pluginName = *compatibilityName;
+  } else {
     const auto decision = preInitCompatibility(pluginObj, filepath);
     if (!decision.nameAvailable) {
       return nullptr;
     }
+    pluginName = decision.pluginName;
     if (decision.block) {
-      reportCompatibilityBlock(plugin, decision.pluginName, *decision.block);
+      reportCompatibilityBlock(plugin, pluginName, *decision.block);
       return nullptr;
     }
   }
 
-  // If we already a plugin with this name:
-  bool skipInit  = false;
-  auto& mapNames = bf::at_key<QString>(m_AccessPlugins);
-  if (mapNames.contains(pluginObj->name())) {
+  const QStringList interfaces = implementedInterfaces(plugin);
 
-    IPlugin* other = mapNames[pluginObj->name()];
+  enum class PrimaryInterface
+  {
+    ModPage,
+    Game,
+    Tool,
+    Installer,
+    Preview,
+    Proxy,
+    Base,
+  };
+  PrimaryInterface primary = PrimaryInterface::Base;
+  if (qobject_cast<IPluginModPage*>(plugin)) {
+    primary = PrimaryInterface::ModPage;
+  } else if (qobject_cast<IPluginGame*>(plugin)) {
+    primary = PrimaryInterface::Game;
+  } else if (qobject_cast<IPluginTool*>(plugin)) {
+    primary = PrimaryInterface::Tool;
+  } else if (qobject_cast<IPluginInstaller*>(plugin)) {
+    primary = PrimaryInterface::Installer;
+  } else if (qobject_cast<IPluginPreview*>(plugin)) {
+    primary = PrimaryInterface::Preview;
+  } else if (qobject_cast<IPluginProxy*>(plugin)) {
+    primary = PrimaryInterface::Proxy;
+  }
+
+  // If we already have a plugin with this name, another wrapper from the same
+  // proxy identifier represents the same logical Python object. It shares the
+  // first wrapper's initialization result; unrelated duplicates are rejected.
+  bool skipInit = false;
+  auto& mapNames = bf::at_key<QString>(m_AccessPlugins);
+  const auto previousNameEntry = mapNames.find(pluginName);
+  const bool hadPreviousName   = previousNameEntry != mapNames.end();
+  IPlugin* previousPlugin = hadPreviousName ? previousNameEntry->second : nullptr;
+  if (hadPreviousName) {
 
     // If both plugins are from the same proxy and the same file, this is usually
     // ok (in theory some one could write two different classes from the same Python
     // file/module):
-    if (pluginProxy && m_Requirements.at(other).proxy() == pluginProxy &&
-        this->filepath(other) == QDir::cleanPath(filepath)) {
+    if (pluginProxy && m_Requirements.at(previousPlugin).proxy() == pluginProxy &&
+        this->filepath(previousPlugin) == QDir::cleanPath(filepath)) {
 
       // Plugin has already been initialized:
       skipInit = true;
-
-      if (isBetterInterface(plugin, as_qobject(other))) {
-        log::debug(
-            "replacing plugin '{}' with interfaces [{}] by one with interfaces [{}]",
-            pluginObj->name(), implementedInterfaces(other).join(", "),
-            implementedInterfaces(plugin).join(", "));
-        bf::at_key<QString>(m_AccessPlugins)[pluginObj->name()] = pluginObj;
-      }
     } else {
       log::warn("Trying to register two plugins with the name '{}' (from {} and {}), "
                 "the second one will not be registered.",
-                pluginObj->name(), this->filepath(other), QDir::cleanPath(filepath));
+                pluginName, this->filepath(previousPlugin),
+                QDir::cleanPath(filepath));
       return nullptr;
     }
-  } else {
-    bf::at_key<QString>(m_AccessPlugins)[pluginObj->name()] = pluginObj;
   }
 
-  // Storing the original QObject* is a bit of a hack as I couldn't figure out any
-  // way to cast directly between IPlugin* and IPluginDiagnose*
-  bf::at_key<QObject>(m_Plugins).push_back(plugin);
+  // Existing plugins are allowed to read their registered settings and query
+  // their own container identity from init(). Stage only those prerequisites,
+  // then roll every host-owned mutation back unless initialization succeeds.
+  auto& objects = bf::at_key<QObject>(m_Plugins);
+  QObject* previousParent = plugin->parent();
+  const QVariant previousFilepath = plugin->property("filepath");
+  OrganizerProxy* organizerProxy = nullptr;
+  bool requirementsInserted = false;
 
-  plugin->setProperty("filepath", QDir::cleanPath(filepath));
-  plugin->setParent(this);
-
-  if (m_Organizer) {
-    m_Organizer->settings().plugins().registerPlugin(pluginObj);
-  }
-
-  {  // diagnosis plugin
-    IPluginDiagnose* diagnose = qobject_cast<IPluginDiagnose*>(plugin);
-    if (diagnose != nullptr) {
-      bf::at_key<IPluginDiagnose>(m_Plugins).push_back(diagnose);
-      bf::at_key<IPluginDiagnose>(m_AccessPlugins)[diagnose] = pluginObj;
-      diagnose->onInvalidated([&]() {
-        emit diagnosisUpdate();
-      });
+  const auto erasePlugin = [](auto& plugins, auto* value) noexcept {
+    const auto found = std::find(plugins.rbegin(), plugins.rend(), value);
+    if (found != plugins.rend()) {
+      plugins.erase(std::prev(found.base()));
     }
-  }
-  {  // file mapper plugin
-    IPluginFileMapper* mapper = qobject_cast<IPluginFileMapper*>(plugin);
-    if (mapper != nullptr) {
-      bf::at_key<IPluginFileMapper>(m_Plugins).push_back(mapper);
-      bf::at_key<IPluginFileMapper>(m_AccessPlugins)[mapper] = pluginObj;
-    }
-  }
-  {  // mod page plugin
-    IPluginModPage* modPage = qobject_cast<IPluginModPage*>(plugin);
-    if (initPlugin(modPage, pluginProxy, skipInit)) {
-      bf::at_key<IPluginModPage>(m_Plugins).push_back(modPage);
-      emit pluginRegistered(modPage);
-      return modPage;
-    }
-  }
-  {  // game plugin
-    IPluginGame* game = qobject_cast<IPluginGame*>(plugin);
-    if (game) {
-      game->detectGame();
-      if (initPlugin(game, pluginProxy, skipInit)) {
-        bf::at_key<IPluginGame>(m_Plugins).push_back(game);
-        registerGame(game);
-        emit pluginRegistered(game);
-        return game;
+  };
+  PluginRegistration::Transaction registration;
+
+  try {
+    if (!hadPreviousName ||
+        isBetterInterface(plugin, as_qobject(previousPlugin))) {
+      if (hadPreviousName) {
+        log::debug(
+            "replacing plugin '{}' with interfaces [{}] by one with interfaces [{}]",
+            pluginName, implementedInterfaces(previousPlugin).join(", "),
+            interfaces.join(", "));
       }
+      registration.stage(
+          [&] { mapNames[pluginName] = pluginObj; },
+          [&] {
+            if (hadPreviousName) {
+              mapNames[pluginName] = previousPlugin;
+            } else {
+              mapNames.erase(pluginName);
+            }
+          });
     }
-  }
-  {  // tool plugins
-    IPluginTool* tool = qobject_cast<IPluginTool*>(plugin);
-    if (initPlugin(tool, pluginProxy, skipInit)) {
-      bf::at_key<IPluginTool>(m_Plugins).push_back(tool);
-      emit pluginRegistered(tool);
-      return tool;
-    }
-  }
-  {  // installer plugins
-    IPluginInstaller* installer = qobject_cast<IPluginInstaller*>(plugin);
-    if (initPlugin(installer, pluginProxy, skipInit)) {
-      bf::at_key<IPluginInstaller>(m_Plugins).push_back(installer);
-      if (m_Organizer) {
-        installer->setInstallationManager(m_Organizer->installationManager());
-      }
-      emit pluginRegistered(installer);
-      return installer;
-    }
-  }
-  {  // preview plugins
-    IPluginPreview* preview = qobject_cast<IPluginPreview*>(plugin);
-    if (initPlugin(preview, pluginProxy, skipInit)) {
-      bf::at_key<IPluginPreview>(m_Plugins).push_back(preview);
-      return preview;
-    }
-  }
-  {  // proxy plugins
-    IPluginProxy* proxy = qobject_cast<IPluginProxy*>(plugin);
-    if (initPlugin(proxy, pluginProxy, skipInit)) {
-      bf::at_key<IPluginProxy>(m_Plugins).push_back(proxy);
-      emit pluginRegistered(proxy);
 
-      QStringList filepaths = mergedProxyList(proxy);
+    // Storing the original QObject* is a bit of a hack as I couldn't figure out
+    // any way to cast directly between IPlugin* and IPluginDiagnose*.
+    registration.stage(
+        [&] {
+          objects.push_back(plugin);
+          plugin->setProperty("filepath", QDir::cleanPath(filepath));
+          plugin->setParent(this);
+        },
+        [&] {
+          erasePlugin(objects, plugin);
+          plugin->setProperty("filepath", previousFilepath);
+          plugin->setParent(previousParent);
+        });
+
+    // Same-name proxy wrappers represent one logical plugin and reuse the
+    // settings staged by the first successfully initialized wrapper.
+    if (m_Organizer) {
+      registration.stage(
+          [&] {
+            if (skipInit) {
+              m_Organizer->settings().plugins().registerPluginInterface(pluginObj);
+            } else {
+              m_Organizer->settings().plugins().stagePluginRegistration(
+                  pluginObj, pluginName);
+            }
+          },
+          [&] {
+            if (skipInit) {
+              m_Organizer->settings().plugins().unregisterPluginInterface(pluginObj);
+            } else {
+              m_Organizer->settings().plugins().unregisterPlugin(pluginObj,
+                                                                 pluginName);
+            }
+          });
+    }
+
+    registration.stage(
+        [&] {
+          if (m_Organizer) {
+            organizerProxy = new OrganizerProxy(m_Organizer, this, pluginObj);
+            organizerProxy->setParent(plugin);
+          }
+          const auto [requirement, inserted] = m_Requirements.emplace(
+              pluginObj,
+              PluginRequirements(this, pluginObj, organizerProxy, pluginProxy));
+          requirementsInserted = inserted;
+          if (!inserted) {
+            throw std::runtime_error("duplicate plugin requirements entry");
+          }
+        },
+        [&] {
+          if (requirementsInserted) {
+            m_Requirements.erase(pluginObj);
+          }
+          delete organizerProxy;
+          organizerProxy = nullptr;
+        });
+
+    if (primary == PrimaryInterface::Game) {
+      qobject_cast<IPluginGame*>(plugin)->detectGame();
+    }
+
+    if (!registration.initializeOnce(
+            [&] { return initPlugin(pluginObj, skipInit); })) {
+      log::warn("plugin '{}' from '{}' failed its single initialization attempt; "
+                "interfaces [{}]",
+                pluginName, QDir::toNativeSeparators(filepath),
+                interfaces.join(", "));
+      return nullptr;
+    }
+
+    // Initialization succeeded exactly once. Publish auxiliary and primary
+    // interfaces while rollback remains armed; external signals follow commit.
+    if (auto* diagnose = qobject_cast<IPluginDiagnose*>(plugin)) {
+      registration.stage(
+          [&, diagnose] {
+            bf::at_key<IPluginDiagnose>(m_Plugins).push_back(diagnose);
+            bf::at_key<IPluginDiagnose>(m_AccessPlugins)[diagnose] = pluginObj;
+            diagnose->onInvalidated([this]() { emit diagnosisUpdate(); });
+          },
+          [&, diagnose] {
+            bf::at_key<IPluginDiagnose>(m_AccessPlugins).erase(diagnose);
+            erasePlugin(bf::at_key<IPluginDiagnose>(m_Plugins), diagnose);
+            // Host state must already be clean if untrusted callback teardown
+            // throws. Transaction will contain the exception and continue with
+            // the remaining rollback stages.
+            diagnose->onInvalidated({});
+          });
+    }
+    if (auto* mapper = qobject_cast<IPluginFileMapper*>(plugin)) {
+      registration.stage(
+          [&, mapper] {
+            bf::at_key<IPluginFileMapper>(m_Plugins).push_back(mapper);
+            bf::at_key<IPluginFileMapper>(m_AccessPlugins)[mapper] = pluginObj;
+          },
+          [&, mapper] {
+            bf::at_key<IPluginFileMapper>(m_AccessPlugins).erase(mapper);
+            erasePlugin(bf::at_key<IPluginFileMapper>(m_Plugins), mapper);
+          });
+    }
+
+    registration.stage(
+        [&] {
+          switch (primary) {
+          case PrimaryInterface::ModPage:
+            bf::at_key<IPluginModPage>(m_Plugins).push_back(
+                qobject_cast<IPluginModPage*>(plugin));
+            break;
+          case PrimaryInterface::Game: {
+            auto* game = qobject_cast<IPluginGame*>(plugin);
+            bf::at_key<IPluginGame>(m_Plugins).push_back(game);
+            registerGame(game);
+            break;
+          }
+          case PrimaryInterface::Tool:
+            bf::at_key<IPluginTool>(m_Plugins).push_back(
+                qobject_cast<IPluginTool*>(plugin));
+            break;
+          case PrimaryInterface::Installer: {
+            auto* installer = qobject_cast<IPluginInstaller*>(plugin);
+            bf::at_key<IPluginInstaller>(m_Plugins).push_back(installer);
+            if (m_Organizer) {
+              installer->setInstallationManager(
+                  m_Organizer->installationManager());
+            }
+            break;
+          }
+          case PrimaryInterface::Preview:
+            bf::at_key<IPluginPreview>(m_Plugins).push_back(
+                qobject_cast<IPluginPreview*>(plugin));
+            break;
+          case PrimaryInterface::Proxy:
+            bf::at_key<IPluginProxy>(m_Plugins).push_back(
+                qobject_cast<IPluginProxy*>(plugin));
+            break;
+          case PrimaryInterface::Base:
+            bf::at_key<IPlugin>(m_Plugins).push_back(pluginObj);
+            break;
+          }
+        },
+        [&] {
+          switch (primary) {
+          case PrimaryInterface::ModPage:
+            erasePlugin(bf::at_key<IPluginModPage>(m_Plugins),
+                        qobject_cast<IPluginModPage*>(plugin));
+            break;
+          case PrimaryInterface::Game:
+            for (auto game = m_SupportedGames.begin();
+                 game != m_SupportedGames.end();) {
+              if (game->second == qobject_cast<IPluginGame*>(plugin)) {
+                game = m_SupportedGames.erase(game);
+              } else {
+                ++game;
+              }
+            }
+            erasePlugin(bf::at_key<IPluginGame>(m_Plugins),
+                        qobject_cast<IPluginGame*>(plugin));
+            break;
+          case PrimaryInterface::Tool:
+            erasePlugin(bf::at_key<IPluginTool>(m_Plugins),
+                        qobject_cast<IPluginTool*>(plugin));
+            break;
+          case PrimaryInterface::Installer:
+            erasePlugin(bf::at_key<IPluginInstaller>(m_Plugins),
+                        qobject_cast<IPluginInstaller*>(plugin));
+            break;
+          case PrimaryInterface::Preview:
+            erasePlugin(bf::at_key<IPluginPreview>(m_Plugins),
+                        qobject_cast<IPluginPreview*>(plugin));
+            break;
+          case PrimaryInterface::Proxy:
+            erasePlugin(bf::at_key<IPluginProxy>(m_Plugins),
+                        qobject_cast<IPluginProxy*>(plugin));
+            break;
+          case PrimaryInterface::Base:
+            erasePlugin(bf::at_key<IPlugin>(m_Plugins), pluginObj);
+            break;
+          }
+        });
+  } catch (const std::exception& e) {
+    log::warn("plugin '{}' from '{}' threw during initialization; interfaces [{}]: {}",
+              pluginName, QDir::toNativeSeparators(filepath),
+              interfaces.join(", "), e.what());
+    return nullptr;
+  } catch (...) {
+    log::warn("plugin '{}' from '{}' threw during initialization; interfaces [{}]: "
+              "unknown exception",
+              pluginName, QDir::toNativeSeparators(filepath),
+              interfaces.join(", "));
+    return nullptr;
+  }
+
+  registration.commit();
+
+  // Durable legacy-settings migration is post-commit housekeeping. A plugin
+  // that rejects initialization must not change persistent settings.
+  if (m_Organizer && !skipInit) {
+    try {
+      m_Organizer->settings().plugins().commitPluginRegistration(pluginName);
+    } catch (const std::exception& e) {
+      log::warn("failed to migrate legacy settings for plugin '{}': {}",
+                pluginName, e.what());
+    } catch (...) {
+      log::warn("failed to migrate legacy settings for plugin '{}': "
+                "unknown exception",
+                pluginName);
+    }
+  }
+
+  IPlugin* registered = pluginObj;
+  if (primary != PrimaryInterface::Preview) {
+    emit pluginRegistered(pluginObj);
+  }
+  if (primary == PrimaryInterface::Proxy) {
+    auto* proxy = qobject_cast<IPluginProxy*>(plugin);
+    try {
+      const QStringList filepaths = mergedProxyList(proxy);
       log::debug("proxy '{}' discovered {} proxied plugin candidate(s)",
-                proxy->name(), filepaths.size());
+                 pluginName, filepaths.size());
       printPluginDiagToStderr(
           QString("proxy '%1' discovered %2 proxied plugin candidate(s)")
-              .arg(proxy->name())
+              .arg(pluginName)
               .arg(filepaths.size()));
-      for (const QString& filepath : filepaths) {
-        log::debug("proxy '{}' candidate: '{}'", proxy->name(),
-                   QDir::toNativeSeparators(filepath));
-        loadProxied(filepath, proxy);
+      for (const QString& proxiedFilepath : filepaths) {
+        log::debug("proxy '{}' candidate: '{}'", pluginName,
+                   QDir::toNativeSeparators(proxiedFilepath));
+        loadProxied(proxiedFilepath, proxy);
       }
-      return proxy;
+    } catch (const std::exception& e) {
+      log::error("proxy '{}' failed while discovering candidates: {}",
+                 pluginName, e.what());
+    } catch (...) {
+      log::error("proxy '{}' failed while discovering candidates: "
+                 "unknown exception",
+                 pluginName);
     }
   }
-
-  {  // dummy plugins
-    // only initialize these, no processing otherwise
-    IPlugin* dummy = qobject_cast<IPlugin*>(plugin);
-    if (initPlugin(dummy, pluginProxy, skipInit)) {
-      bf::at_key<IPlugin>(m_Plugins).push_back(dummy);
-      emit pluginRegistered(dummy);
-      return dummy;
-    }
-  }
-
-  return nullptr;
+  return registered;
 }
 
 IPluginGame* PluginContainer::managedGame() const
@@ -1017,26 +1200,29 @@ std::vector<QObject*> PluginContainer::loadProxied(const QString& filepath,
                                                    IPluginProxy* proxy)
 {
   std::vector<QObject*> proxiedPlugins;
+  QString proxyName = QStringLiteral("<null>");
 
   try {
+    if (proxy) {
+      proxyName = proxy->name();
+    }
     log::debug("loading proxied plugin candidate '{}' via proxy '{}'",
-              QDir::toNativeSeparators(filepath),
-              (proxy ? proxy->name() : QStringLiteral("<null>")));
+              QDir::toNativeSeparators(filepath), proxyName);
     printPluginDiagToStderr(
         QString("loading proxied plugin candidate '%1' via proxy '%2'")
             .arg(QDir::toNativeSeparators(filepath))
-            .arg(proxy ? proxy->name() : QStringLiteral("<null>")));
+            .arg(proxyName));
 
     // We get a list of matching plugins as proxies can return multiple plugins
     // per file and do not  have a good way of supporting multiple inheritance.
     QList<QObject*> matchingPlugins = proxy->load(filepath);
     if (matchingPlugins.isEmpty()) {
       log::debug("no plugins were returned for proxied candidate '{}' via proxy '{}'",
-                QDir::toNativeSeparators(filepath), proxy->name());
+                QDir::toNativeSeparators(filepath), proxyName);
       printPluginDiagToStderr(
           QString("no plugins were returned for proxied candidate '%1' via proxy '%2'")
               .arg(QDir::toNativeSeparators(filepath))
-              .arg(proxy->name()));
+              .arg(proxyName));
     }
 
     // IPluginProxy owns one identifier as a unit. Preflight the complete batch
@@ -1049,7 +1235,7 @@ std::vector<QObject*> PluginContainer::loadProxied(const QString& filepath,
       }
     }
 
-    QSet<QObject*> compatibilityPreflightedObjects;
+    QHash<QObject*, QString> compatibilityNames;
     for (QObject* candidate : matchingPlugins) {
       if (candidate == nullptr) {
         continue;
@@ -1057,7 +1243,7 @@ std::vector<QObject*> PluginContainer::loadProxied(const QString& filepath,
       if (auto* plugin = qobject_cast<IPlugin*>(candidate)) {
         const auto decision = preInitCompatibility(plugin, filepath);
         if (decision.nameAvailable) {
-          compatibilityPreflightedObjects.insert(candidate);
+          compatibilityNames.insert(candidate, decision.pluginName);
         }
         if (decision.block) {
           reportCompatibilityBlock(candidate, decision.pluginName,
@@ -1075,40 +1261,91 @@ std::vector<QObject*> PluginContainer::loadProxied(const QString& filepath,
 
     // We are going to group plugin by names and "fix" them later:
     std::map<QString, std::vector<IPlugin*>> proxiedByNames;
+    QSet<QObject*> acceptedObjects;
+    PluginRegistration::ProxiedBatchLedger registrationLedger;
 
     for (QObject* proxiedPlugin : matchingPlugins) {
       if (proxiedPlugin == nullptr) {
-        log::warn("proxy '{}' returned a null QObject for '{}'", proxy->name(),
+        log::warn("proxy '{}' returned a null QObject for '{}'", proxyName,
                   QDir::toNativeSeparators(filepath));
         printPluginDiagToStderr(
             QString("proxy '%1' returned a null QObject for '%2'")
-                .arg(proxy->name())
+                .arg(proxyName)
                 .arg(QDir::toNativeSeparators(filepath)));
+        continue;
+      }
+
+      const auto compatibilityName = compatibilityNames.constFind(proxiedPlugin);
+      if (compatibilityName == compatibilityNames.cend()) {
+        log::warn("proxy '{}' returned a candidate without stable pre-init identity "
+                  "for '{}'; rejecting it",
+                  proxyName, QDir::toNativeSeparators(filepath));
+        continue;
+      }
+      const std::optional<QString> preflightedName(*compatibilityName);
+      const auto batchDecision =
+          registrationLedger.begin(proxiedPlugin, preflightedName);
+      if (batchDecision == PluginRegistration::BatchDecision::DuplicateObject) {
+        log::debug("proxy '{}' returned duplicate QObject for '{}'", proxyName,
+                   QDir::toNativeSeparators(filepath));
+        continue;
+      }
+      if (batchDecision ==
+          PluginRegistration::BatchDecision::FailedLogicalPlugin) {
+        log::debug(
+            "skipping additional interface for failed proxied plugin '{}' from '{}'",
+            *preflightedName, QDir::toNativeSeparators(filepath));
         continue;
       }
 
       if (IPlugin* proxied =
               registerPlugin(proxiedPlugin, filepath, proxy,
-                             compatibilityPreflightedObjects.contains(
-                                 proxiedPlugin));
+                             preflightedName);
           proxied) {
-        log::debug("loaded plugin '{}@{}' from '{}' - [{}]", proxied->name(),
-                   proxied->version().canonicalString(),
-                   QFileInfo(filepath).fileName(),
-                   implementedInterfaces(proxied).join(", "));
-
-        // Store the plugin for later:
+        // Record ownership before optional metadata/logging calls so a throw
+        // cannot leave a committed registration outside batch bookkeeping.
         proxiedPlugins.push_back(proxiedPlugin);
-        proxiedByNames[proxied->name()].push_back(proxied);
+        acceptedObjects.insert(proxiedPlugin);
+        proxiedByNames[*preflightedName].push_back(proxied);
+        try {
+          log::debug("loaded plugin '{}@{}' from '{}' - [{}]",
+                     *preflightedName,
+                     proxied->version().canonicalString(),
+                     QFileInfo(filepath).fileName(),
+                     implementedInterfaces(proxied).join(", "));
+        } catch (...) {
+          log::debug("loaded plugin '{}' from '{}' (metadata unavailable)",
+                     *preflightedName, QFileInfo(filepath).fileName());
+        }
       } else {
+        registrationLedger.reject(preflightedName);
         log::warn(
             "proxied candidate '{}' from proxy '{}' failed to register as an MO2 plugin",
-            QDir::toNativeSeparators(filepath), proxy->name());
+            QDir::toNativeSeparators(filepath), proxyName);
         printPluginDiagToStderr(
             QString("proxied candidate '%1' from proxy '%2' failed to register as an "
                     "MO2 plugin")
                 .arg(QDir::toNativeSeparators(filepath))
-                .arg(proxy->name()));
+                .arg(proxyName));
+      }
+    }
+
+    // No object from this proxy identifier was admitted, so no requirements
+    // entry can lead unloadPlugins() back to it. Retire the identifier now,
+    // preserving the F-04 unload-before-holder-destruction ordering.
+    if (proxiedPlugins.empty()) {
+      PluginCompatibility::retireRejectedProxiedBatch(
+          uniqueMatchingPlugins, [&] { proxy->unload(filepath); });
+      return {};
+    }
+
+    // A mixed identifier remains loaded for its admitted logical plugins.
+    // Retain unpublished wrappers until that same identifier is successfully
+    // unloaded, then destroy them after the proxy has dropped borrowed handles.
+    for (QObject* candidate : uniqueMatchingPlugins) {
+      if (!acceptedObjects.contains(candidate)) {
+        m_RejectedProxiedObjects.push_back(
+            {proxy, QDir::cleanPath(filepath), candidate});
       }
     }
 
@@ -1130,34 +1367,32 @@ std::vector<QObject*> PluginContainer::loadProxied(const QString& filepath,
     }
 
     log::debug("finished proxied candidate '{}' via proxy '{}': {} plugin(s) loaded",
-              QDir::toNativeSeparators(filepath), proxy->name(),
+              QDir::toNativeSeparators(filepath), proxyName,
               proxiedPlugins.size());
     printPluginDiagToStderr(
         QString("finished proxied candidate '%1' via proxy '%2': %3 plugin(s) loaded")
             .arg(QDir::toNativeSeparators(filepath))
-            .arg(proxy->name())
+            .arg(proxyName)
             .arg(proxiedPlugins.size()));
   } catch (const std::exception& e) {
     log::error("failed to initialize proxied candidate '{}' via proxy '{}': {}",
-               QDir::toNativeSeparators(filepath),
-               (proxy ? proxy->name() : QStringLiteral("<null>")), e.what());
+               QDir::toNativeSeparators(filepath), proxyName, e.what());
     printPluginDiagToStderr(
         QString("failed to initialize proxied candidate '%1' via proxy '%2': %3")
             .arg(QDir::toNativeSeparators(filepath))
-            .arg(proxy ? proxy->name() : QStringLiteral("<null>"))
+            .arg(proxyName)
             .arg(e.what()));
     reportError(
         QObject::tr("failed to initialize plugin %1: %2").arg(filepath).arg(e.what()));
   } catch (...) {
     log::error("failed to initialize proxied candidate '{}' via proxy '{}': "
                "unknown exception",
-               QDir::toNativeSeparators(filepath),
-               (proxy ? proxy->name() : QStringLiteral("<null>")));
+               QDir::toNativeSeparators(filepath), proxyName);
     printPluginDiagToStderr(
         QString("failed to initialize proxied candidate '%1' via proxy '%2': unknown "
                 "exception")
             .arg(QDir::toNativeSeparators(filepath))
-            .arg(proxy ? proxy->name() : QStringLiteral("<null>")));
+            .arg(proxyName));
     reportError(QObject::tr("failed to initialize plugin %1: unknown exception")
                     .arg(filepath));
   }
@@ -1174,10 +1409,16 @@ QObject* PluginContainer::loadQtPlugin(const QString& filepath)
   } else {
     QObject* object = pluginLoader->instance();
     if (IPlugin* plugin = registerPlugin(object, filepath, nullptr); plugin) {
-      log::debug("loaded plugin '{}@{}' from '{}' - [{}]", plugin->name(),
-                 plugin->version().canonicalString(), QFileInfo(filepath).fileName(),
-                 implementedInterfaces(plugin).join(", "));
       m_PluginLoaders.push_back(pluginLoader.release());
+      try {
+        log::debug("loaded plugin '{}@{}' from '{}' - [{}]", plugin->name(),
+                   plugin->version().canonicalString(),
+                   QFileInfo(filepath).fileName(),
+                   implementedInterfaces(plugin).join(", "));
+      } catch (...) {
+        log::debug("loaded native plugin from '{}' (metadata unavailable)",
+                   QFileInfo(filepath).fileName());
+      }
       return object;
     } else if (object->property(CompatibilityBlockedProperty).toBool()) {
       log::debug("plugin '{}' was rejected by compatibility policy", filepath);
@@ -1191,6 +1432,13 @@ QObject* PluginContainer::loadQtPlugin(const QString& filepath)
     } else {
       m_FailedPlugins.push_back(filepath);
       log::warn("plugin '{}' failed to load (may be outdated)", filepath);
+      if (!pluginLoader->unload()) {
+        log::debug("failed plugin '{}' could not be unloaded immediately: {}",
+                   filepath, pluginLoader->errorString());
+        // Registration rollback removed all host state. Retain the loader only
+        // so shutdown can retry retiring Qt's still-live root instance.
+        m_PluginLoaders.push_back(pluginLoader.release());
+      }
     }
   }
   return nullptr;
@@ -1334,14 +1582,28 @@ void PluginContainer::unloadPlugins()
   }
 
   for (const auto& [proxy, path] : proxiedPaths) {
+    bool unloaded = false;
     try {
       proxy->unload(path);
+      unloaded = true;
     } catch (const std::exception& e) {
       log::error("failed to unload proxied plugin '{}': {}", path, e.what());
     } catch (...) {
       log::error("failed to unload proxied plugin '{}': unknown exception", path);
     }
+
+    if (unloaded) {
+      for (auto& rejected : m_RejectedProxiedObjects) {
+        if (rejected.proxy == proxy && rejected.filepath == path &&
+            !rejected.object.isNull()) {
+          delete rejected.object;
+        }
+      }
+    }
   }
+  // On an unload exception, deliberately leave surviving holder objects alive
+  // rather than invalidating borrowed proxy-runtime handles.
+  m_RejectedProxiedObjects.clear();
 
   bf::for_each(m_Plugins, [](auto& t) {
     t.second.clear();

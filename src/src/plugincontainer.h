@@ -10,6 +10,7 @@ class IUserInterface;
 
 #include <QFile>
 #include <QPluginLoader>
+#include <QPointer>
 #include <QSet>
 #include <QtPlugin>
 #include <iplugindiagnose.h>
@@ -497,13 +498,12 @@ private:
    * @brief Initialize a plugin.
    *
    * @param plugin The plugin to initialize.
-   * @param proxy The proxy that created this plugin (can be null).
    * @param skipInit If true, IPlugin::init() will not be called, regardless
    *     of the state of the container.
    *
    * @return true if the plugin was initialized correctly, false otherwise.
    */
-  bool initPlugin(MOBase::IPlugin* plugin, MOBase::IPluginProxy* proxy, bool skipInit);
+  bool initPlugin(MOBase::IPlugin* plugin, bool skipInit);
 
   struct PreInitCompatibilityDecision
   {
@@ -522,7 +522,8 @@ private:
 
   MOBase::IPlugin* registerPlugin(QObject* pluginObj, const QString& fileName,
                                   MOBase::IPluginProxy* proxy,
-                                  bool compatibilityPreflighted = false);
+                                  std::optional<QString> compatibilityName =
+                                      std::nullopt);
 
   // Core organizer, can be null (e.g. on first MO2 startup).
   OrganizerCore* m_Organizer;
@@ -543,6 +544,14 @@ private:
   std::map<QString, MOBase::IPluginGame*> m_SupportedGames;
   QStringList m_FailedPlugins;
   std::vector<QPluginLoader*> m_PluginLoaders;
+
+  struct RejectedProxiedObject
+  {
+    MOBase::IPluginProxy* proxy;
+    QString filepath;
+    QPointer<QObject> object;
+  };
+  std::vector<RejectedProxiedObject> m_RejectedProxiedObjects;
 
   PreviewGenerator m_PreviewGenerator;
 

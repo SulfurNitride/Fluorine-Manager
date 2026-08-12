@@ -531,10 +531,6 @@ namespace mo2::python {
             QList<QObject*> allInterfaceList;
 
             for (py::object pluginObj : plugins) {
-
-                // save to be able to unload it
-                m_PythonObjects[identifier].push_back(pluginObj);
-
                 QList<QObject*> interfaceList = py::module_::import("mobase.private")
                                                     .attr("extract_plugins")(pluginObj)
                                                     .cast<QList<QObject*>>();
@@ -542,6 +538,13 @@ namespace mo2::python {
                 if (interfaceList.isEmpty()) {
                     MOBase::log::error("Plugin {}: no plugin interface implemented.",
                                        identifier);
+                }
+                else {
+                    // QObject interface holders keep the Python object alive. Record a
+                    // borrowed handle only after at least one such holder exists; an
+                    // empty extraction would otherwise leave a dangling handle as soon
+                    // as this function's local py::object is released.
+                    m_PythonObjects[identifier].push_back(pluginObj);
                 }
 
                 // Append the plugins to the main list:

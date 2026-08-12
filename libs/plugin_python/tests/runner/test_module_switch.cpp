@@ -24,6 +24,18 @@ TEST(ModuleSwitch, ReplacesSameNamedPackageFromAnotherDirectory)
 
     const auto pluginsFolder = QString(std::getenv("PLUGIN_DIR"));
 
+    // A factory object without a supported QObject interface has no holder that
+    // can keep it alive after load() returns. It must not leave a borrowed
+    // PythonRunner handle for unload() to dereference.
+    {
+        auto runner = mo2::python::createPythonRunner();
+        ASSERT_TRUE(runner->initialize());
+
+        const QString identifier = pluginsFolder + "/no-interfaces.py";
+        EXPECT_TRUE(runner->load(identifier).isEmpty());
+        EXPECT_NO_THROW(runner->unload(identifier));
+    }
+
     {
         auto runner = mo2::python::createPythonRunner();
         ASSERT_TRUE(runner->initialize());

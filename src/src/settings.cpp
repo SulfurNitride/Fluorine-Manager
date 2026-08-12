@@ -1696,61 +1696,96 @@ void PluginSettings::clearPlugins()
 
 void PluginSettings::registerPlugin(IPlugin* plugin)
 {
-  m_Plugins.push_back(plugin);
-  m_PluginSettings.insert(plugin->name(), QVariantMap());
-  m_PluginDescriptions.insert(plugin->name(), QVariantMap());
+  const QString pluginName = plugin->name();
+  stagePluginRegistration(plugin, pluginName);
+  commitPluginRegistration(pluginName);
+}
 
-  for (const PluginSetting& setting : plugin->settings()) {
-    const QString settingName = plugin->name() + "/" + setting.key;
+void PluginSettings::stagePluginRegistration(IPlugin* plugin,
+                                             const QString& pluginName)
+{
+  m_PluginSettings.insert(pluginName, QVariantMap());
+  m_PluginDescriptions.insert(pluginName, QVariantMap());
 
-    QVariant temp = get<QVariant>(m_Settings, "Plugins", settingName, QVariant());
+  try {
+    for (const PluginSetting& setting : plugin->settings()) {
+      const QString settingName = pluginName + "/" + setting.key;
 
-    // No previous enabled? Skip.
-    if (setting.key == "enabled" && (!temp.isValid() || !temp.canConvert<bool>())) {
-      continue;
+      QVariant temp = get<QVariant>(m_Settings, "Plugins", settingName, QVariant());
+
+      // No previous enabled? Skip.
+      if (setting.key == "enabled" &&
+          (!temp.isValid() || !temp.canConvert<bool>())) {
+        continue;
+      }
+
+      if (!temp.isValid()) {
+        temp = setting.defaultValue;
+      } else if (!temp.convert(setting.defaultValue.metaType())) {
+        log::warn("failed to interpret \"{}\" as correct type for \"{}\" in plugin "
+                  "\"{}\", using default",
+                  temp.toString(), setting.key, pluginName);
+
+        temp = setting.defaultValue;
+      }
+
+      m_PluginSettings[pluginName][setting.key] = temp;
+
+      m_PluginDescriptions[pluginName][setting.key] =
+          QString("%1 (default: %2)")
+              .arg(setting.description)
+              .arg(setting.defaultValue.toString());
     }
-
-    if (!temp.isValid()) {
-      temp = setting.defaultValue;
-    } else if (!temp.convert(setting.defaultValue.metaType())) {
-      log::warn("failed to interpret \"{}\" as correct type for \"{}\" in plugin "
-                "\"{}\", using default",
-                temp.toString(), setting.key, plugin->name());
-
-      temp = setting.defaultValue;
-    }
-
-    m_PluginSettings[plugin->name()][setting.key] = temp;
-
-    m_PluginDescriptions[plugin->name()][setting.key] =
-        QString("%1 (default: %2)")
-            .arg(setting.description)
-            .arg(setting.defaultValue.toString());
+  } catch (...) {
+    m_PluginSettings.remove(pluginName);
+    m_PluginDescriptions.remove(pluginName);
+    throw;
   }
 
+  m_Plugins.push_back(plugin);
+}
+
+void PluginSettings::commitPluginRegistration(const QString& pluginName)
+{
   // Handle previous "enabled" settings:
-  if (m_PluginSettings[plugin->name()].contains("enabled")) {
+  if (m_PluginSettings[pluginName].contains("enabled")) {
     m_WriteBarrier.runIfAllowed([&] {
-      setPersistent(plugin->name(), "enabled",
-                    m_PluginSettings[plugin->name()]["enabled"].toBool(), true);
-      m_PluginSettings[plugin->name()].remove("enabled");
-      m_PluginDescriptions[plugin->name()].remove("enabled");
+      setPersistent(pluginName, "enabled",
+                    m_PluginSettings[pluginName]["enabled"].toBool(), true);
+      m_PluginSettings[pluginName].remove("enabled");
+      m_PluginDescriptions[pluginName].remove("enabled");
 
       // We need to drop it manually in Settings since it is not possible to remove plugin
       // settings:
-      remove(m_Settings, "Plugins", plugin->name() + "/enabled");
+      remove(m_Settings, "Plugins", pluginName + "/enabled");
     });
   }
 }
 
 void PluginSettings::unregisterPlugin(IPlugin* plugin)
 {
+  unregisterPlugin(plugin, plugin->name());
+}
+
+void PluginSettings::unregisterPlugin(IPlugin* plugin,
+                                      const QString& pluginName)
+{
+  unregisterPluginInterface(plugin);
+  m_PluginSettings.remove(pluginName);
+  m_PluginDescriptions.remove(pluginName);
+}
+
+void PluginSettings::registerPluginInterface(IPlugin* plugin)
+{
+  m_Plugins.push_back(plugin);
+}
+
+void PluginSettings::unregisterPluginInterface(IPlugin* plugin)
+{
   auto it = std::find(m_Plugins.begin(), m_Plugins.end(), plugin);
   if (it != m_Plugins.end()) {
     m_Plugins.erase(it);
   }
-  m_PluginSettings.remove(plugin->name());
-  m_PluginDescriptions.remove(plugin->name());
 }
 
 std::vector<MOBase::IPlugin*> PluginSettings::plugins() const

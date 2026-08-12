@@ -31,6 +31,7 @@ mo2_target_sources(runner-tests
 		plugins/dummy-game.py
 		plugins/dummy-installer.py
 		plugins/dummy-iplugin.py
+		plugins/no-interfaces.py
 		plugins/module_switch_a/same_plugin/__init__.py
 		plugins/module_switch_a/same_plugin/identity.py
 		plugins/module_switch_b/same_plugin/__init__.py

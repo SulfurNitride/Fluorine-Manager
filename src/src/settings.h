@@ -299,7 +299,17 @@ public:
   // adds/removes the given plugin to the list and loads all of its settings
   //
   void registerPlugin(MOBase::IPlugin* plugin);
+
+  // transactional registration stages the in-memory settings view first and
+  // performs durable legacy-key migration only after plugin init succeeds
+  //
+  void stagePluginRegistration(MOBase::IPlugin* plugin,
+                               const QString& pluginName);
+  void commitPluginRegistration(const QString& pluginName);
+  void registerPluginInterface(MOBase::IPlugin* plugin);
   void unregisterPlugin(MOBase::IPlugin* plugin);
+  void unregisterPlugin(MOBase::IPlugin* plugin, const QString& pluginName);
+  void unregisterPluginInterface(MOBase::IPlugin* plugin);
 
   // returns all the registered plugins
   //

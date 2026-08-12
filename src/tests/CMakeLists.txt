@@ -104,6 +104,27 @@ target_link_libraries(test_plugincompatibility PRIVATE
 add_test(NAME test_plugincompatibility COMMAND test_plugincompatibility)
 
 # ---------------------------------------------------------------------------
+# Transactional proxied-plugin registration policy tests
+# ---------------------------------------------------------------------------
+add_executable(test_pluginregistrationpolicy EXCLUDE_FROM_ALL
+    test_pluginregistrationpolicy.cpp
+)
+set_target_properties(test_pluginregistrationpolicy PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_pluginregistrationpolicy PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_pluginregistrationpolicy PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_pluginregistrationpolicy COMMAND test_pluginregistrationpolicy)
+
+# ---------------------------------------------------------------------------
 # Directory-refresh plugin-list coalescing tests
 # ---------------------------------------------------------------------------
 add_executable(test_pluginrefreshcoalescing EXCLUDE_FROM_ALL
@@ -594,7 +615,8 @@ set_tests_properties(test_python_module_switch PROPERTIES
 # Register a "fluorine-tests" umbrella target that builds every test exe.
 add_custom_target(fluorine-tests
     DEPENDS test_esptk_tes3 test_bsatk_extraction
-            test_plugincompatibility test_pluginrefreshcoalescing
+            test_plugincompatibility test_pluginregistrationpolicy
+            test_pluginrefreshcoalescing
             test_settingsmigration test_processlifetime
             test_launchcoordination test_gamefeatureownership
             test_slroperationcontext test_pluginreloadpolicy test_launchlifecycle
