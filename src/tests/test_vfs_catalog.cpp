@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <algorithm>
+#include <cerrno>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -672,4 +673,23 @@ TEST(PermissionRepair, IsIdempotentAndDoesNotFollowSymlinks)
   struct stat outsideStatus {};
   ASSERT_EQ(::lstat(outside.c_str(), &outsideStatus), 0);
   EXPECT_EQ(outsideStatus.st_mode & 0777, 0400);
+}
+
+TEST(PermissionRepair, ClassifiesSummaryLogSeverity)
+{
+  EXPECT_EQ(permissionRepairOutcome({}), PermissionRepairOutcome::NoChanges);
+
+  PermissionRepairStats repaired;
+  repaired.repaired = 1;
+  EXPECT_EQ(permissionRepairOutcome(repaired),
+            PermissionRepairOutcome::RepairsApplied);
+
+  PermissionRepairStats failed;
+  failed.failed = 1;
+  EXPECT_EQ(permissionRepairOutcome(failed), PermissionRepairOutcome::Failed);
+
+  PermissionRepairStats traversalFailed;
+  traversalFailed.traversal_error = EIO;
+  EXPECT_EQ(permissionRepairOutcome(traversalFailed),
+            PermissionRepairOutcome::Failed);
 }

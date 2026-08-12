@@ -3904,6 +3904,7 @@ OrganizerCore::AfterRunResult OrganizerCore::continueAfterRun(
   const bool trackedLaunch = !work->launchToken.isEmpty();
   launch_cleanup::CleanupStage cleanupStage(launch_cleanup::AttemptResult{
       launch_cleanup::AttemptState::Complete, {}});
+  bool untrackedVfsCleanupPerformed = false;
   if (trackedLaunch) {
     cleanupStage = launch_cleanup::beginMandatoryCleanup(
         m_ProcessLaunchContext, work->launchToken, work->profileName,
@@ -3917,6 +3918,7 @@ OrganizerCore::AfterRunResult OrganizerCore::continueAfterRun(
     // the organizer event loop.
     try {
       m_USVFS.unmount();
+      untrackedVfsCleanupPerformed = true;
     } catch (...) {
       cleanupStage = launch_cleanup::CleanupStage(
           {launch_cleanup::AttemptState::RetryRequired,
@@ -3964,6 +3966,9 @@ OrganizerCore::AfterRunResult OrganizerCore::continueAfterRun(
   // best-effort and must neither escape the Qt event loop nor keep this launch
   // registered forever.
   bool refreshScheduled = false;
+  const bool vfsCleanupPerformed =
+      trackedLaunch ? attempt.vfsCleanupPerformed
+                    : untrackedVfsCleanupPerformed;
   std::exception_ptr postRunFailure;
   std::exception_ptr refreshFailure;
   std::exception_ptr finishedRunFailure;
@@ -4013,17 +4018,10 @@ OrganizerCore::AfterRunResult OrganizerCore::continueAfterRun(
                                                  overwritePath());
               movePGPatcherLogsToLogsFolder();
 
-              // Restore write permissions on the game directory.  In rare cases
-              // (crashes, unclean Wine shutdown) file permissions can be
-              // changed to read-only, preventing subsequent launches from
-              // working.
-              //
-              // Use error_code-based iteration: a previous run may have left a
-              // stale FUSE mount under the game dir (zombie Wine process
-              // holding open handles), and the throwing iterator would unwind
-              // out of afterRun() leaving the rest of the post-run sync
-              // untouched.
-              {
+              // Only a launch that actually completed physical VFS cleanup may
+              // repair permissions. Native games and handed-off launch contexts
+              // never mounted this game tree and must leave it untouched.
+              if (vfsCleanupPerformed) {
                 const auto t0 = std::chrono::steady_clock::now();
                 const QString gameDir =
                     managedGame()->gameDirectory().absolutePath();
@@ -4039,15 +4037,29 @@ OrganizerCore::AfterRunResult OrganizerCore::continueAfterRun(
                     std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now() - t0)
                         .count();
-                std::fprintf(
-                    stderr,
-                    "[VFS] permission repair inspected=%llu repaired=%llu "
-                    "skipped=%llu failed=%llu elapsed_ms=%lld\n",
-                    static_cast<unsigned long long>(repair.inspected),
-                    static_cast<unsigned long long>(repair.repaired),
-                    static_cast<unsigned long long>(repair.skipped),
-                    static_cast<unsigned long long>(repair.failed),
-                    static_cast<long long>(ms));
+                switch (permissionRepairOutcome(repair)) {
+                case PermissionRepairOutcome::Failed:
+                  log::warn(
+                      "afterRun: VFS permission repair inspected={} repaired={} "
+                      "skipped={} failed={} elapsed_ms={}",
+                      repair.inspected, repair.repaired, repair.skipped,
+                      repair.failed, ms);
+                  break;
+                case PermissionRepairOutcome::RepairsApplied:
+                  log::info(
+                      "afterRun: VFS permission repair inspected={} repaired={} "
+                      "skipped={} failed={} elapsed_ms={}",
+                      repair.inspected, repair.repaired, repair.skipped,
+                      repair.failed, ms);
+                  break;
+                case PermissionRepairOutcome::NoChanges:
+                  log::debug(
+                      "afterRun: VFS permission repair inspected={} repaired={} "
+                      "skipped={} failed={} elapsed_ms={}",
+                      repair.inspected, repair.repaired, repair.skipped,
+                      repair.failed, ms);
+                  break;
+                }
               }
 
               if (launchProfile != nullptr) {

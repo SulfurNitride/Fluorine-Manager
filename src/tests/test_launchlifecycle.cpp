@@ -149,6 +149,7 @@ TEST(MandatoryLaunchCleanupTest,
   const auto &failed = failedStage.attempt();
   EXPECT_EQ(failed.state, launch_cleanup::AttemptState::RetryRequired);
   EXPECT_TRUE(failed.failure);
+  EXPECT_FALSE(failed.vfsCleanupPerformed);
   EXPECT_TRUE(tracker.contains(token));
   EXPECT_EQ(tracker.activeLaunches().vfs, 1);
   EXPECT_FALSE(tracker.reserve(QStringLiteral("successor"), profile, true));
@@ -171,6 +172,7 @@ TEST(MandatoryLaunchCleanupTest,
       [&cleanupCalls]() { ++cleanupCalls; });
   const auto &retried = retriedStage.attempt();
   EXPECT_EQ(retried.state, launch_cleanup::AttemptState::Complete);
+  EXPECT_TRUE(retried.vfsCleanupPerformed);
   EXPECT_EQ(cleanupCalls, 1);
 
   // Physical cleanup released only the VFS reservation. The old tracker entry
@@ -188,6 +190,25 @@ TEST(MandatoryLaunchCleanupTest,
   EXPECT_EQ(cleanupCompletions, 1);
   tracker.abandon(QStringLiteral("successor"));
   EXPECT_TRUE(tracker.activeLaunches().empty());
+}
+
+TEST(MandatoryLaunchCleanupTest,
+     NativeLaunchCompletesWithoutVfsCleanupAuthority) {
+  ProcessLaunchContextTracker tracker;
+  const auto token = QStringLiteral("native-launch");
+  const auto profile = QStringLiteral("Default");
+  ASSERT_TRUE(tracker.reserve(token, profile, /*ownsVfs=*/false));
+
+  bool cleanupCalled = false;
+  const auto result = launch_cleanup::attemptMandatoryCleanup(
+      tracker, token, profile, /*ownsVfs=*/false,
+      launch_cleanup::AttemptKind::Initial,
+      [&cleanupCalled]() { cleanupCalled = true; });
+
+  EXPECT_EQ(result.state, launch_cleanup::AttemptState::Complete);
+  EXPECT_FALSE(result.vfsCleanupPerformed);
+  EXPECT_FALSE(cleanupCalled);
+  tracker.finishCompletion(token);
 }
 
 TEST(MandatoryLaunchCleanupTest,
@@ -232,6 +253,7 @@ TEST(MandatoryLaunchCleanupTest, HandedOffOuterLaunchNeverUnmountsNestedOwner) {
       launch_cleanup::AttemptKind::Initial,
       [&cleanupCalled]() { cleanupCalled = true; });
   EXPECT_EQ(result.state, launch_cleanup::AttemptState::Complete);
+  EXPECT_FALSE(result.vfsCleanupPerformed);
   EXPECT_FALSE(cleanupCalled);
 
   tracker.finishCompletion(outer);
@@ -279,6 +301,7 @@ TEST(MandatoryLaunchCleanupTest,
       },
       /*additionalCleanupRequired=*/true);
   EXPECT_EQ(retried.state, launch_cleanup::AttemptState::Complete);
+  EXPECT_FALSE(retried.vfsCleanupPerformed);
   EXPECT_EQ(removalAttempts, 2);
   tracker.finishCompletion(token);
   EXPECT_FALSE(tracker.contains(token));
@@ -304,6 +327,7 @@ TEST(MandatoryLaunchCleanupTest,
       /*additionalCleanupRequired=*/true);
 
   EXPECT_EQ(result.state, launch_cleanup::AttemptState::Complete);
+  EXPECT_FALSE(result.vfsCleanupPerformed);
   EXPECT_TRUE(artifactRemoved);
   EXPECT_FALSE(nestedUnmounted);
   tracker.finishCompletion(token);

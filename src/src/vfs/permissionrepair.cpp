@@ -45,6 +45,18 @@ void repairOne(const fs::path& path, PermissionRepairStats& stats)
 }
 }  // namespace
 
+PermissionRepairOutcome permissionRepairOutcome(
+    const PermissionRepairStats& stats) noexcept
+{
+  if (stats.failed != 0 || stats.traversal_error != 0) {
+    return PermissionRepairOutcome::Failed;
+  }
+  if (stats.repaired != 0) {
+    return PermissionRepairOutcome::RepairsApplied;
+  }
+  return PermissionRepairOutcome::NoChanges;
+}
+
 PermissionRepairStats repairGameDirectoryPermissions(
     const std::filesystem::path& game_directory)
 {

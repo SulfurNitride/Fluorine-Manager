@@ -268,6 +268,7 @@ struct AttemptResult
 {
   AttemptState state{AttemptState::Rejected};
   std::exception_ptr failure;
+  bool vfsCleanupPerformed{false};
 };
 
 // Claims (or resumes) one exact launch and releases its physical VFS
@@ -314,7 +315,8 @@ AttemptResult attemptMandatoryCleanup(ProcessLaunchContextTracker& tracker,
     }
   }
 
-  return {AttemptState::Complete, {}};
+  return {AttemptState::Complete, {},
+          ownsVfs && access.vfsReservationActive};
 }
 
 struct FinalizationResult
