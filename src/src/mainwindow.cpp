@@ -3062,8 +3062,12 @@ void MainWindow::openPluginsFolder()
 
 void MainWindow::openStylesheetsFolder()
 {
-  const QString ssPath = QCoreApplication::applicationDirPath() + "/" +
-                         QString::fromStdWString(AppConfig::stylesheetsPath());
+  QString root = QCoreApplication::applicationDirPath();
+  if (qApp->property("fluorinePortableInstance").toBool()) {
+    root = qApp->property("dataPath").toString();
+  }
+  const QString ssPath = QDir(root).filePath(
+      QString::fromStdWString(AppConfig::stylesheetsPath()));
   QDir().mkpath(ssPath);
   shell::Explore(ssPath);
 }

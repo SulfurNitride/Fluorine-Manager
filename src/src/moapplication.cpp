@@ -29,6 +29,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "organizercore.h"
 #include "sanitychecks.h"
 #include "settings.h"
+#include "stylesheetpath.h"
 #include "settingsmigration.h"
 #include "fluorineconfig.h"
 #include "fluorinepaths.h"
@@ -337,6 +338,7 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
   // directory, then log a bunch of debug stuff
   const QString dataPath = m_instance->directory();
   setProperty("dataPath", dataPath);
+  setProperty("fluorinePortableInstance", m_instance->isPortable());
 
   if (!setLogDirectory(dataPath)) {
     reportError(tr("Failed to create log folder."));
@@ -838,21 +840,16 @@ bool MOApplication::setStyleFile(const QString& styleName)
   }
   // set new stylesheet or clear it
   if (styleName.length() != 0) {
-    // Stylesheets are application resources. Do not load copies supplied by an
-    // instance or from another user-writable search location.
-    const QString ssSubdir = MOBase::ToQString(AppConfig::stylesheetsPath());
-    const QString stylesheetDir = applicationDirPath() + "/" + ssSubdir;
-    QString resolved;
-    if (QFileInfo(styleName).fileName() == styleName) {
-      const QString candidate = stylesheetDir + "/" + styleName;
-      const QString canonicalDir = QDir(stylesheetDir).canonicalPath();
-      const QString canonicalFile = QFileInfo(candidate).canonicalFilePath();
-      if (!canonicalDir.isEmpty() &&
-          canonicalFile.startsWith(canonicalDir + "/") &&
-          QFileInfo(canonicalFile).isFile()) {
-        resolved = canonicalFile;
-      }
-    }
+    // Portable MO2 instances commonly carry their selected QSS and assets.
+    // Installed styles retain precedence, and the resolver accepts only a
+    // contained basename from either stylesheet directory.
+    const QString portableDirectory =
+        m_instance != nullptr && m_instance->isPortable()
+            ? m_instance->directory()
+            : QString();
+    const auto directories = StyleSheetPath::searchDirectories(
+        applicationDirPath(), portableDirectory);
+    const QString resolved = StyleSheetPath::resolve(styleName, directories);
 
     if (!resolved.isEmpty()) {
       m_styleWatcher.addPath(resolved);
@@ -860,8 +857,8 @@ bool MOApplication::setStyleFile(const QString& styleName)
     } else if (QStyleFactory::keys().contains(styleName)) {
       updateStyle(styleName);
     } else {
-      log::warn("stylesheet '{}' is not installed in '{}'", styleName,
-                stylesheetDir);
+      log::warn("stylesheet '{}' was not found in [{}]", styleName,
+                directories.join(", "));
       return false;
     }
   } else {
@@ -955,39 +952,6 @@ QString styleSheetFontSizeOverride(int fontSize)
       .arg(fontSize);
 }
 
-QString resolveStyleSheetUrl(const QString& url, const QString& baseDir)
-{
-  const QString trimmed = url.trimmed();
-  const QUrl parsed(trimmed);
-  if (trimmed.isEmpty() || trimmed.startsWith(':') || trimmed.startsWith('/') ||
-      !parsed.scheme().isEmpty()) {
-    return trimmed;
-  }
-
-  return QDir(baseDir).absoluteFilePath(trimmed);
-}
-
-QString resolveRelativeStyleSheetUrls(const QString& stylesheet,
-                                      const QString& baseDir)
-{
-  static const QRegularExpression urlRe(
-      QStringLiteral(R"(url\(\s*(['"]?)([^'")]+)\1\s*\))"),
-      QRegularExpression::CaseInsensitiveOption);
-
-  QString result;
-  qsizetype last = 0;
-  auto matches  = urlRe.globalMatch(stylesheet);
-  while (matches.hasNext()) {
-    const auto match = matches.next();
-    result += stylesheet.mid(last, match.capturedStart() - last);
-    result += QStringLiteral("url(%1)")
-                  .arg(resolveStyleSheetUrl(match.captured(2), baseDir));
-    last = match.capturedEnd();
-  }
-  result += stylesheet.mid(last);
-  return result;
-}
-
 QString applyQssFontSize(const QString& stylesheet, int fontSize)
 {
   if (fontSize <= 0) {
@@ -1013,7 +977,8 @@ std::optional<QString> loadStyleSheet(const QString& fileName, int fontSize)
   }
 
   QString content = QString::fromUtf8(stylesheet.readAll());
-  content = resolveRelativeStyleSheetUrls(content, QFileInfo(fileName).absolutePath());
+  content = StyleSheetPath::resolveAssets(
+      content, QFileInfo(fileName).absolutePath());
   return applyQssFontSize(content, fontSize);
 }
 
@@ -1093,59 +1058,6 @@ QString extractBaseStyleFromStyleSheet(QFile& stylesheet, const QString& default
 
 }  // namespace
 
-// Walk a directory and create case-variant symlinks for asset files so QSS
-// url(...) references resolve regardless of the case convention the theme
-// author used. On case-sensitive filesystems Qt's url() resolver fails when
-// the case doesn't match exactly. We cover the two common conventions:
-//   - QSS lowercase / disk mixed case  → create  lowercase  → MixedCase symlink
-//   - QSS TitleCase / disk lowercase   → create  TitleCase  → lowercase symlink
-static void createStylesheetCaseShims(const QString& dirPath)
-{
-  namespace fs = std::filesystem;
-  std::error_code ec;
-  if (!fs::exists(dirPath.toStdString(), ec) ||
-      !fs::is_directory(dirPath.toStdString(), ec)) {
-    return;
-  }
-
-  auto tryShim = [](const fs::path& parent, const std::string& target,
-                    const std::string& shimName) {
-    if (shimName == target) return;
-    std::error_code ec;
-    const auto shimPath = parent / shimName;
-    if (fs::exists(shimPath, ec)) return;
-    std::error_code lec;
-    fs::create_symlink(target, shimPath, lec);
-    if (lec) {
-      log::debug("stylesheet shim: failed to link '{}' -> '{}': {}",
-                 shimPath.string(), target, lec.message());
-    }
-  };
-
-  for (auto it = fs::recursive_directory_iterator(
-           dirPath.toStdString(),
-           fs::directory_options::skip_permission_denied, ec);
-       !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
-    const auto& entry = *it;
-    if (!entry.is_regular_file(ec)) continue;
-
-    const std::string name = entry.path().filename().string();
-    const auto parent = entry.path().parent_path();
-
-    std::string lowerName = name;
-    std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(),
-                   [](unsigned char c) { return std::tolower(c); });
-    tryShim(parent, name, lowerName);
-
-    std::string titleName = lowerName;
-    if (!titleName.empty()) {
-      titleName[0] = static_cast<char>(
-          std::toupper(static_cast<unsigned char>(titleName[0])));
-    }
-    tryShim(parent, name, titleName);
-  }
-}
-
 void MOApplication::updateStyle(const QString& fileName)
 {
   const int qssFontSize =
@@ -1157,9 +1069,6 @@ void MOApplication::updateStyle(const QString& fileName)
   } else {
     QFile stylesheet(fileName);
     if (stylesheet.exists()) {
-      // Pre-create lowercase shims so url(foo.svg) in the QSS resolves even
-      // when the on-disk file is Foo.svg.
-      createStylesheetCaseShims(QFileInfo(fileName).absolutePath());
       setStyle(new ProxyStyle(QStyleFactory::create(
           extractBaseStyleFromStyleSheet(stylesheet, m_defaultStyle))));
       if (auto content = loadStyleSheet(fileName, qssFontSize)) {

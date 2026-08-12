@@ -595,6 +595,29 @@ set_tests_properties(test_python_module_switch PROPERTIES
         "PLUGIN_DIR=${CMAKE_SOURCE_DIR}/libs/plugin_python/tests/runner/plugins;PYTHONPATH=$<TARGET_FILE_DIR:mobase>"
 )
 
+# ---------------------------------------------------------------------------
+# Installed/portable stylesheet lookup and containment tests
+# ---------------------------------------------------------------------------
+add_executable(test_stylesheetpath EXCLUDE_FROM_ALL
+    test_stylesheetpath.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/stylesheetpath.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/shared/appconfig.cpp
+)
+set_target_properties(test_stylesheetpath PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_stylesheetpath PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_stylesheetpath PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_stylesheetpath COMMAND test_stylesheetpath)
+
 # Register a "fluorine-tests" umbrella target that builds every test exe.
 add_custom_target(fluorine-tests
     DEPENDS test_esptk_tes3 test_bsatk_extraction
@@ -610,4 +633,5 @@ add_custom_target(fluorine-tests
             test_vfs_descriptor_cleanup test_vfs_runtime_index
             test_game_save_migration
             test_vfs_catalog test_vfs_index
-            test_staging_promotion test_python_module_switch)
+            test_staging_promotion test_python_module_switch
+            test_stylesheetpath)
