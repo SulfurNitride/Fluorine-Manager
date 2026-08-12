@@ -72,6 +72,7 @@ new-generation publication remain serialized and crash-safe.
   - `libEGL`
   - `libGL`
   - `libGLX`
+  - `libfontconfig`
   - `libstdc++`
   - `libX11`
   - `libxkbcommon`
@@ -86,6 +87,7 @@ programs.nix-ld.enable = true;
 programs.nix-ld.libraries = with pkgs; [
   libGL
   libGLX
+  fontconfig
   xorg.libX11
   libxkbcommon
   stdenv.cc.cc.lib  # libstdc++

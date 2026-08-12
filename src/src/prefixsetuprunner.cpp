@@ -1,6 +1,5 @@
 #include "prefixsetuprunner.h"
 
-#include "fontconfigsetup.h"
 #include "fluorinepaths.h"
 
 #include "gamedetection.h"
@@ -866,7 +865,6 @@ QProcess* PrefixSetupRunner::buildWrappedProcess(
   restoreOrStrip("PATH",            "FLUORINE_ORIG_PATH");
   restoreOrStrip("XDG_DATA_DIRS",   "FLUORINE_ORIG_XDG_DATA_DIRS");
   restoreOrStrip("QT_PLUGIN_PATH",  "FLUORINE_ORIG_QT_PLUGIN_PATH");
-  FontconfigSetup::restoreCallerEnvironment(env);
 
   // Expose the injected xrandr (steamrt4 ships without it) so protonfixes
   // and Proton-GE init scripts can find it. Pressure-vessel forces PATH
@@ -1016,7 +1014,6 @@ int PrefixSetupRunner::runHostProcess(const QString& exe,
   restoreOrStrip("LD_LIBRARY_PATH", "FLUORINE_ORIG_LD_LIBRARY_PATH");
   restoreOrStrip("LD_PRELOAD",      "FLUORINE_ORIG_LD_PRELOAD");
   restoreOrStrip("PATH",            "FLUORINE_ORIG_PATH");
-  FontconfigSetup::restoreCallerEnvironment(env);
   proc.setProcessEnvironment(env);
 
   proc.start();
@@ -1061,7 +1058,6 @@ int PrefixSetupRunner::runHostProcessWithEnv(const QString& exe,
   };
   restoreVar("LD_LIBRARY_PATH", "FLUORINE_ORIG_LD_LIBRARY_PATH");
   restoreVar("LD_PRELOAD",      "FLUORINE_ORIG_LD_PRELOAD");
-  FontconfigSetup::restoreCallerEnvironment(env);
 
   for (auto it = extraEnv.begin(); it != extraEnv.end(); ++it)
     env.insert(it.key(), it.value());

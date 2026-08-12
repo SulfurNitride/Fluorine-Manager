@@ -1,6 +1,5 @@
 #include "commandline.h"
 #include "env.h"
-#include "fontconfigsetup.h"
 #include "fluorinepaths.h"
 #include "instancemanager.h"
 #include "loglist.h"
@@ -31,18 +30,6 @@ using namespace MOBase;
 
 int run(int argc, char* argv[]);
 
-namespace
-{
-FontconfigSetup::Result configureCompatibleFontconfig(int argc, char* argv[])
-{
-  const QString argv0 = argc > 0 && argv[0] != nullptr
-                            ? QString::fromLocal8Bit(argv[0])
-                            : QString{};
-  return FontconfigSetup::configure(
-      FontconfigSetup::applicationDirectory(argv0));
-}
-}  // namespace
-
 int main(int argc, char* argv[])
 {
   const int r = run(argc, argv);
@@ -52,8 +39,6 @@ int main(int argc, char* argv[])
 
 int run(int argc, char* argv[])
 {
-  const auto fontconfig = configureCompatibleFontconfig(argc, argv);
-
   if (argc >= 3 && QString(argv[1]) == "nxm-handle") {
     QString nxmUrl = QString::fromLocal8Bit(argv[2]);
     if (nxmUrl == "nxm-handle" && argc >= 4) {
@@ -104,20 +89,6 @@ int run(int argc, char* argv[])
   fluorineMigrateDataDir();
 
   initLogging();
-
-  switch (fontconfig.state) {
-  case FontconfigSetup::State::Active:
-    log::debug("fontconfig isolation active using '{}'{}", fontconfig.configPath,
-               fontconfig.generated ? " (generated fallback)" : "");
-    break;
-  case FontconfigSetup::State::Disabled:
-    log::debug("fontconfig isolation disabled by FLUORINE_DISABLE_FONTCONFIG_FIX");
-    break;
-  case FontconfigSetup::State::Unavailable:
-    log::warn("fontconfig isolation unavailable at '{}'; leaving the caller configuration unchanged",
-              fontconfig.configPath);
-    break;
-  }
 
   // must be after logging
   TimeThis tt("main() multiprocess");

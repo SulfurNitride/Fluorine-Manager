@@ -81,33 +81,7 @@ OUT_DIR="/src/build/staging"
 rm -rf "${OUT_DIR}"
 mkdir -p "${OUT_DIR}/plugins" "${OUT_DIR}/lib"
 
-# ── Bundled fallback fonts ──
-# The release uses a minimal fontconfig file so bundled fontconfig doesn't try
-# to parse newer host configs. Ship a known Latin UI font so that generic
-# families don't resolve to symbol-only fonts on hosts like Fedora/Bazzite.
-mkdir -p "${OUT_DIR}/fonts" "${OUT_DIR}/licenses" "${OUT_DIR}/etc/fonts"
-cp -f /src/data/fontconfig/fonts.conf "${OUT_DIR}/etc/fonts/fonts.conf"
-DEJAVU_DIR=""
-for candidate in \
-    /usr/share/fonts/truetype/dejavu \
-    /usr/share/fonts/dejavu \
-    /usr/share/fonts/TTF; do
-    if [ -f "${candidate}/DejaVuSans.ttf" ]; then
-        DEJAVU_DIR="${candidate}"
-        break
-    fi
-done
-if [ -z "${DEJAVU_DIR}" ]; then
-    echo "ERROR: DejaVu Sans font not found in build container"
-    exit 1
-fi
-for font in DejaVuSans.ttf DejaVuSans-Bold.ttf DejaVuSansMono.ttf DejaVuSansMono-Bold.ttf; do
-    cp -f "${DEJAVU_DIR}/${font}" "${OUT_DIR}/fonts/"
-done
-if [ -f /usr/share/doc/fonts-dejavu-core/copyright ]; then
-    cp -f /usr/share/doc/fonts-dejavu-core/copyright \
-        "${OUT_DIR}/licenses/fonts-dejavu-core.txt"
-fi
+mkdir -p "${OUT_DIR}/licenses"
 
 # ── Main binary + helpers ──
 cp -f "${RUNDIR}/ModOrganizer" "${OUT_DIR}/ModOrganizer-core"
@@ -254,6 +228,11 @@ SKIP_PATTERN="${SKIP_PATTERN}|libGL\.so|libEGL|libGLX|libGLdispatch|libdrm|libvu
 SKIP_PATTERN="${SKIP_PATTERN}|libpython"
 # OpenSSL should come from the host so we don't pin users to a stale TLS stack.
 SKIP_PATTERN="${SKIP_PATTERN}|libssl\.so|libcrypto\.so"
+# Fontconfig's runtime and its distribution-owned configuration files are one
+# compatibility unit. Bundling the library while reading a newer host's
+# /usr/share/fontconfig/conf.avail produces parser warnings (and can reject
+# newer rules). Use the host library with the matching host configuration.
+SKIP_PATTERN="${SKIP_PATTERN}|libfontconfig\.so"
 
 collect_deps() {
     ldd "$1" 2>/dev/null | grep "=>" | awk '{print $3}' | grep "^/" | sort -u
@@ -570,18 +549,12 @@ HERE="$(cd "$(dirname "$SELF")" && pwd)"
 
 # Save the original environment so launched games and setup tools can restore
 # it. Without this, Fluorine's bundled-runtime policy leaks into child
-# processes and can cause library or font-configuration conflicts.
+# processes and can cause library conflicts.
 export FLUORINE_ORIG_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
 export FLUORINE_ORIG_LD_PRELOAD="${LD_PRELOAD:-}"
 export FLUORINE_ORIG_PATH="${PATH}"
 export FLUORINE_ORIG_XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 export FLUORINE_ORIG_QT_PLUGIN_PATH="${QT_PLUGIN_PATH:-}"
-if [ "${FLUORINE_ORIG_FONTCONFIG_FILE+x}" != x ]; then
-    export FLUORINE_ORIG_FONTCONFIG_FILE="${FONTCONFIG_FILE:-}"
-fi
-if [ "${FLUORINE_ORIG_FONTCONFIG_PATH+x}" != x ]; then
-    export FLUORINE_ORIG_FONTCONFIG_PATH="${FONTCONFIG_PATH:-}"
-fi
 
 # Clear any injected preload for the bundled Qt6 process. Game launches restore
 # the original value via FLUORINE_ORIG_LD_PRELOAD.
@@ -737,19 +710,6 @@ unset PYTHONPATH PYTHONNOUSERSITE PYTHONHOME MO2_PYTHON_DIR
 export QT_PLUGIN_PATH="${RUN}/qt6plugins"
 export QT_QPA_PLATFORM_PLUGIN_PATH="${RUN}/qt6plugins/platforms"
 
-# The portable bundle ships its own fontconfig library. If it reads the host's
-# newer /etc/fonts configuration, older bundled fontconfig can warn on syntax
-# like xsi:nil and newer generic families. Use a minimal compatible config for
-# Fluorine itself; launched games/tools restore the user's original env.
-if [ -z "${FLUORINE_DISABLE_FONTCONFIG_FIX:-}" ]; then
-    if [ -f "${RUN}/etc/fonts/fonts.conf" ]; then
-        export FONTCONFIG_FILE="${RUN}/etc/fonts/fonts.conf"
-        export FONTCONFIG_PATH="${RUN}/etc/fonts"
-    else
-        unset FONTCONFIG_FILE FONTCONFIG_PATH
-    fi
-fi
-
 # Raise open file descriptor limit — large modlists with FUSE VFS
 # can easily exceed the default 1024
 ulimit -n 65536 2>/dev/null
@@ -759,52 +719,31 @@ exec "${RUN}/ModOrganizer-core" "$@"
 LAUNCH
 chmod +x "${OUT_DIR}/fluorine-manager"
 
-# Exercise the exact staged config with the staged fontconfig runtime. This is
-# deliberately a packaging check rather than only a source/XML test: it catches
-# incompatible config syntax, accidental host-config includes, bad relocatable
-# paths, and missing fallback fonts before a release artifact is published.
-FONTCONFIG_SMOKE_ERR="${OUT_DIR}/.fontconfig-smoke.err"
+# Fontconfig must remain host-provided. It always parses the compile-time
+# template directory even when FONTCONFIG_FILE is overridden, so a staged copy
+# would recreate the cross-version configuration mismatch this policy avoids.
 FONTCONFIG_RUNTIME="$({
-    LD_LIBRARY_PATH="${OUT_DIR}/lib" ldd "$(command -v fc-match)" 2>/dev/null \
+    LD_LIBRARY_PATH="${OUT_DIR}/lib" ldd "${OUT_DIR}/ModOrganizer-core" 2>/dev/null \
         | awk '/libfontconfig\.so\.1/ { print $3; exit }'
 } || true)"
+if [ -z "${FONTCONFIG_RUNTIME}" ]; then
+    echo "ERROR: ModOrganizer-core could not resolve host libfontconfig.so.1" >&2
+    exit 1
+fi
 case "${FONTCONFIG_RUNTIME}" in
-    "${OUT_DIR}/lib/"*) ;;
-    *)
-        echo "ERROR: fc-match did not resolve the staged fontconfig runtime" >&2
+    "${OUT_DIR}/lib/"*)
+        echo "ERROR: portable bundle unexpectedly contains libfontconfig" >&2
         exit 1
         ;;
 esac
-if ! FONTCONFIG_MATCH="$({
-    FONTCONFIG_FILE="${OUT_DIR}/etc/fonts/fonts.conf" \
-    FONTCONFIG_PATH="${OUT_DIR}/etc/fonts" \
-    LD_LIBRARY_PATH="${OUT_DIR}/lib" \
-        fc-match --format='%{family[0]}\n%{file}\n' sans-serif
-} 2>"${FONTCONFIG_SMOKE_ERR}")"; then
-    cat "${FONTCONFIG_SMOKE_ERR}" >&2
-    echo "ERROR: staged fontconfig smoke test failed" >&2
+if find "${OUT_DIR}/lib" -maxdepth 1 \
+        \( -name 'libfontconfig.so' -o -name 'libfontconfig.so.*' \) \
+        | grep -q .; then
+    echo "ERROR: portable bundle unexpectedly staged libfontconfig" >&2
     exit 1
 fi
-if grep -Eiq 'fontconfig (warning|error)|cannot load' "${FONTCONFIG_SMOKE_ERR}"; then
-    cat "${FONTCONFIG_SMOKE_ERR}" >&2
-    echo "ERROR: staged fontconfig emitted a configuration diagnostic" >&2
-    exit 1
-fi
-if ! printf '%s\n' "${FONTCONFIG_MATCH}" | head -n 1 \
-        | grep -Fqx 'DejaVu Sans'; then
-    printf '%s\n' "${FONTCONFIG_MATCH}" >&2
-    echo "ERROR: staged fontconfig did not select bundled DejaVu Sans" >&2
-    exit 1
-fi
-if ! printf '%s\n' "${FONTCONFIG_MATCH}" | tail -n 1 \
-        | grep -Eq '/fonts/DejaVuSans\.ttf$'; then
-    printf '%s\n' "${FONTCONFIG_MATCH}" >&2
-    echo "ERROR: staged fontconfig did not resolve the bundled font path" >&2
-    exit 1
-fi
-rm -f "${FONTCONFIG_SMOKE_ERR}"
 bash -n "${OUT_DIR}/fluorine-manager"
-echo "Staged fontconfig smoke test passed: $(printf '%s' "${FONTCONFIG_MATCH}" | tr '\n' ' ')"
+echo "Host fontconfig policy verified: ${FONTCONFIG_RUNTIME}"
 
 # ── qt.conf — tells Qt where to find plugins without QT_PLUGIN_PATH env ──
 cat > "${OUT_DIR}/qt.conf" <<'QTCONF'
