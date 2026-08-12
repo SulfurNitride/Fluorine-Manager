@@ -30,6 +30,9 @@ static void printPluginDiagToStderr(const QString&)
 {
 }
 
+constexpr auto CompatibilityBlockedProperty =
+    "fluorineCompatibilityBlocked";
+
 static std::optional<PluginCompatibility::Block>
 compatibilityBlock(const PluginContainer& container, IPlugin* plugin)
 {
@@ -37,13 +40,29 @@ compatibilityBlock(const PluginContainer& container, IPlugin* plugin)
     return std::nullopt;
   }
 
+  const auto overrides = PluginCompatibility::environmentOverrides();
+
+  // A pre-init rejected master is deliberately absent from the container. A
+  // descendant whose master metadata became available only after init() must
+  // still be disabled by the runtime fallback using its declared master name.
+  try {
+    if (const auto direct = PluginCompatibility::blockedRule(
+            container.managedGame()->gameName(),
+            {plugin->name(), plugin->master()}, overrides)) {
+      return direct;
+    }
+  } catch (...) {
+    // The ordinary registered ancestry below remains the fallback for plugins
+    // whose optional identity metadata is still unavailable.
+  }
+
   return PluginCompatibility::blockedRuleForPlugin(
-      container.managedGame()->gameName(), plugin, [](IPlugin* current) {
-        return current->name();
-      }, [&container](IPlugin* current) {
+      container.managedGame()->gameName(), plugin,
+      [](IPlugin* current) { return current->name(); },
+      [&container](IPlugin* current) {
         return container.requirements(current).master();
       },
-      PluginCompatibility::environmentOverrides());
+      overrides);
 }
 
 // Welcome to the wonderful world of MO2 plugin management!
@@ -344,10 +363,14 @@ void PluginRequirements::requiredFor(std::vector<MOBase::IPlugin*>& required,
 
 // PluginContainer
 
-PluginContainer::PluginContainer(OrganizerCore* organizer)
+PluginContainer::PluginContainer(OrganizerCore* organizer,
+                                 QString configuredGameName)
     : m_Organizer(organizer),
       m_GameFeatures(std::make_unique<GameFeatures>(organizer, this)),
-      m_PreviewGenerator(*this)
+      m_PreviewGenerator(*this),
+      m_CompatibilityRegistration(
+          std::move(configuredGameName),
+          PluginCompatibility::environmentOverrides())
 {}
 
 PluginContainer::~PluginContainer()
@@ -549,8 +572,62 @@ void PluginContainer::unregisterGame(MOBase::IPluginGame* game)
   m_SupportedGames.erase(game->gameName());
 }
 
+PluginContainer::PreInitCompatibilityDecision
+PluginContainer::preInitCompatibility(IPlugin* plugin,
+                                      const QString& filepath)
+{
+  PreInitCompatibilityDecision decision;
+  try {
+    decision.pluginName    = plugin->name();
+    decision.nameAvailable = true;
+  } catch (const std::exception& e) {
+    log::warn("plugin name failed before initialization for '{}': {}",
+              QDir::toNativeSeparators(filepath), e.what());
+    return decision;
+  } catch (...) {
+    log::warn("plugin name failed before initialization for '{}': "
+              "unknown exception",
+              QDir::toNativeSeparators(filepath));
+    return decision;
+  }
+
+  decision.block = m_CompatibilityRegistration.block(decision.pluginName);
+  if (!decision.block &&
+      m_CompatibilityRegistration.needsMasterMetadata()) {
+    try {
+      decision.block = m_CompatibilityRegistration.block(
+          decision.pluginName, plugin->master());
+    } catch (const std::exception& e) {
+      log::debug("plugin '{}' did not expose pre-init master metadata: {}",
+                 decision.pluginName, e.what());
+    } catch (...) {
+      log::debug("plugin '{}' did not expose pre-init master metadata",
+                 decision.pluginName);
+    }
+  }
+  return decision;
+}
+
+void PluginContainer::reportCompatibilityBlock(
+    QObject* object, const QString& pluginName,
+    const PluginCompatibility::Block& block)
+{
+  object->setProperty(CompatibilityBlockedProperty, true);
+  if (!m_ReportedCompatibilityBlocks.contains(block.id)) {
+    m_ReportedCompatibilityBlocks.insert(block.id);
+    log::warn(
+        "compatibility rule '{}' prevented plugin '{}' from initializing: {} "
+        "Set FLUORINE_ALLOW_INCOMPATIBLE_PLUGINS={} to override.",
+        block.id, pluginName, block.reason, block.id);
+  } else {
+    log::debug("compatibility rule '{}' also rejected plugin '{}'",
+               block.id, pluginName);
+  }
+}
+
 IPlugin* PluginContainer::registerPlugin(QObject* plugin, const QString& filepath,
-                                         MOBase::IPluginProxy* pluginProxy)
+                                         MOBase::IPluginProxy* pluginProxy,
+                                         bool compatibilityPreflighted)
 {
 
   // generic treatment for all plugins
@@ -558,6 +635,23 @@ IPlugin* PluginContainer::registerPlugin(QObject* plugin, const QString& filepat
   if (pluginObj == nullptr) {
     log::debug("PluginContainer::registerPlugin() called with a non IPlugin QObject.");
     return nullptr;
+  }
+
+  // The managed-game pointer is selected only after plugin discovery, so the
+  // existing isEnabled()/startPlugins() checks are too late to prevent init()
+  // side effects. Use the instance's configured game name and, only when the
+  // rule is active, the plugin's declared master before publishing this object
+  // anywhere in the container. Master metadata that is unavailable before
+  // init() remains fail-open and is covered by the later runtime check.
+  if (!compatibilityPreflighted) {
+    const auto decision = preInitCompatibility(pluginObj, filepath);
+    if (!decision.nameAvailable) {
+      return nullptr;
+    }
+    if (decision.block) {
+      reportCompatibilityBlock(plugin, decision.pluginName, *decision.block);
+      return nullptr;
+    }
   }
 
   // If we already a plugin with this name:
@@ -945,6 +1039,40 @@ std::vector<QObject*> PluginContainer::loadProxied(const QString& filepath,
               .arg(proxy->name()));
     }
 
+    // IPluginProxy owns one identifier as a unit. Preflight the complete batch
+    // before registering or initializing any candidate so a blocked root cannot
+    // leave accepted siblings tied to the same Python module generation.
+    QSet<QObject*> uniqueMatchingPlugins;
+    for (QObject* candidate : matchingPlugins) {
+      if (candidate != nullptr) {
+        uniqueMatchingPlugins.insert(candidate);
+      }
+    }
+
+    QSet<QObject*> compatibilityPreflightedObjects;
+    for (QObject* candidate : matchingPlugins) {
+      if (candidate == nullptr) {
+        continue;
+      }
+      if (auto* plugin = qobject_cast<IPlugin*>(candidate)) {
+        const auto decision = preInitCompatibility(plugin, filepath);
+        if (decision.nameAvailable) {
+          compatibilityPreflightedObjects.insert(candidate);
+        }
+        if (decision.block) {
+          reportCompatibilityBlock(candidate, decision.pluginName,
+                                   *decision.block);
+          PluginCompatibility::retireRejectedProxiedBatch(
+              uniqueMatchingPlugins,
+              [&] { proxy->unload(filepath); });
+          log::debug(
+              "proxied identifier '{}' was rejected by compatibility policy",
+              QDir::toNativeSeparators(filepath));
+          return {};
+        }
+      }
+    }
+
     // We are going to group plugin by names and "fix" them later:
     std::map<QString, std::vector<IPlugin*>> proxiedByNames;
 
@@ -959,7 +1087,11 @@ std::vector<QObject*> PluginContainer::loadProxied(const QString& filepath,
         continue;
       }
 
-      if (IPlugin* proxied = registerPlugin(proxiedPlugin, filepath, proxy); proxied) {
+      if (IPlugin* proxied =
+              registerPlugin(proxiedPlugin, filepath, proxy,
+                             compatibilityPreflightedObjects.contains(
+                                 proxiedPlugin));
+          proxied) {
         log::debug("loaded plugin '{}@{}' from '{}' - [{}]", proxied->name(),
                    proxied->version().canonicalString(),
                    QFileInfo(filepath).fileName(),
@@ -996,6 +1128,7 @@ std::vector<QObject*> PluginContainer::loadProxied(const QString& filepath,
         }
       }
     }
+
     log::debug("finished proxied candidate '{}' via proxy '{}': {} plugin(s) loaded",
               QDir::toNativeSeparators(filepath), proxy->name(),
               proxiedPlugins.size());
@@ -1046,6 +1179,15 @@ QObject* PluginContainer::loadQtPlugin(const QString& filepath)
                  implementedInterfaces(plugin).join(", "));
       m_PluginLoaders.push_back(pluginLoader.release());
       return object;
+    } else if (object->property(CompatibilityBlockedProperty).toBool()) {
+      log::debug("plugin '{}' was rejected by compatibility policy", filepath);
+      if (!pluginLoader->unload()) {
+        log::debug("rejected plugin '{}' could not be unloaded immediately: {}",
+                   filepath, pluginLoader->errorString());
+        // Retain the loader so unloadPlugins() makes a final orderly attempt;
+        // QPluginLoader destruction alone neither unloads nor deletes instance().
+        m_PluginLoaders.push_back(pluginLoader.release());
+      }
     } else {
       m_FailedPlugins.push_back(filepath);
       log::warn("plugin '{}' failed to load (may be outdated)", filepath);

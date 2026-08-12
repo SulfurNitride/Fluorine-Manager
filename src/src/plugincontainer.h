@@ -2,6 +2,7 @@
 #define PLUGINCONTAINER_H
 
 #include "plugincallgate.h"
+#include "plugincompatibility.h"
 #include "previewgenerator.h"
 
 class OrganizerCore;
@@ -186,7 +187,8 @@ public:
   static QStringList pluginInterfaces();
 
 public:
-  PluginContainer(OrganizerCore* organizer);
+  PluginContainer(OrganizerCore* organizer,
+                  QString configuredGameName = {});
   ~PluginContainer() override;
 
   /**
@@ -231,6 +233,11 @@ public:
     typename boost::fusion::result_of::at_key<const PluginMap, T>::type temp =
         boost::fusion::at_key<T>(m_Plugins);
     return temp;
+  }
+
+  bool preInitCompatibilityMatches(const QString& resolvedGameName) const
+  {
+    return m_CompatibilityRegistration.matchesGame(resolvedGameName);
   }
 
   /**
@@ -498,11 +505,24 @@ private:
    */
   bool initPlugin(MOBase::IPlugin* plugin, MOBase::IPluginProxy* proxy, bool skipInit);
 
+  struct PreInitCompatibilityDecision
+  {
+    QString pluginName;
+    std::optional<PluginCompatibility::Block> block;
+    bool nameAvailable{false};
+  };
+
+  PreInitCompatibilityDecision
+  preInitCompatibility(MOBase::IPlugin* plugin, const QString& filepath);
+  void reportCompatibilityBlock(QObject* object, const QString& pluginName,
+                                const PluginCompatibility::Block& block);
+
   void registerGame(MOBase::IPluginGame* game);
   void unregisterGame(MOBase::IPluginGame* game);
 
   MOBase::IPlugin* registerPlugin(QObject* pluginObj, const QString& fileName,
-                                  MOBase::IPluginProxy* proxy);
+                                  MOBase::IPluginProxy* proxy,
+                                  bool compatibilityPreflighted = false);
 
   // Core organizer, can be null (e.g. on first MO2 startup).
   OrganizerCore* m_Organizer;
@@ -525,6 +545,9 @@ private:
   std::vector<QPluginLoader*> m_PluginLoaders;
 
   PreviewGenerator m_PreviewGenerator;
+
+  PluginCompatibility::RegistrationPolicy m_CompatibilityRegistration;
+  QSet<QString> m_ReportedCompatibilityBlocks;
 
   QFile m_PluginsCheck;
 

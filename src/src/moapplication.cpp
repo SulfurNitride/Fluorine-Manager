@@ -431,7 +431,14 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
   tt.start("MOApplication::doOneRun() plugins");
   log::debug("initializing plugins");
 
-  m_plugins = std::make_unique<PluginContainer>(m_core.get());
+  // Compatibility rules that must prevent IPlugin::init() cannot wait for
+  // OrganizerCore::setManagedGame(), which happens after plugin discovery.
+  // The instance setting is already available and is the authoritative hint
+  // for this startup generation.
+  const QString configuredGameName =
+      m_settings->game().name().value_or(QString());
+  m_plugins =
+      std::make_unique<PluginContainer>(m_core.get(), configuredGameName);
   m_plugins->loadPlugins();
   log::debug("all plugins loaded");
 
@@ -442,6 +449,22 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
     return *r;
   }
   log::debug("setupInstanceLoop done");
+
+  // Repair can replace a stale configured game after the plugin generation
+  // has already been admitted. If that changes whether pre-init rules apply,
+  // persist the repaired identity and start a fresh generation rather than
+  // keeping plugins excluded (or initialized) under the obsolete hint.
+  const QString resolvedGameName = m_instance->gamePlugin()->gameName();
+  if (!m_plugins->preInitCompatibilityMatches(resolvedGameName)) {
+    log::info("managed game changed from '{}' to '{}' during instance repair; "
+              "restarting plugin discovery with the resolved compatibility policy",
+              configuredGameName, resolvedGameName);
+    if (m_settings->finishUpdatesWithoutMigration() != QSettings::NoError) {
+      log::error("failed to persist repaired game identity before plugin restart");
+      return 1;
+    }
+    return RestartExitCode;
+  }
 
   if (m_instance->isPortable()) {
     log::debug("this is a portable instance");
