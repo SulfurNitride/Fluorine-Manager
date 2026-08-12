@@ -1,6 +1,7 @@
 #include "protonlauncher.h"
 
 #include "fluorinepaths.h"
+#include "fontconfigsetup.h"
 #include "processlifetime.h"
 #include "rootprocesscompletion.h"
 #include "steamdetection.h"
@@ -20,7 +21,8 @@
 
 namespace
 {
-// Restore the pre-launcher environment for child processes (Proton, Wine).
+// Restore the pre-launcher environment for child processes (Proton, Wine, and
+// direct/native launches).
 // The fluorine-manager launcher script saves FLUORINE_ORIG_* before
 // modifying PATH, LD_LIBRARY_PATH, etc., so game processes get a clean
 // host environment without the bundled-library paths leaking through.
@@ -70,6 +72,7 @@ void cleanFluorineEnv(QProcessEnvironment& env)
   restoreOrStrip("PATH", "FLUORINE_ORIG_PATH", env);
   restoreOrStrip("XDG_DATA_DIRS", "FLUORINE_ORIG_XDG_DATA_DIRS", env);
   restoreOrStrip("QT_PLUGIN_PATH", "FLUORINE_ORIG_QT_PLUGIN_PATH", env);
+  FontconfigSetup::restoreCallerEnvironment(env);
 
   MOBase::log::debug("cleanFluorineEnv: {} (LD_LIBRARY_PATH='{}')",
                      hasOrigVars ? "restored from FLUORINE_ORIG_*" : "pattern-strip fallback",

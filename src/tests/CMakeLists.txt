@@ -43,6 +43,30 @@ add_test(
 )
 
 # ---------------------------------------------------------------------------
+# Early packaged/read-only fontconfig setup tests
+# ---------------------------------------------------------------------------
+add_executable(test_fontconfigsetup EXCLUDE_FROM_ALL
+    test_fontconfigsetup.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/fontconfigsetup.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/fontconfig_resource.qrc
+)
+set_target_properties(test_fontconfigsetup PROPERTIES
+    AUTOMOC OFF
+    AUTORCC ON
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_fontconfigsetup PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_fontconfigsetup PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_fontconfigsetup COMMAND test_fontconfigsetup)
+
+# ---------------------------------------------------------------------------
 # TES3 metadata and OpenMW Player stub parsing tests
 # ---------------------------------------------------------------------------
 add_executable(test_esptk_tes3 EXCLUDE_FROM_ALL
@@ -614,7 +638,8 @@ set_tests_properties(test_python_module_switch PROPERTIES
 
 # Register a "fluorine-tests" umbrella target that builds every test exe.
 add_custom_target(fluorine-tests
-    DEPENDS test_esptk_tes3 test_bsatk_extraction
+    DEPENDS test_fontconfigsetup
+            test_esptk_tes3 test_bsatk_extraction
             test_plugincompatibility test_pluginregistrationpolicy
             test_pluginrefreshcoalescing
             test_settingsmigration test_processlifetime

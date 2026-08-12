@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/fluorine/fontconfig">
+        <file alias="fonts.conf">../../data/fontconfig/fonts.conf</file>
+    </qresource>
+</RCC>
