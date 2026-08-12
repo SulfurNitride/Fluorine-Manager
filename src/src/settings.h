@@ -951,7 +951,6 @@ public:
   // untrustworthy. Prevent its destructor from retrying any pending write
   // while the application performs a fail-stop shutdown.
   void suppressWritesForFailedRollback() noexcept;
-  bool failedRollbackWritesDrained() const noexcept;
 
   // Captures/restores an interactive edit as one transaction. This allows an
   // accepted Settings dialog to be rolled back if its required restart is
@@ -1073,7 +1072,6 @@ public:
   // Reject every process-global mutation after an incomplete interactive
   // rollback while tracked launches drain toward fail-stop termination.
   static void suppressWritesForFailedRollback() noexcept;
-  static bool failedRollbackWritesDrained() noexcept;
 
   // resets anything that the user can disable
   static void resetDialogs();

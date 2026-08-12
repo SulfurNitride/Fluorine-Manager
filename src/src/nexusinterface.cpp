@@ -417,40 +417,11 @@ void NexusInterface::suppressRequestAdmissionForFailedRollback() noexcept
   m_RequestsSuppressed.store(true, std::memory_order_release);
   try {
     // QObject disconnection is thread-safe and does not mutate request storage.
-    // Close every outward callback before the long drain so an already-active
-    // reply cannot reenter plugin/UI code while new work is suppressed.
+    // Close every outward callback so an already-active reply cannot reenter
+    // plugin/UI code while new work is suppressed.
     QObject::disconnect(this, nullptr, nullptr, nullptr);
   } catch (...) {
     // Request admission remains terminally closed.
-  }
-}
-
-void NexusInterface::cancelSuppressedRequestsForFailedRollback() noexcept
-{
-  suppressRequestAdmissionForFailedRollback();
-  try {
-    // QNetworkReply::abort() can emit finished synchronously on this thread;
-    // repeat outward disconnection defensively before destructive cancellation.
-    QObject::disconnect(this, nullptr, nullptr, nullptr);
-    m_RequestQueue.clear();
-
-    for (auto& request : m_ActiveRequest) {
-      if (request.m_Timeout != nullptr) {
-        request.m_Timeout->stop();
-        QObject::disconnect(request.m_Timeout, nullptr, this, nullptr);
-        request.m_Timeout->deleteLater();
-        request.m_Timeout = nullptr;
-      }
-      if (request.m_Reply != nullptr) {
-        QObject::disconnect(request.m_Reply, nullptr, this, nullptr);
-        request.m_Reply->abort();
-        request.m_Reply->deleteLater();
-        request.m_Reply = nullptr;
-      }
-    }
-    m_ActiveRequest.clear();
-  } catch (...) {
-    // Admission remains terminally closed even if best-effort cancellation fails.
   }
 }
 

@@ -344,7 +344,8 @@ private:
 
   Executable* getSelectedExecutable();
 
-  void failStopAfterSettingsRollback();
+  [[noreturn]] void failStopAfterSettingsRollback(const QString& title,
+                                                   const QString& message);
 
 private slots:
   void updateWindowTitle(const APIUserAccount& user);

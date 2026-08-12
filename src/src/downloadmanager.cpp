@@ -291,6 +291,12 @@ DownloadManager::~DownloadManager()
   m_ByID.clear();
 }
 
+void DownloadManager::suppressAdmissionForFailedRollback() noexcept
+{
+  m_AdmissionSuppressed.store(true, std::memory_order_release);
+  m_TimeoutTimer.stop();
+}
+
 void DownloadManager::setParentWidget(QWidget* w)
 {
   m_ParentWidget = w;
@@ -349,75 +355,6 @@ void DownloadManager::pauseAll()
       QThread::msleep(100);
     }
   }
-}
-
-void DownloadManager::suppressOperationAdmissionForFailedRollback() noexcept
-{
-  m_OperationContext.suppressAdmissionForFailedRollback();
-  m_TimeoutTimer.stop();
-}
-
-bool DownloadManager::failedRollbackMutationsDrained() const noexcept
-{
-  return m_OperationContext.mutationsDrainedForFailedRollback();
-}
-
-void DownloadManager::cancelOperationsForFailedRollback() noexcept
-{
-  // This runs only after failedRollbackMutationsDrained(). Disconnect before
-  // aborting so QNetworkReply cannot synchronously enter ordinary finalization,
-  // which writes the unfinished archive and its metadata. Already queued slot
-  // deliveries are rejected by the closed mutation barrier.
-  m_OperationContext.suppressAdmissionForFailedRollback();
-  m_TimeoutTimer.stop();
-  m_DirWatcher.blockSignals(true);
-  QCoreApplication::removePostedEvents(this, QEvent::MetaCall);
-
-  m_RequestIDs.clear();
-  m_PendingDownloads.clear();
-
-  for (DownloadInfo* info : m_ActiveDownloads) {
-    if (info == nullptr) {
-      continue;
-    }
-
-    if (QNetworkReply* reply =
-            download_operation::retireReply(info->m_Reply)) {
-      QObject::disconnect(reply, nullptr, this, nullptr);
-      if (reply->isRunning()) {
-        reply->abort();
-      }
-      reply->close();
-      reply->deleteLater();
-    }
-
-    info->m_Output.close();
-    if (info->m_State < STATE_READY) {
-      // Direct assignment is intentional: setState(PAUSED) writes metadata
-      // and emits plugin callbacks, both forbidden after phase one.
-      info->m_State = STATE_PAUSED;
-    }
-    info->m_Operation.reset();
-  }
-}
-
-bool DownloadManager::failedRollbackOperationsDrained() const noexcept
-{
-  if (!m_OperationContext.operationsDrainedForFailedRollback() ||
-      !m_RequestIDs.empty() || !m_PendingDownloads.empty()) {
-    return false;
-  }
-
-  for (const DownloadInfo* info : m_ActiveDownloads) {
-    if (info == nullptr) {
-      continue;
-    }
-    if (info->m_Operation.has_value() || info->m_Output.isOpen() ||
-        (info->m_Reply != nullptr && info->m_Reply->isRunning())) {
-      return false;
-    }
-  }
-  return true;
 }
 
 void DownloadManager::setOutputDirectory(const QString& outputDirectory,
@@ -681,9 +618,7 @@ bool DownloadManager::addDownload(QNetworkReply* reply, const QStringList& URLs,
                                   int fileID, const ModRepositoryFileInfo* fileInfo,
                                   std::optional<unsigned int> reservedID)
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  auto operation = m_OperationContext.beginOperationIfAllowed();
-  if (!mutation || !operation) {
+  if (m_AdmissionSuppressed.load(std::memory_order_acquire)) {
     if (reply != nullptr) {
       QObject::disconnect(reply, nullptr, this, nullptr);
       if (reply->isRunning()) {
@@ -697,7 +632,6 @@ bool DownloadManager::addDownload(QNetworkReply* reply, const QStringList& URLs,
   // download invoked from an already open network reply (i.e. download link in the
   // browser)
   DownloadInfo* newDownload = DownloadInfo::createNew(fileInfo, URLs, reservedID);
-  newDownload->m_Operation.emplace(std::move(operation));
 
   QString baseName = fileName;
   if (!fileInfo->fileName.isEmpty()) {
@@ -757,7 +691,7 @@ bool DownloadManager::startDownload(QNetworkReply* reply, DownloadInfo* newDownl
                                     bool resume)
 {
   if (QNetworkReply* previous =
-          download_operation::retireReply(newDownload->m_Reply);
+          download_reply::retire(newDownload->m_Reply);
       previous != nullptr && previous != reply) {
     QObject::disconnect(previous, nullptr, this, nullptr);
     if (previous->isRunning()) {
@@ -789,7 +723,7 @@ bool DownloadManager::startDownload(QNetworkReply* reply, DownloadInfo* newDownl
                     .arg(newDownload->m_Output.fileName())
                     .arg(newDownload->m_Output.errorString()));
     QNetworkReply* retired =
-        download_operation::retireReply(newDownload->m_Reply);
+        download_reply::retire(newDownload->m_Reply);
     if (retired != nullptr) {
       QObject::disconnect(retired, nullptr, this, nullptr);
       if (retired->isRunning()) {
@@ -868,8 +802,7 @@ bool DownloadManager::startDownload(QNetworkReply* reply, DownloadInfo* newDownl
 
 void DownloadManager::addNXMDownload(const QString& url)
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  if (!mutation) {
+  if (m_AdmissionSuppressed.load(std::memory_order_acquire)) {
     return;
   }
 
@@ -990,15 +923,10 @@ void DownloadManager::addNXMDownload(const QString& url)
     }
   }
 
-  auto operation = m_OperationContext.beginOperationIfAllowed();
-  if (!operation) {
-    return;
-  }
-
   emit aboutToUpdate();
 
-  m_PendingDownloads.push_back(PendingDownload{
-      apiGameName, nxmInfo.modId(), nxmInfo.fileId(), std::move(operation)});
+  m_PendingDownloads.push_back(
+      PendingDownload{apiGameName, nxmInfo.modId(), nxmInfo.fileId()});
 
   emit update(-1);
   emit downloadAdded();
@@ -1206,11 +1134,6 @@ void DownloadManager::pauseDownload(int index)
 
 void DownloadManager::resumeDownload(int index)
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  if (!mutation) {
-    return;
-  }
-
   if ((index < 0) || (index >= m_ActiveDownloads.size())) {
     reportError(tr("resume: invalid download index %1").arg(index));
     return;
@@ -1222,26 +1145,11 @@ void DownloadManager::resumeDownload(int index)
 
 void DownloadManager::resumeDownloadInt(int index)
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  if (!mutation) {
-    return;
-  }
-
   if ((index < 0) || (index >= m_ActiveDownloads.size())) {
     reportError(tr("resume (int): invalid download index %1").arg(index));
     return;
   }
   DownloadInfo* info = m_ActiveDownloads[index];
-
-  bool acquiredOperation = false;
-  if (!info->m_Operation.has_value()) {
-    auto operation = m_OperationContext.beginOperationIfAllowed();
-    if (!operation) {
-      return;
-    }
-    info->m_Operation.emplace(std::move(operation));
-    acquiredOperation = true;
-  }
 
   // Check for finished download;
   if (info->m_TotalSize <= info->m_Output.size() && info->m_Reply != nullptr &&
@@ -1262,9 +1170,6 @@ void DownloadManager::resumeDownloadInt(int index)
     }
     if ((info->m_Urls.empty()) ||
         ((info->m_Urls.size() == 1) && (info->m_Urls[0].size() == 0))) {
-      if (acquiredOperation) {
-        info->m_Operation.reset();
-      }
       emit showMessage(
           tr("No known download urls. Sorry, this download can't be resumed."));
       return;
@@ -1293,8 +1198,6 @@ void DownloadManager::resumeDownloadInt(int index)
         tag::rolling_window::window_size = 200);
     log::debug("resume at {} bytes", info->m_ResumePos);
     startDownload(m_NexusInterface->getAccessManager()->get(request), info, true);
-  } else if (acquiredOperation) {
-    info->m_Operation.reset();
   }
   emit update(index);
 }
@@ -1310,11 +1213,6 @@ DownloadManager::DownloadInfo* DownloadManager::downloadInfoByID(unsigned int id
 
 void DownloadManager::queryInfo(int index)
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  if (!mutation) {
-    return;
-  }
-
   if ((index < 0) || (index >= m_ActiveDownloads.size())) {
     reportError(tr("query: invalid download index %1").arg(index));
     return;
@@ -1375,23 +1273,11 @@ void DownloadManager::queryInfo(int index)
     }
   }
   info->m_ReQueried = true;
-  if (!info->m_Operation.has_value()) {
-    auto operation = m_OperationContext.beginOperationIfAllowed();
-    if (!operation) {
-      return;
-    }
-    info->m_Operation.emplace(std::move(operation));
-  }
   setState(info, STATE_FETCHINGMODINFO);
 }
 
 void DownloadManager::queryInfoMd5(int index, bool askIfNotFound)
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  if (!mutation) {
-    return;
-  }
-
   if ((index < 0) || (index >= m_ActiveDownloads.size())) {
     reportError(tr("query: invalid download index %1").arg(index));
     return;
@@ -1450,13 +1336,6 @@ void DownloadManager::queryInfoMd5(int index, bool askIfNotFound)
   info->m_Hash          = hash.result();
   info->m_ReQueried     = true;
   info->m_AskIfNotFound = askIfNotFound;
-  if (!info->m_Operation.has_value()) {
-    auto operation = m_OperationContext.beginOperationIfAllowed();
-    if (!operation) {
-      return;
-    }
-    info->m_Operation.emplace(std::move(operation));
-  }
   setState(info, STATE_FETCHINGMODINFO_MD5);
 }
 
@@ -1875,11 +1754,6 @@ QString DownloadManager::getFileNameFromNetworkReply(QNetworkReply* reply)
 void DownloadManager::setState(DownloadManager::DownloadInfo* info,
                                DownloadManager::DownloadState state)
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  if (!mutation) {
-    return;
-  }
-
   int row = 0;
   for (int i = 0; i < m_ActiveDownloads.size(); ++i) {
     if (m_ActiveDownloads[i] == info) {
@@ -1939,11 +1813,6 @@ void DownloadManager::setState(DownloadManager::DownloadInfo* info,
     break;
   }
 
-  if (state == STATE_PAUSED || state == STATE_ERROR || state == STATE_CANCELED ||
-      state == STATE_READY || state == STATE_INSTALLED ||
-      state == STATE_UNINSTALLED) {
-    info->m_Operation.reset();
-  }
   emit stateChanged(row, state);
 }
 
@@ -1964,11 +1833,6 @@ DownloadManager::DownloadInfo* DownloadManager::findDownload(QObject* reply,
 
 void DownloadManager::downloadProgress(qint64 bytesReceived, qint64 bytesTotal)
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  if (!mutation) {
-    return;
-  }
-
   if (bytesTotal == 0) {
     return;
   }
@@ -2018,11 +1882,6 @@ void DownloadManager::downloadProgress(qint64 bytesReceived, qint64 bytesTotal)
 
 void DownloadManager::downloadReadyRead()
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  if (!mutation) {
-    return;
-  }
-
   try {
     writeData(findDownload(this->sender()));
   } catch (const std::bad_alloc&) {
@@ -2032,11 +1891,6 @@ void DownloadManager::downloadReadyRead()
 
 void DownloadManager::createMetaFile(DownloadInfo* info)
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  if (!mutation) {
-    return;
-  }
-
   // Avoid triggering refreshes from DirWatcher
   ScopedDisableDirWatcher const scopedDirWatcher(this);
 
@@ -2076,11 +1930,6 @@ void DownloadManager::createMetaFile(DownloadInfo* info)
 void DownloadManager::nxmDescriptionAvailable(QString, int, QVariant userData,
                                               QVariant resultData, int requestID)
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  if (!mutation) {
-    return;
-  }
-
   std::set<int>::iterator const idIter = m_RequestIDs.find(requestID);
   if (idIter == m_RequestIDs.end()) {
     return;
@@ -2115,11 +1964,6 @@ void DownloadManager::nxmDescriptionAvailable(QString, int, QVariant userData,
 void DownloadManager::nxmFilesAvailable(QString, int, QVariant userData,
                                         QVariant resultData, int requestID)
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  if (!mutation) {
-    return;
-  }
-
   std::set<int>::iterator const idIter = m_RequestIDs.find(requestID);
   if (idIter == m_RequestIDs.end()) {
     return;
@@ -2245,11 +2089,6 @@ void DownloadManager::nxmFileInfoAvailable(QString gameName, int modID, int file
                                            QVariant userData, QVariant resultData,
                                            int requestID)
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  if (!mutation) {
-    return;
-  }
-
   std::set<int>::iterator const idIter = m_RequestIDs.find(requestID);
   if (idIter == m_RequestIDs.end()) {
     return;
@@ -2331,11 +2170,6 @@ bool ServerByPreference(const ServerList::container& preferredServers,
 
 int DownloadManager::startDownloadURLs(const QStringList& urls)
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  if (!mutation) {
-    return -1;
-  }
-
   // Reserve the download ID up front so the caller (plugin via IOrganizer)
   // gets the canonical ID rather than a stale m_ActiveDownloads index.
   const unsigned int reservedID = DownloadInfo::newDownloadID();
@@ -2351,11 +2185,6 @@ int DownloadManager::startDownloadURLWithMeta(const QString& url, const QString&
                                               const QString& version,
                                               const QString& source)
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  if (!mutation) {
-    return -1;
-  }
-
   const unsigned int reservedID = DownloadInfo::newDownloadID();
   ModRepositoryFileInfo info;
   info.name       = name;
@@ -2371,11 +2200,6 @@ int DownloadManager::startDownloadURLWithMeta(const QString& url, const QString&
 int DownloadManager::startDownloadNexusFile(const QString& gameName, int modID,
                                             int fileID)
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  if (!mutation) {
-    return -1;
-  }
-
   int const newID = m_ActiveDownloads.size();
   addNXMDownload(
       QString("nxm://%1/mods/%2/files/%3").arg(gameName).arg(modID).arg(fileID));
@@ -2435,11 +2259,6 @@ void DownloadManager::nxmDownloadURLsAvailable(QString gameName, int modID, int 
                                                QVariant userData, QVariant resultData,
                                                int requestID)
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  if (!mutation) {
-    return;
-  }
-
   using namespace boost::placeholders;
 
   std::set<int>::iterator const idIter = m_RequestIDs.find(requestID);
@@ -2476,11 +2295,6 @@ void DownloadManager::nxmDownloadURLsAvailable(QString gameName, int modID, int 
 void DownloadManager::nxmFileInfoFromMd5Available(QString gameName, QVariant userData,
                                                   QVariant resultData, int requestID)
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  if (!mutation) {
-    return;
-  }
-
   std::set<int>::iterator const idIter = m_RequestIDs.find(requestID);
   if (idIter == m_RequestIDs.end()) {
     return;
@@ -2603,11 +2417,6 @@ void DownloadManager::nxmRequestFailed(QString gameName, int modID, int fileID,
                                        QVariant userData, int requestID, int errorCode,
                                        const QString& errorString)
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  if (!mutation) {
-    return;
-  }
-
   std::set<int>::iterator const idIter = m_RequestIDs.find(requestID);
   if (idIter == m_RequestIDs.end()) {
     return;
@@ -2665,11 +2474,6 @@ void DownloadManager::nxmRequestFailed(QString gameName, int modID, int fileID,
 
 void DownloadManager::downloadFinished(int index)
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  if (!mutation) {
-    return;
-  }
-
   DownloadInfo* info;
   if (index > 0)
     info = m_ActiveDownloads[index];
@@ -2686,7 +2490,7 @@ void DownloadManager::downloadFinished(int index)
       if (reply == nullptr || info->m_Reply.data() != reply) {
         return;
       }
-      download_operation::retireReply(info->m_Reply);
+      download_reply::retire(info->m_Reply);
       QObject::disconnect(reply, nullptr, this, nullptr);
       reply->close();
       reply->deleteLater();
@@ -2818,11 +2622,6 @@ void DownloadManager::downloadFinished(int index)
 
 void DownloadManager::downloadError(QNetworkReply::NetworkError error)
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  if (!mutation) {
-    return;
-  }
-
   if (error != QNetworkReply::OperationCanceledError) {
     QNetworkReply* reply = qobject_cast<QNetworkReply*>(sender());
     log::warn("{} ({})",
@@ -2833,11 +2632,6 @@ void DownloadManager::downloadError(QNetworkReply::NetworkError error)
 
 void DownloadManager::metaDataChanged()
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  if (!mutation) {
-    return;
-  }
-
   int index = 0;
 
   DownloadInfo* info = findDownload(this->sender(), &index);
@@ -2871,11 +2665,6 @@ void DownloadManager::metaDataChanged()
 
 void DownloadManager::directoryChanged(const QString&)
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  if (!mutation) {
-    return;
-  }
-
   if (DownloadManager::m_DirWatcherDisabler == 0)
     refreshList();
 }
@@ -2887,11 +2676,6 @@ void DownloadManager::managedGameChanged(MOBase::IPluginGame const* managedGame)
 
 void DownloadManager::checkDownloadTimeout()
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  if (!mutation) {
-    return;
-  }
-
   for (int i = 0; i < m_ActiveDownloads.size(); ++i) {
     DownloadInfo* info = m_ActiveDownloads[i];
     if (info->m_State != STATE_DOWNLOADING || info->m_Reply == nullptr ||
@@ -2930,11 +2714,6 @@ void DownloadManager::checkDownloadTimeout()
 
 void DownloadManager::writeData(DownloadInfo* info)
 {
-  auto mutation = m_OperationContext.enterMutationIfAllowed();
-  if (!mutation) {
-    return;
-  }
-
   if (info != nullptr && info->m_Reply != nullptr) {
     const QByteArray data = info->m_Reply->readAll();
     const qint64 requested = data.size();

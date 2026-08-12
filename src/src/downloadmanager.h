@@ -20,7 +20,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #ifndef DOWNLOADMANAGER_H
 #define DOWNLOADMANAGER_H
 
-#include "downloadoperationcontext.h"
+#include "downloadreplylifetime.h"
 #include "serverinfo.h"
 #include <QElapsedTimer>
 #include <QFile>
@@ -42,6 +42,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <boost/signals2.hpp>
 #include <idownloadmanager.h>
 #include <modrepositoryfileinfo.h>
+#include <atomic>
 #include <optional>
 #include <set>
 #include <vector>
@@ -120,10 +121,6 @@ private:
 
     bool m_Hidden{false};
 
-    // Present only while this entry owns live network/API work. Ordinary
-    // ready/paused entries remain in the list without keeping fail-stop open.
-    std::optional<DownloadOperationContext::OperationLease> m_Operation;
-
     static DownloadInfo* createNew(const MOBase::ModRepositoryFileInfo* fileInfo,
                                    const QStringList& URLs,
                                    std::optional<unsigned int> reservedID = {});
@@ -182,6 +179,8 @@ public:
   explicit DownloadManager(NexusInterface* nexusInterface, QObject* parent);
 
   ~DownloadManager() override;
+
+  void suppressAdmissionForFailedRollback() noexcept;
 
   void setParentWidget(QWidget* w);
 
@@ -455,13 +454,6 @@ public:  // IDownloadManager interface:
 
   void pauseAll();
 
-  // Terminal rollback is deliberately split into a nonblocking admission
-  // phase and a destructive post-drain phase. See DownloadOperationContext.
-  void suppressOperationAdmissionForFailedRollback() noexcept;
-  bool failedRollbackMutationsDrained() const noexcept;
-  void cancelOperationsForFailedRollback() noexcept;
-  bool failedRollbackOperationsDrained() const noexcept;
-
 Q_SIGNALS:
 
   void aboutToUpdate();
@@ -631,7 +623,6 @@ private:
     QString gameName;
     int modID;
     int fileID;
-    DownloadOperationContext::OperationLease operation;
   };
 
   static const int AUTOMATIC_RETRIES = 3;
@@ -641,9 +632,6 @@ private:
 
   OrganizerCore* m_OrganizerCore;
   QWidget* m_ParentWidget{nullptr};
-
-  // Declared before every lease owner so it outlives their destruction.
-  DownloadOperationContext m_OperationContext;
 
   std::vector<PendingDownload> m_PendingDownloads;
 
@@ -680,6 +668,7 @@ private:
   MOBase::IPluginGame const* m_ManagedGame;
 
   QTimer m_TimeoutTimer;
+  std::atomic_bool m_AdmissionSuppressed{false};
 };
 
 class ScopedDisableDirWatcher

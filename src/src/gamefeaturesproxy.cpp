@@ -8,7 +8,6 @@
 #include <dataarchives.h>
 #include <gameplugins.h>
 #include <localsavegames.h>
-#include <pluginlistlifecycle.h>
 
 #include <algorithm>
 
@@ -164,42 +163,6 @@ private:
   std::shared_ptr<OrganizerProxyMutationGate> m_MutationGate;
 };
 
-class PluginListLifecycleProxy final : public MOBase::PluginListLifecycle,
-                                       public ProxiedGameFeature
-{
-public:
-  PluginListLifecycleProxy(
-      std::shared_ptr<MOBase::PluginListLifecycle> proxied,
-      std::shared_ptr<OrganizerProxyMutationGate> mutationGate)
-      : m_Proxied(std::move(proxied)), m_MutationGate(std::move(mutationGate))
-  {}
-
-  void refreshStarted() override
-  {
-    m_MutationGate->runIfAllowed([&] { m_Proxied->refreshStarted(); });
-  }
-  void refreshCompleted() override
-  {
-    m_MutationGate->runIfAllowed([&] { m_Proxied->refreshCompleted(); });
-  }
-  void refreshFailed() override
-  {
-    m_MutationGate->runIfAllowed([&] { m_Proxied->refreshFailed(); });
-  }
-  void flushPendingWrites(MOBase::IPluginList* plugins) override
-  {
-    m_MutationGate->runIfAllowed(
-        [&] { m_Proxied->flushPendingWrites(plugins); });
-  }
-  std::shared_ptr<MOBase::GameFeature> proxiedFeature() const override
-  {
-    return m_Proxied;
-  }
-
-private:
-  std::shared_ptr<MOBase::PluginListLifecycle> m_Proxied;
-  std::shared_ptr<OrganizerProxyMutationGate> m_MutationGate;
-};
 }  // namespace
 
 GameFeaturesProxy::GameFeaturesProxy(OrganizerProxy* coreProxy,
@@ -313,13 +276,6 @@ GameFeaturesProxy::gameFeatureImplAllowed(std::type_info const& info) const
       return nullptr;
     }
     proxy = std::make_shared<LocalSavegamesProxy>(typed, gate);
-  } else if (info == typeid(MOBase::PluginListLifecycle)) {
-    const auto typed =
-        std::dynamic_pointer_cast<MOBase::PluginListLifecycle>(feature);
-    if (!typed) {
-      return nullptr;
-    }
-    proxy = std::make_shared<PluginListLifecycleProxy>(typed, gate);
   } else {
     return feature;
   }

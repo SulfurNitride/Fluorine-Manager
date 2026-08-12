@@ -25,6 +25,7 @@ add_custom_target(prefix-safety-tests DEPENDS test_fluorineconfigownership)
 add_executable(test_protonsettingsedit EXCLUDE_FROM_ALL
     test_protonsettingsedit.cpp
     ${CMAKE_SOURCE_DIR}/src/src/protonsettingsedit.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/settingsmigration.cpp
     ${CMAKE_SOURCE_DIR}/src/src/fluorineconfig.cpp
     ${CMAKE_SOURCE_DIR}/src/src/fluorinepaths.cpp
 )

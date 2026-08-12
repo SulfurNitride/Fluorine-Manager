@@ -85,7 +85,6 @@ def _install_import_stubs() -> None:
 
     mobase = sys.modules.setdefault("mobase", types.ModuleType("mobase"))
     mobase.GamePlugins = type("GamePlugins", (), {})
-    mobase.PluginListLifecycle = type("PluginListLifecycle", (), {})
     mobase.IPluginTool = type("IPluginTool", (), {})
     mobase.IPlugin = type("IPlugin", (), {})
     mobase.IOrganizer = object
@@ -609,7 +608,7 @@ class OpenMWGamePluginsTests(unittest.TestCase):
         self.assertIn("Unavailable.omwgame.esp", _DEBUG_MESSAGES[0])
         self.assertEqual(_WARNING_MESSAGES, [])
 
-    def test_legacy_refresh_reuses_provisional_inventory_without_logging_it(
+    def test_legacy_read_only_query_defers_inventory_diagnostics_until_hydration(
         self,
     ) -> None:
         game_directory = self.directory / "game"
@@ -633,9 +632,6 @@ class OpenMWGamePluginsTests(unittest.TestCase):
             self.assertEqual(_WARNING_MESSAGES, [])
             self.assertEqual(scan.call_count, 0)
             self.adapter.readPluginLists(plugins)
-            self.assertEqual(_DEBUG_MESSAGES, [])
-            self.assertEqual(_INFO_MESSAGES, [])
-            self.adapter.pluginListRefreshCompleted()
 
         self.assertEqual(scan.call_count, 1)
         self.assertEqual(len(_DEBUG_MESSAGES), 1)
@@ -688,7 +684,6 @@ class OpenMWGamePluginsTests(unittest.TestCase):
             self.assertEqual(_WARNING_MESSAGES, [])
 
             self.adapter.readPluginLists(plugins)
-            self.adapter.pluginListRefreshCompleted()
 
         self.assertEqual(len(_DEBUG_MESSAGES), 1)
         self.assertIn("Ignored wrapper alias", _DEBUG_MESSAGES[0])
@@ -728,8 +723,6 @@ class OpenMWGamePluginsTests(unittest.TestCase):
             self.assertEqual(scan.call_count, 0)
             plugins = _FakePluginList(["Morrowind.esm", "New.omwaddon"])
             self.adapter.readPluginLists(plugins)
-            self.assertEqual(_INFO_MESSAGES, [])
-            self.adapter.pluginListRefreshCompleted()
 
         self.assertEqual(scan.call_count, 1)
         state = openmw_cfg.read_selection_state(
@@ -747,108 +740,13 @@ class OpenMWGamePluginsTests(unittest.TestCase):
             ],
         )
 
-    def test_outer_refresh_failure_discards_staged_diagnostics(self) -> None:
-        game_directory = self.directory / "game"
-        data_files = game_directory / "Data Files"
-        data_files.mkdir(parents=True, exist_ok=True)
-        (data_files / "Native.omwaddon.esp").write_bytes(b"wrapper")
-        self.organizer = _Organizer(
-            self.directory, game_directory=game_directory
-        )
-        self.adapter = game_plugins.OpenMWGamePlugins(self.organizer)
-        plugins = _FakePluginList(["Morrowind.esm", "Native.omwaddon"])
-
-        self.adapter.pluginListRefreshStarted()
-        self.adapter.readPluginLists(plugins)
-        self.assertEqual(_DEBUG_MESSAGES, [])
-        self.assertEqual(_INFO_MESSAGES, [])
-
-        self.adapter.pluginListRefreshFailed()
-        self.adapter.pluginListRefreshStarted()
-        self.adapter.readPluginLists(plugins)
-        self.assertEqual(_DEBUG_MESSAGES, [])
-        self.assertEqual(_INFO_MESSAGES, [])
-        self.adapter.pluginListRefreshCompleted()
-
-        self.assertEqual(len(_DEBUG_MESSAGES), 1)
-        self.assertEqual(
-            _INFO_MESSAGES,
-            [
-                "OpenMW plugin inventory: ignored 1 legacy alias "
-                "(1 omwaddon)"
-            ],
-        )
-
-    def test_nested_successes_log_their_own_diagnostics(self) -> None:
-        data_files = self.directory / "game" / "Data Files"
-        outer_wrapper = data_files / "Outer.omwaddon.esp"
-        inner_wrapper = data_files / "Inner.omwscripts.esp"
-        outer_wrapper.write_bytes(b"wrapper")
-
-        self.adapter.pluginListRefreshStarted()
-        self.adapter.readPluginLists(
-            _FakePluginList(["Morrowind.esm", "Outer.omwaddon"])
-        )
-        outer_wrapper.rename(inner_wrapper)
-        self.adapter.pluginListRefreshStarted()
-        self.adapter.readPluginLists(
-            _FakePluginList(["Morrowind.esm", "Inner.omwscripts"])
-        )
-
-        self.adapter.pluginListRefreshCompleted()
-        self.adapter.pluginListRefreshCompleted()
-
-        self.assertEqual(len(_INFO_MESSAGES), 2)
-        self.assertIn("1 omwscripts", _INFO_MESSAGES[0])
-        self.assertIn("1 omwaddon", _INFO_MESSAGES[1])
-        self.assertEqual(len(_DEBUG_MESSAGES), 2)
-        self.assertIn("Inner.omwscripts.esp", _DEBUG_MESSAGES[0])
-        self.assertIn("Outer.omwaddon.esp", _DEBUG_MESSAGES[1])
-
-    def test_failed_nested_refresh_does_not_replace_outer_diagnostics(
-        self,
-    ) -> None:
-        data_files = self.directory / "game" / "Data Files"
-        outer_wrapper = data_files / "Outer.omwaddon.esp"
-        inner_wrapper = data_files / "Inner.omwscripts.esp"
-        outer_wrapper.write_bytes(b"wrapper")
-
-        self.adapter.pluginListRefreshStarted()
-        self.adapter.readPluginLists(
-            _FakePluginList(["Morrowind.esm", "Outer.omwaddon"])
-        )
-        outer_wrapper.rename(inner_wrapper)
-        self.adapter.pluginListRefreshStarted()
-        self.adapter.readPluginLists(
-            _FakePluginList(["Morrowind.esm", "Inner.omwscripts"])
-        )
-
-        self.adapter.pluginListRefreshFailed()
-        self.adapter.pluginListRefreshCompleted()
-
-        self.assertEqual(
-            _INFO_MESSAGES,
-            [
-                "OpenMW plugin inventory: ignored 1 legacy alias "
-                "(1 omwaddon)"
-            ],
-        )
-        self.assertEqual(len(_DEBUG_MESSAGES), 1)
-        self.assertIn("Outer.omwaddon.esp", _DEBUG_MESSAGES[0])
-
-    def test_successful_zero_alias_refresh_emits_one_info_aggregate(self) -> None:
+    def test_successful_zero_alias_refresh_is_silent(self) -> None:
         plugins = _FakePluginList(["Morrowind.esm"])
 
         self.adapter.readPluginLists(plugins)
         self.assertEqual(_INFO_MESSAGES, [])
-        self.adapter.pluginListRefreshCompleted()
 
-        self.assertEqual(
-            _INFO_MESSAGES,
-            ["OpenMW plugin inventory: ignored 0 legacy aliases"],
-        )
-
-    def test_lifecycle_flush_persists_save_before_refresh_completion(
+    def test_explicit_flush_persists_pending_save(
         self,
     ) -> None:
         plugins = _FakePluginList(
@@ -856,7 +754,6 @@ class OpenMWGamePluginsTests(unittest.TestCase):
             active=("Morrowind.esm", "Extra.esp"),
         )
         self.adapter.readPluginLists(plugins)
-        self.adapter.pluginListRefreshCompleted()
         plugins.setState(
             "Extra.esp", sys.modules["mobase"].PluginState.INACTIVE
         )
@@ -868,8 +765,7 @@ class OpenMWGamePluginsTests(unittest.TestCase):
             ["Morrowind.esm", "Extra.esp"],
         )
 
-        lifecycle = game_plugins.OpenMWPluginListLifecycle(self.adapter)
-        lifecycle.flushPendingWrites(plugins)
+        self.adapter.flushPendingWrites(plugins)
 
         self.assertIsNone(self.adapter._pending)
         self.assertEqual(
@@ -941,12 +837,8 @@ class OpenMWGamePluginsTests(unittest.TestCase):
             "_scan_inventory_directories",
             wraps=self.adapter._scan_inventory_directories,
         ) as scan:
-            self.adapter.pluginListRefreshStarted()
             self.adapter.readPluginLists(plugins)
-            self.adapter.pluginListRefreshCompleted()
-            self.adapter.pluginListRefreshStarted()
             self.adapter.readPluginLists(plugins)
-            self.adapter.pluginListRefreshCompleted()
 
         self.assertEqual(scan.call_count, 2)
         self.assertEqual(len(_DEBUG_MESSAGES), 1)
@@ -983,16 +875,12 @@ class OpenMWGamePluginsTests(unittest.TestCase):
             "_scan_inventory_directories",
             wraps=self.adapter._scan_inventory_directories,
         ) as scan:
-            self.adapter.pluginListRefreshStarted()
             self.adapter.readPluginLists(_FakePluginList(["Morrowind.esm"]))
-            self.adapter.pluginListRefreshCompleted()
 
             active = True
-            self.adapter.pluginListRefreshStarted()
             self.adapter.readPluginLists(
                 _FakePluginList(["Morrowind.esm", "New.omwaddon"])
             )
-            self.adapter.pluginListRefreshCompleted()
 
         self.assertEqual(scan.call_count, 2)
         state = openmw_cfg.read_selection_state(
@@ -1004,7 +892,6 @@ class OpenMWGamePluginsTests(unittest.TestCase):
         self.assertEqual(
             _INFO_MESSAGES,
             [
-                "OpenMW plugin inventory: ignored 0 legacy aliases",
                 "OpenMW plugin inventory: ignored 1 legacy alias "
                 "(1 omwaddon)",
             ],
@@ -1118,7 +1005,7 @@ class OpenMWGamePluginsTests(unittest.TestCase):
             ["Game.bsa", "A.bsa", "Overwrite.bsa"],
         )
 
-    def test_inventory_root_scan_failure_is_not_cached(self) -> None:
+    def test_unreadable_inventory_root_is_skipped_and_retried(self) -> None:
         game_directory = self.directory / "game"
         data_files = game_directory / "Data Files"
         mod_directory = self.directory / "mod"
@@ -1151,14 +1038,22 @@ class OpenMWGamePluginsTests(unittest.TestCase):
             return original_iterdir(path)
 
         with mock.patch.object(Path, "iterdir", fail_once):
-            with self.assertRaisesRegex(OSError, "inventory root"):
-                self.adapter._scan_profile_inventory(paths)
+            self.assertEqual(
+                self.adapter._scan_profile_inventory(paths)[1], ["Game.bsa"]
+            )
+            self.assertTrue(
+                any(
+                    "could not enumerate" in message
+                    and str(mod_directory) in message
+                    for message in _WARNING_MESSAGES
+                )
+            )
             self.assertEqual(
                 self.adapter._scan_profile_inventory(paths)[1],
                 ["Game.bsa", "Present.bsa"],
             )
 
-    def test_missing_game_data_root_is_not_cached(self) -> None:
+    def test_missing_game_data_root_is_skipped_and_retried(self) -> None:
         game_directory = self.directory / "game"
         self.organizer = _Organizer(
             self.directory, game_directory=game_directory
@@ -1168,8 +1063,13 @@ class OpenMWGamePluginsTests(unittest.TestCase):
         self.adapter = game_plugins.OpenMWGamePlugins(self.organizer)
         paths = self.adapter._paths()
 
-        with self.assertRaisesRegex(OSError, "game data"):
-            self.adapter._scan_profile_inventory(paths)
+        self.assertEqual(self.adapter._scan_profile_inventory(paths), ([], []))
+        self.assertTrue(
+            any(
+                "root" in message and "is missing" in message
+                for message in _DEBUG_MESSAGES
+            )
+        )
 
         data_files.mkdir()
         (data_files / "Game.bsa").write_bytes(b"archive")
@@ -1177,7 +1077,7 @@ class OpenMWGamePluginsTests(unittest.TestCase):
             self.adapter._scan_profile_inventory(paths)[1], ["Game.bsa"]
         )
 
-    def test_inventory_mod_enumeration_failure_is_not_cached(self) -> None:
+    def test_mod_enumeration_failure_is_skipped_and_retried(self) -> None:
         game_directory = self.directory / "game"
         data_files = game_directory / "Data Files"
         mod_directory = self.directory / "mod"
@@ -1210,14 +1110,19 @@ class OpenMWGamePluginsTests(unittest.TestCase):
         self.adapter = game_plugins.OpenMWGamePlugins(self.organizer)
         paths = self.adapter._paths()
 
-        with self.assertRaisesRegex(RuntimeError, "mod inventory"):
-            self.adapter._scan_profile_inventory(paths)
+        self.assertEqual(self.adapter._scan_profile_inventory(paths), ([], []))
+        self.assertTrue(
+            any(
+                "could not enumerate active mods" in message
+                for message in _WARNING_MESSAGES
+            )
+        )
         self.assertEqual(
             self.adapter._scan_profile_inventory(paths)[1], ["Present.bsa"]
         )
         self.organizer.modList = original_mod_list
 
-    def test_inventory_per_mod_failure_is_not_cached(self) -> None:
+    def test_per_mod_failure_skips_only_that_mod_and_is_retried(self) -> None:
         game_directory = self.directory / "game"
         data_files = game_directory / "Data Files"
         first_directory = self.directory / "first-mod"
@@ -1259,183 +1164,19 @@ class OpenMWGamePluginsTests(unittest.TestCase):
         self.adapter = game_plugins.OpenMWGamePlugins(self.organizer)
         paths = self.adapter._paths()
 
-        with self.assertRaisesRegex(RuntimeError, "Second"):
-            self.adapter._scan_profile_inventory(paths)
+        self.assertEqual(
+            self.adapter._scan_profile_inventory(paths)[1],
+            ["Game.bsa", "First.bsa"],
+        )
+        self.assertTrue(
+            any("active mod 'Second'" in message for message in _WARNING_MESSAGES)
+        )
         self.assertEqual(
             self.adapter._scan_profile_inventory(paths)[1],
             ["Game.bsa", "First.bsa", "Second.bsa"],
         )
 
-    def test_inventory_missing_active_mod_handle_fails_closed(self) -> None:
-        game_directory = self.directory / "game"
-        (game_directory / "Data Files").mkdir(parents=True, exist_ok=True)
-        self.organizer = _Organizer(
-            self.directory, game_directory=game_directory
-        )
-        self.organizer._mod_list = SimpleNamespace(
-            allModsByProfilePriority=lambda: ["Missing"],
-            state=lambda name: 1,
-            getMod=lambda name: (
-                None
-                if name == "Missing"
-                else self.organizer._overwrite_mod
-            ),
-        )
-        self.adapter = game_plugins.OpenMWGamePlugins(self.organizer)
-
-        with self.assertRaisesRegex(RuntimeError, "no mod handle"):
-            self.adapter._scan_profile_inventory(self.adapter._paths())
-
-    def test_inventory_missing_active_mod_root_is_not_cached(self) -> None:
-        game_directory = self.directory / "game"
-        data_files = game_directory / "Data Files"
-        mod_directory = self.directory / "mod"
-        data_files.mkdir(parents=True, exist_ok=True)
-        mod_directory.mkdir()
-        (mod_directory / "Present.bsa").write_bytes(b"archive")
-        self.organizer = _Organizer(
-            self.directory, game_directory=game_directory
-        )
-        self.organizer._mod_list = SimpleNamespace(
-            allModsByProfilePriority=lambda: ["Mod"],
-            state=lambda name: 1,
-            getMod=lambda name: (
-                SimpleNamespace(absolutePath=lambda: str(mod_directory))
-                if name == "Mod"
-                else self.organizer._overwrite_mod
-            ),
-        )
-        self.adapter = game_plugins.OpenMWGamePlugins(self.organizer)
-        paths = self.adapter._paths()
-        original_stat = Path.stat
-        inject_failure = True
-
-        def disappear_once(
-            path: Path, *args, **kwargs  # noqa: ANN002, ANN003
-        ):  # noqa: ANN202
-            if path == mod_directory and inject_failure:
-                raise FileNotFoundError("injected active root disappearance")
-            return original_stat(path, *args, **kwargs)
-
-        with mock.patch.object(Path, "stat", disappear_once):
-            with self.assertRaisesRegex(OSError, "active mod 'Mod'"):
-                self.adapter._scan_profile_inventory(paths)
-            inject_failure = False
-            self.assertEqual(
-                self.adapter._scan_profile_inventory(paths)[1],
-                ["Present.bsa"],
-            )
-
-    def test_inventory_active_mod_root_must_be_a_directory(self) -> None:
-        game_directory = self.directory / "game"
-        (game_directory / "Data Files").mkdir(parents=True, exist_ok=True)
-        mod_file = self.directory / "not-a-directory"
-        mod_file.write_bytes(b"not a mod root")
-        self.organizer = _Organizer(
-            self.directory, game_directory=game_directory
-        )
-        self.organizer._mod_list = SimpleNamespace(
-            allModsByProfilePriority=lambda: ["Mod"],
-            state=lambda name: 1,
-            getMod=lambda name: (
-                SimpleNamespace(absolutePath=lambda: str(mod_file))
-                if name == "Mod"
-                else self.organizer._overwrite_mod
-            ),
-        )
-        self.adapter = game_plugins.OpenMWGamePlugins(self.organizer)
-
-        with self.assertRaisesRegex(OSError, "not a directory"):
-            self.adapter._scan_profile_inventory(self.adapter._paths())
-
-    def test_inventory_overwrite_failure_is_not_cached(self) -> None:
-        game_directory = self.directory / "game"
-        data_files = game_directory / "Data Files"
-        overwrite_directory = self.directory / "overwrite"
-        data_files.mkdir(parents=True, exist_ok=True)
-        overwrite_directory.mkdir()
-        (overwrite_directory / "Overwrite.bsa").write_bytes(b"archive")
-        failed = False
-
-        def get_mod(name: str):  # noqa: ANN202
-            nonlocal failed
-            if name == "Overwrite" and not failed:
-                failed = True
-                raise RuntimeError("injected Overwrite failure")
-            if name == "Overwrite":
-                return SimpleNamespace(
-                    absolutePath=lambda: str(overwrite_directory)
-                )
-            return None
-
-        self.organizer = _Organizer(
-            self.directory, game_directory=game_directory
-        )
-        self.organizer._mod_list = SimpleNamespace(
-            allModsByProfilePriority=lambda: [],
-            state=lambda name: 0,
-            getMod=get_mod,
-        )
-        self.adapter = game_plugins.OpenMWGamePlugins(self.organizer)
-        paths = self.adapter._paths()
-
-        with self.assertRaisesRegex(RuntimeError, "Overwrite"):
-            self.adapter._scan_profile_inventory(paths)
-        self.assertEqual(
-            self.adapter._scan_profile_inventory(paths)[1],
-            ["Overwrite.bsa"],
-        )
-
-    def test_inventory_missing_advertised_overwrite_handle_fails_closed(
-        self,
-    ) -> None:
-        game_directory = self.directory / "game"
-        (game_directory / "Data Files").mkdir(parents=True, exist_ok=True)
-        self.organizer = _Organizer(
-            self.directory, game_directory=game_directory
-        )
-        self.organizer._mod_list = SimpleNamespace(
-            allModsByProfilePriority=lambda: [],
-            state=lambda name: 0,
-            getMod=lambda name: None,
-        )
-        self.adapter = game_plugins.OpenMWGamePlugins(self.organizer)
-
-        with self.assertRaisesRegex(RuntimeError, "no Overwrite handle"):
-            self.adapter._scan_profile_inventory(self.adapter._paths())
-
-    def test_inventory_game_directory_failure_is_not_cached(self) -> None:
-        game_directory = self.directory / "game"
-        data_files = game_directory / "Data Files"
-        data_files.mkdir(parents=True, exist_ok=True)
-        (data_files / "Game.bsa").write_bytes(b"archive")
-        self.organizer = _Organizer(
-            self.directory, game_directory=game_directory
-        )
-        original_game = self.organizer._game
-        failed = False
-
-        def game_directory_once():  # noqa: ANN202
-            nonlocal failed
-            if not failed:
-                failed = True
-                raise RuntimeError("injected game directory failure")
-            return original_game.gameDirectory()
-
-        self.organizer._game = SimpleNamespace(
-            primaryPlugins=original_game.primaryPlugins,
-            gameDirectory=game_directory_once,
-        )
-        self.adapter = game_plugins.OpenMWGamePlugins(self.organizer)
-        paths = self.adapter._paths()
-
-        with self.assertRaisesRegex(RuntimeError, "game data directory"):
-            self.adapter._scan_profile_inventory(paths)
-        self.assertEqual(
-            self.adapter._scan_profile_inventory(paths)[1], ["Game.bsa"]
-        )
-
-    def test_inventory_entry_scan_failure_is_not_cached(self) -> None:
+    def test_unreadable_inventory_entry_is_skipped_and_retried(self) -> None:
         game_directory = self.directory / "game"
         data_files = game_directory / "Data Files"
         data_files.mkdir(parents=True, exist_ok=True)
@@ -1457,36 +1198,10 @@ class OpenMWGamePluginsTests(unittest.TestCase):
             return original_stat(path, *args, **kwargs)
 
         with mock.patch.object(Path, "stat", fail_once):
-            with self.assertRaisesRegex(OSError, "inventory entry"):
-                self.adapter._scan_profile_inventory(paths)
-            self.assertEqual(
-                self.adapter._scan_profile_inventory(paths)[1],
-                ["Present.bsa"],
+            self.assertEqual(self.adapter._scan_profile_inventory(paths), ([], []))
+            self.assertTrue(
+                any("could not inspect" in message for message in _WARNING_MESSAGES)
             )
-
-    def test_inventory_root_disappearance_is_not_cached(self) -> None:
-        game_directory = self.directory / "game"
-        data_files = game_directory / "Data Files"
-        data_files.mkdir(parents=True, exist_ok=True)
-        (data_files / "Present.bsa").write_bytes(b"archive")
-        self.organizer = _Organizer(
-            self.directory, game_directory=game_directory
-        )
-        self.adapter = game_plugins.OpenMWGamePlugins(self.organizer)
-        paths = self.adapter._paths()
-        original_iterdir = Path.iterdir
-        failed = False
-
-        def disappear_once(path: Path):  # noqa: ANN202
-            nonlocal failed
-            if path == data_files and not failed:
-                failed = True
-                raise FileNotFoundError("injected inventory root disappearance")
-            return original_iterdir(path)
-
-        with mock.patch.object(Path, "iterdir", disappear_once):
-            with self.assertRaisesRegex(OSError, "inventory root"):
-                self.adapter._scan_profile_inventory(paths)
             self.assertEqual(
                 self.adapter._scan_profile_inventory(paths)[1],
                 ["Present.bsa"],

@@ -306,8 +306,4 @@ void suppressWritesForFailedRollback() noexcept
   g_WriteBarrier.suppress();
 }
 
-bool failedRollbackWritesDrained() noexcept
-{
-  return g_WriteBarrier.suppressionDrained();
-}
 }  // namespace ProtonSettingsEdit

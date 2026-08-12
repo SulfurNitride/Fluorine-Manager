@@ -149,30 +149,13 @@ target_link_libraries(test_pluginregistrationpolicy PRIVATE
 add_test(NAME test_pluginregistrationpolicy COMMAND test_pluginregistrationpolicy)
 
 # ---------------------------------------------------------------------------
-# Directory-refresh plugin-list coalescing tests
-# ---------------------------------------------------------------------------
-add_executable(test_pluginrefreshcoalescing EXCLUDE_FROM_ALL
-    test_pluginrefreshcoalescing.cpp
-)
-set_target_properties(test_pluginrefreshcoalescing PROPERTIES
-    AUTOMOC OFF
-    CXX_STANDARD 23
-    CXX_STANDARD_REQUIRED ON
-)
-target_include_directories(test_pluginrefreshcoalescing PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/src
-)
-target_link_libraries(test_pluginrefreshcoalescing PRIVATE
-    GTest::gtest
-    GTest::gtest_main
-)
-add_test(NAME test_pluginrefreshcoalescing COMMAND test_pluginrefreshcoalescing)
-
-# ---------------------------------------------------------------------------
 # Product-independent settings migration schema tests
 # ---------------------------------------------------------------------------
 add_executable(test_settingsmigration EXCLUDE_FROM_ALL
     test_settingsmigration.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/categoryfileparser.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/categorypersistence.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/settingsmigration.cpp
 )
 set_target_properties(test_settingsmigration PROPERTIES
     AUTOMOC OFF
@@ -641,7 +624,6 @@ add_custom_target(fluorine-tests
     DEPENDS test_fontconfigsetup
             test_esptk_tes3 test_bsatk_extraction
             test_plugincompatibility test_pluginregistrationpolicy
-            test_pluginrefreshcoalescing
             test_settingsmigration test_processlifetime
             test_launchcoordination test_gamefeatureownership
             test_slroperationcontext test_pluginreloadpolicy test_launchlifecycle

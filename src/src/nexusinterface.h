@@ -235,13 +235,8 @@ public:
    */
   void cleanup();
 
-  // Terminal fail-stop phase 1: atomically reject new API work. Safe while an
-  // already-admitted plugin request is still returning from request*().
+  // Terminal fail-stop: atomically reject new API work and outward callbacks.
   void suppressRequestAdmissionForFailedRollback() noexcept;
-
-  // Terminal fail-stop phase 2, called only after plugin mutations drain:
-  // prevent result callbacks and abandon queued/active requests.
-  void cancelSuppressedRequestsForFailedRollback() noexcept;
 
   /**
    * @brief clear webcache and cookies associated with this access manager

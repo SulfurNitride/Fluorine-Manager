@@ -38,11 +38,6 @@ inline bool isSafeSerializedName(const QString& name)
   return true;
 }
 
-inline bool shouldRemove(bool categoryStillExists)
-{
-  return !categoryStillExists;
-}
-
 inline std::optional<int> nextLocalCategoryId(int durableHighWater,
                                               const std::set<int>& usedIds)
 {

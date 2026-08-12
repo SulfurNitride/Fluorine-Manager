@@ -590,11 +590,6 @@ void suppressSlrOperationsForFailedRollback() noexcept
   operationTracker().suppressAndCancel();
 }
 
-bool slrOperationsDrainedForFailedRollback() noexcept
-{
-  return operationTracker().drained();
-}
-
 bool slrOperationAdmissionSuppressed() noexcept
 {
   return operationTracker().admissionSuppressed();

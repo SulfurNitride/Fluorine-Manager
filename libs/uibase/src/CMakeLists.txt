@@ -89,7 +89,6 @@ set(game_features_header
 	../include/uibase/game_features/localsavegames.h
 	../include/uibase/game_features/moddatachecker.h
 	../include/uibase/game_features/moddatacontent.h
-	../include/uibase/game_features/pluginlistlifecycle.h
 	../include/uibase/game_features/savegameinfo.h
 	../include/uibase/game_features/scriptextender.h
 	../include/uibase/game_features/unmanagedmods.h

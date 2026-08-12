@@ -182,19 +182,6 @@ void Settings::suppressWritesForFailedRollback() noexcept
   QCoreApplication::removePostedEvents(&m_Settings, QEvent::UpdateRequest);
 }
 
-bool Settings::failedRollbackWritesDrained() const noexcept
-{
-  if (!m_WriteBarrier.suppressionDrained()) {
-    return false;
-  }
-
-  // An admitted setter may have queued a fresh deferred sync after phase-one
-  // suppression removed the earlier event. Zero active writers is the safe
-  // point to discard that final event before destructive teardown.
-  QCoreApplication::removePostedEvents(&m_Settings, QEvent::UpdateRequest);
-  return true;
-}
-
 bool Settings::beginUpdates()
 {
   if (m_UpdateLock) {
@@ -396,8 +383,7 @@ QSettings::Status Settings::completeUpdates(
 
 QSettings::Status Settings::finishUpdatesWithoutMigration()
 {
-  if (!SettingsMigration::mayFinishWithoutMigration(
-          m_UpdateLock != nullptr, m_UpdateProcessingStarted)) {
+  if (!m_UpdateLock || m_UpdateProcessingStarted) {
     return QSettings::AccessError;
   }
 
@@ -3027,11 +3013,6 @@ bool GlobalSettings::verifyNexusCredentials(
 void GlobalSettings::suppressWritesForFailedRollback() noexcept
 {
   g_GlobalSettingsWriteBarrier.suppress();
-}
-
-bool GlobalSettings::failedRollbackWritesDrained() noexcept
-{
-  return g_GlobalSettingsWriteBarrier.suppressionDrained();
 }
 
 void GlobalSettings::resetDialogs()

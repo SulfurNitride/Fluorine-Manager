@@ -35,12 +35,20 @@ void expectNoInheritedMigrations(int schema)
     EXPECT_FALSE(SettingsMigration::requiresMigration(schema, target));
   }
 }
+
+int resolveSchema(const std::optional<int>& storedSchema,
+                  const QVersionNumber& legacyProductVersion)
+{
+  const std::optional<QVariant> stored =
+      storedSchema ? std::optional<QVariant>(*storedSchema) : std::nullopt;
+  return SettingsMigration::resolveStoredSettingsSchema(
+      stored, QVariant(legacyProductVersion.toString()));
+}
 }  // namespace
 
 TEST(SettingsMigration, ImportingMo252StartsAtCurrentSchema)
 {
-  const auto schema = SettingsMigration::resolveSchemaVersion(
-      std::nullopt, QVersionNumber(2, 5, 2));
+  const auto schema = resolveSchema(std::nullopt, QVersionNumber(2, 5, 2));
 
   EXPECT_EQ(schema, SettingsMigration::CurrentSchema);
   expectNoInheritedMigrations(schema);
@@ -50,13 +58,13 @@ TEST(SettingsMigration, Fluorine033To034KeepsInheritedMigrationsComplete)
 {
   // The first run imports an upstream MO2 instance and persists this schema
   // alongside product version 0.3.3.
-  const int persistedSchema = SettingsMigration::resolveSchemaVersion(
-      std::nullopt, QVersionNumber(2, 5, 2));
+  const int persistedSchema =
+      resolveSchema(std::nullopt, QVersionNumber(2, 5, 2));
 
   // The 0.3.4 run resolves the explicit schema before considering the previous
   // 0.3.3 product version.
-  const int schemaOnUpgrade = SettingsMigration::resolveSchemaVersion(
-      persistedSchema, QVersionNumber(0, 3, 3));
+  const int schemaOnUpgrade =
+      resolveSchema(persistedSchema, QVersionNumber(0, 3, 3));
 
   EXPECT_EQ(schemaOnUpgrade, SettingsMigration::CurrentSchema);
   expectNoInheritedMigrations(schemaOnUpgrade);
@@ -64,8 +72,7 @@ TEST(SettingsMigration, Fluorine033To034KeepsInheritedMigrationsComplete)
 
 TEST(SettingsMigration, PreSchemaFluorineInstanceIsTreatedAsMigrated)
 {
-  const auto schema = SettingsMigration::resolveSchemaVersion(
-      std::nullopt, QVersionNumber(0, 3, 3));
+  const auto schema = resolveSchema(std::nullopt, QVersionNumber(0, 3, 3));
 
   EXPECT_EQ(schema, SettingsMigration::CurrentSchema);
   expectNoInheritedMigrations(schema);
@@ -90,13 +97,6 @@ TEST(SettingsMigration, CreationHelperWritesAuthoritativeNewInstanceProvenance)
           SettingsMigration::NewInstanceProvenance,
       stored.contains(SettingsMigration::SettingsSchemaKey),
       stored.contains(SettingsMigration::ProductVersionKey)));
-}
-
-TEST(SettingsMigration, SetupOnlyTransactionMustPrecedeMigrationProcessing)
-{
-  EXPECT_TRUE(SettingsMigration::mayFinishWithoutMigration(true, false));
-  EXPECT_FALSE(SettingsMigration::mayFinishWithoutMigration(false, false));
-  EXPECT_FALSE(SettingsMigration::mayFinishWithoutMigration(true, true));
 }
 
 TEST(SettingsMigration, SetupOnlyWritesAreSyncedAndVerifiedWithoutMarkers)
@@ -291,8 +291,7 @@ TEST(SettingsMigration, NewIniDirectoryAliasesShareOneTransactionLock)
 
 TEST(SettingsMigration, OldUpstreamVersionStillRunsRequiredMigrations)
 {
-  const auto schema = SettingsMigration::resolveSchemaVersion(
-      std::nullopt, QVersionNumber(2, 1, 2));
+  const auto schema = resolveSchema(std::nullopt, QVersionNumber(2, 1, 2));
 
   EXPECT_EQ(schema, SettingsMigration::BaselineSchema);
   EXPECT_TRUE(SettingsMigration::requiresMigration(
@@ -304,8 +303,7 @@ TEST(SettingsMigration, OldUpstreamVersionStillRunsRequiredMigrations)
 TEST(SettingsMigration, ExplicitFutureSchemaIsNeverDowngradedByInference)
 {
   const int futureSchema = SettingsMigration::CurrentSchema + 1;
-  EXPECT_EQ(SettingsMigration::resolveSchemaVersion(
-                futureSchema, QVersionNumber(0, 3, 3)),
+  EXPECT_EQ(resolveSchema(futureSchema, QVersionNumber(0, 3, 3)),
             futureSchema);
 }
 
@@ -725,12 +723,6 @@ TEST(SettingsMigration, LiveMigrationLockDoesNotExpireByAge)
   contender.setStaleLockTime(SettingsMigration::SettingsLockStaleMs);
   EXPECT_FALSE(contender.tryLock(0));
   owner.unlock();
-}
-
-TEST(SettingsMigration, MigrationTransactionIsRequiredForStartup)
-{
-  EXPECT_TRUE(SettingsMigration::startupMayContinue(true));
-  EXPECT_FALSE(SettingsMigration::startupMayContinue(false));
 }
 
 TEST(SettingsMigration, InspectionCopyUsesTheInstanceDirectory)
@@ -1212,7 +1204,12 @@ TEST(SettingsMigration, DistinctMalformedFilesReceiveDistinctBackups)
     EXPECT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
     EXPECT_EQ(file.write(data), data.size());
     file.close();
-    return SettingsMigration::preserveCorruptSettingsFile(path);
+    QLockFile transactionLock(SettingsMigration::settingsLockPath(path));
+    if (!transactionLock.tryLock()) {
+      return std::optional<QString>{};
+    }
+    return SettingsMigration::quarantineCorruptSettingsFileUnlocked(path,
+                                                                     data);
   };
 
   const QByteArray first = QByteArrayLiteral("first-corruption");
@@ -1601,8 +1598,6 @@ TEST(CategoryAssignmentPolicy, ImportedIdsHaveStableNonCollidingSemantics)
   EXPECT_FALSE(CategoryAssignmentPolicy::importedCategoryId(0));
   EXPECT_FALSE(CategoryAssignmentPolicy::importedCategoryId(
       std::numeric_limits<int>::max()));
-  EXPECT_FALSE(CategoryAssignmentPolicy::shouldRemove(true));
-  EXPECT_TRUE(CategoryAssignmentPolicy::shouldRemove(false));
   EXPECT_TRUE(CategoryAssignmentPolicy::isSafeSerializedName(
       QStringLiteral("Armour")));
   EXPECT_FALSE(CategoryAssignmentPolicy::isSafeSerializedName(

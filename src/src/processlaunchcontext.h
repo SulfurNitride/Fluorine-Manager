@@ -36,6 +36,47 @@ bool waitUntilIdle(IsBusy isBusy, WaitOnce waitOnce)
 class ProcessLaunchContextTracker
 {
 public:
+  class ConfigurationLease
+  {
+  public:
+    ConfigurationLease() = default;
+    ConfigurationLease(const ConfigurationLease&) = delete;
+    ConfigurationLease& operator=(const ConfigurationLease&) = delete;
+
+    ConfigurationLease(ConfigurationLease&& other) noexcept
+        : m_Tracker(std::exchange(other.m_Tracker, nullptr))
+    {}
+
+    ConfigurationLease& operator=(ConfigurationLease&& other) noexcept
+    {
+      if (this != &other) {
+        release();
+        m_Tracker = std::exchange(other.m_Tracker, nullptr);
+      }
+      return *this;
+    }
+
+    ~ConfigurationLease() { release(); }
+
+    explicit operator bool() const noexcept { return m_Tracker != nullptr; }
+
+  private:
+    explicit ConfigurationLease(ProcessLaunchContextTracker* tracker) noexcept
+        : m_Tracker(tracker)
+    {}
+
+    void release() noexcept
+    {
+      if (m_Tracker != nullptr) {
+        m_Tracker->releaseConfigurationLease();
+        m_Tracker = nullptr;
+      }
+    }
+
+    ProcessLaunchContextTracker* m_Tracker{nullptr};
+    friend class ProcessLaunchContextTracker;
+  };
+
   struct Launch
   {
     QString profileName;
@@ -61,6 +102,7 @@ public:
 
     std::lock_guard lock(m_Mutex);
     if (m_ReservationsSuppressed.load(std::memory_order_acquire) ||
+        m_ConfigurationLeaseActive ||
         token.isEmpty() || m_Launches.contains(token)) {
       return false;
     }
@@ -75,6 +117,22 @@ public:
 
     m_Launches.insert(token, Launch{profileName, ownsVfs, ownsVfs, false});
     return true;
+  }
+
+  ConfigurationLease tryAcquireConfigurationLease()
+  {
+    std::lock_guard lock(m_Mutex);
+    if (m_ReservationsSuppressed.load(std::memory_order_acquire) ||
+        m_ConfigurationLeaseActive) {
+      return {};
+    }
+
+    // Existing launches keep their normal lifetime and cleanup ownership, but
+    // reserve() rejects every new launch until the Settings transaction ends.
+    // This avoids imposing a broad, user-visible "no Settings while playing"
+    // restriction merely to make the rare rollback-failure path simpler.
+    m_ConfigurationLeaseActive = true;
+    return ConfigurationLease(this);
   }
 
   void suppressNewReservations() noexcept
@@ -244,8 +302,22 @@ public:
   }
 
 private:
+  void releaseConfigurationLease() noexcept
+  {
+    try {
+      std::lock_guard lock(m_Mutex);
+      m_ConfigurationLeaseActive = false;
+    } catch (...) {
+      // A mutex failure cannot be recovered safely. Keep launch admission
+      // closed rather than starting an application during uncertain Settings
+      // ownership.
+      m_ReservationsSuppressed.store(true, std::memory_order_release);
+    }
+  }
+
   mutable std::mutex m_Mutex;
   QHash<QString, Launch> m_Launches;
+  bool m_ConfigurationLeaseActive{false};
   std::atomic_bool m_ReservationsSuppressed{false};
 };
 

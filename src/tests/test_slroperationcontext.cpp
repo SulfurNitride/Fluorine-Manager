@@ -214,5 +214,4 @@ TEST(SlrOperationTrackerTest, ProcessWideSuppressionRejectsAllPublicCallers)
   EXPECT_FALSE(ensureXrandrInstalled({}, nullptr));
   EXPECT_FALSE(checkSlrUpdate().error.isEmpty());
   EXPECT_FALSE(downloadSlr(nullptr, nullptr).isEmpty());
-  EXPECT_TRUE(slrOperationsDrainedForFailedRollback());
 }

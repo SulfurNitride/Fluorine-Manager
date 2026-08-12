@@ -118,7 +118,6 @@ public:
   void cancelModlistWrite();
   void suppressWritesForFailedRollback() noexcept;
   static void suppressAllWritesForFailedRollback() noexcept;
-  static bool allWritesDrainedForFailedRollback() noexcept;
 
   /**
    * @brief test if this profile uses archive invalidation

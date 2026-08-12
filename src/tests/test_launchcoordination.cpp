@@ -1,5 +1,5 @@
 #include "afterrunrefreshqueue.h"
-#include "downloadoperationcontext.h"
+#include "downloadreplylifetime.h"
 #include "processlaunchcontext.h"
 #include "nexuscredentialstate.h"
 #include "nexusvalidationlifecycle.h"
@@ -17,7 +17,6 @@
 #include <QTemporaryDir>
 
 #include <atomic>
-#include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <stdexcept>
@@ -68,7 +67,7 @@ TEST(SettingsWriteBarrierTest, RetainedBackendIsNotDestroyedByOwnerTeardown)
   EXPECT_TRUE(flushed);
 }
 
-TEST(SettingsWriteBarrierTest, SuppressionClosesAdmissionWhileMutationDrains)
+TEST(SettingsWriteBarrierTest, SuppressionClosesNewAdmission)
 {
   SettingsWriteBarrier barrier;
   std::mutex mutex;
@@ -92,7 +91,6 @@ TEST(SettingsWriteBarrierTest, SuppressionClosesAdmissionWhileMutationDrains)
 
   barrier.suppress();
   EXPECT_TRUE(barrier.suppressed());
-  EXPECT_FALSE(barrier.suppressionDrained());
   EXPECT_FALSE(barrier.runIfAllowed([] {}));
 
   {
@@ -102,17 +100,17 @@ TEST(SettingsWriteBarrierTest, SuppressionClosesAdmissionWhileMutationDrains)
   condition.notify_all();
   mutation.join();
 
-  EXPECT_TRUE(barrier.suppressionDrained());
   EXPECT_FALSE(barrier.runIfAllowed([] {}));
 }
 
-TEST(SettingsWriteBarrierTest, SerializedSinkDrainsAdmittedWaitersBeforeFailStop)
+TEST(SettingsWriteBarrierTest, SerializedSinkDoesNotOverlapMutations)
 {
   SettingsWriteBarrier barrier(SettingsWriteBarrier::Concurrency::Serialized);
   std::mutex mutex;
   std::condition_variable condition;
   bool firstEntered  = false;
   bool releaseFirst  = false;
+  bool secondStarted = false;
   bool secondEntered = false;
 
   std::thread first([&] {
@@ -129,6 +127,11 @@ TEST(SettingsWriteBarrierTest, SerializedSinkDrainsAdmittedWaitersBeforeFailStop
   }
 
   std::thread second([&] {
+    {
+      const std::lock_guard lock(mutex);
+      secondStarted = true;
+      condition.notify_all();
+    }
     EXPECT_TRUE(barrier.runIfAllowed([&] {
       const std::lock_guard lock(mutex);
       secondEntered = true;
@@ -136,32 +139,14 @@ TEST(SettingsWriteBarrierTest, SerializedSinkDrainsAdmittedWaitersBeforeFailStop
     }));
   });
 
-  const auto admissionDeadline =
-      std::chrono::steady_clock::now() + std::chrono::seconds(2);
-  while (barrier.activeMutationCount() < 2 &&
-         std::chrono::steady_clock::now() < admissionDeadline) {
-    std::this_thread::yield();
-  }
-  if (barrier.activeMutationCount() < 2) {
-    {
-      const std::lock_guard lock(mutex);
-      releaseFirst = true;
-    }
-    condition.notify_all();
-    first.join();
-    second.join();
-    FAIL() << "second serialized mutation was not admitted";
-    return;
+  {
+    std::unique_lock lock(mutex);
+    condition.wait(lock, [&] { return secondStarted; });
+    EXPECT_FALSE(secondEntered);
   }
 
-  // The second mutation was admitted before suppression but is serialized
-  // behind the first. It must remain counted and complete before drain.
-  barrier.suppress();
-  EXPECT_FALSE(barrier.suppressionDrained());
-  EXPECT_FALSE(barrier.runIfAllowed([] {}));
   {
     const std::lock_guard lock(mutex);
-    EXPECT_FALSE(secondEntered);
     releaseFirst = true;
   }
   condition.notify_all();
@@ -169,7 +154,6 @@ TEST(SettingsWriteBarrierTest, SerializedSinkDrainsAdmittedWaitersBeforeFailStop
   first.join();
   second.join();
   EXPECT_TRUE(secondEntered);
-  EXPECT_TRUE(barrier.suppressionDrained());
 }
 
 TEST(SettingsWriteBarrierTest, ActiveMutationRejectsNestedTerminalFlow)
@@ -190,130 +174,23 @@ TEST(SettingsWriteBarrierTest, ActiveMutationRejectsNestedTerminalFlow)
     ASSERT_TRUE(barrier.runIfAllowed([&] {
       EXPECT_TRUE(SettingsWriteBarrier::currentThreadHasMutation());
     }));
-    EXPECT_FALSE(barrier.suppressionDrained());
   }));
 
   EXPECT_FALSE(terminalFlowEntered);
   EXPECT_FALSE(SettingsWriteBarrier::currentThreadHasMutation());
-  EXPECT_TRUE(barrier.suppressionDrained());
   EXPECT_FALSE(barrier.runIfAllowed([] {}));
 }
 
-TEST(SettingsWriteBarrierTest, FullDrainIncludesCurrentAndOtherThreads)
-{
-  SettingsWriteBarrier barrier;
-  std::mutex mutex;
-  std::condition_variable condition;
-  bool workerEntered = false;
-  bool releaseWorker = false;
-
-  ASSERT_TRUE(barrier.runIfAllowed([&] {
-    std::thread worker([&] {
-      EXPECT_TRUE(barrier.runIfAllowed([&] {
-        std::unique_lock lock(mutex);
-        workerEntered = true;
-        condition.notify_all();
-        condition.wait(lock, [&] { return releaseWorker; });
-      }));
-    });
-
-    {
-      std::unique_lock lock(mutex);
-      condition.wait(lock, [&] { return workerEntered; });
-    }
-
-    barrier.suppress();
-    EXPECT_FALSE(barrier.suppressionDrained());
-
-    {
-      const std::lock_guard lock(mutex);
-      releaseWorker = true;
-    }
-    condition.notify_all();
-    worker.join();
-
-    EXPECT_FALSE(barrier.suppressionDrained());
-  }));
-
-  EXPECT_TRUE(barrier.suppressionDrained());
-}
-
-TEST(DownloadOperationContextTest,
-     PhaseOneDrainsCallbacksWithoutWaitingForLiveOperation)
-{
-  DownloadOperationContext context;
-  auto operation = context.beginOperationIfAllowed();
-  ASSERT_TRUE(operation);
-  EXPECT_EQ(context.activeOperationCount(), 1u);
-
-  std::mutex mutex;
-  std::condition_variable condition;
-  bool callbackEntered = false;
-  bool releaseCallback = false;
-
-  std::thread callback([&] {
-    auto mutation = context.enterMutationIfAllowed();
-    ASSERT_TRUE(mutation);
-    std::unique_lock lock(mutex);
-    callbackEntered = true;
-    condition.notify_all();
-    condition.wait(lock, [&] { return releaseCallback; });
-  });
-
-  {
-    std::unique_lock lock(mutex);
-    condition.wait(lock, [&] { return callbackEntered; });
-  }
-
-  // Suppression is nonblocking even while an admitted callback is active.
-  context.suppressAdmissionForFailedRollback();
-  EXPECT_TRUE(context.admissionSuppressed());
-  EXPECT_FALSE(context.mutationsDrainedForFailedRollback());
-  EXPECT_FALSE(context.operationsDrainedForFailedRollback());
-  EXPECT_FALSE(context.beginOperationIfAllowed());
-  EXPECT_FALSE(context.enterMutationIfAllowed());
-
-  {
-    const std::lock_guard lock(mutex);
-    releaseCallback = true;
-  }
-  condition.notify_all();
-  callback.join();
-
-  // Phase two is now safe to abort the reply, but the operation lifetime still
-  // prevents exit until cancellation retires its lease.
-  EXPECT_TRUE(context.mutationsDrainedForFailedRollback());
-  EXPECT_FALSE(context.operationsDrainedForFailedRollback());
-  operation = DownloadOperationContext::OperationLease{};
-  EXPECT_TRUE(context.operationsDrainedForFailedRollback());
-}
-
-TEST(DownloadOperationContextTest, QueuedPersistenceCallbackIsRejectedAfterPhaseOne)
-{
-  DownloadOperationContext context;
-  int writes = 0;
-
-  context.suppressAdmissionForFailedRollback();
-  auto queuedCallback = context.enterMutationIfAllowed();
-  if (queuedCallback) {
-    ++writes;
-  }
-
-  EXPECT_EQ(writes, 0);
-  EXPECT_TRUE(context.mutationsDrainedForFailedRollback());
-  EXPECT_TRUE(context.operationsDrainedForFailedRollback());
-}
-
-TEST(DownloadOperationContextTest, CompletedReplyIsRetiredBeforePhaseTwo)
+TEST(DownloadReplyRetirementTest, CompletedReplyIsRetiredBeforeDeferredDeletion)
 {
   QPointer<QObject> trackedReply = new QObject;
-  QObject* deferredDelete = download_operation::retireReply(trackedReply);
+  QObject* deferredDelete = download_reply::retire(trackedReply);
 
   ASSERT_NE(deferredDelete, nullptr);
   EXPECT_TRUE(trackedReply.isNull());
 
-  // Simulate the event loop delivering deleteLater before fail-stop phase two.
-  // The owner no longer exposes a pointer for phase two to dereference.
+  // Simulate the event loop delivering deleteLater. The owner no longer
+  // exposes a pointer that a later callback could dereference.
   delete deferredDelete;
   EXPECT_TRUE(trackedReply.isNull());
 }
@@ -394,6 +271,43 @@ TEST(ProcessLaunchContextTrackerTest, NativeLaunchBlocksShutdownThroughCleanup)
 
   context.finishCompletion(QStringLiteral("native"));
   EXPECT_TRUE(context.activeLaunches().empty());
+}
+
+TEST(ProcessLaunchContextTrackerTest, ConfigurationLeaseBlocksOnlyNewLaunches)
+{
+  ProcessLaunchContextTracker context;
+
+  {
+    auto configuration = context.tryAcquireConfigurationLease();
+    ASSERT_TRUE(configuration);
+    EXPECT_FALSE(context.tryAcquireConfigurationLease());
+    EXPECT_FALSE(context.reserve(QStringLiteral("during-settings"),
+                                 QStringLiteral("Default"), false));
+
+    auto moved = std::move(configuration);
+    EXPECT_FALSE(configuration);
+    EXPECT_TRUE(moved);
+    EXPECT_FALSE(context.reserve(QStringLiteral("after-move"),
+                                 QStringLiteral("Default"), true));
+  }
+
+  ASSERT_TRUE(context.reserve(QStringLiteral("running"),
+                              QStringLiteral("Default"), false));
+  auto configuration = context.tryAcquireConfigurationLease();
+  ASSERT_TRUE(configuration);
+  EXPECT_FALSE(context.reserve(QStringLiteral("new-during-settings"),
+                               QStringLiteral("Default"), false));
+  EXPECT_EQ(context.activeCount(), 1);
+  context.abandon(QStringLiteral("running"));
+  configuration = {};
+  EXPECT_TRUE(context.tryAcquireConfigurationLease());
+}
+
+TEST(ProcessLaunchContextTrackerTest, FailStopRejectsConfigurationLease)
+{
+  ProcessLaunchContextTracker context;
+  context.suppressNewReservations();
+  EXPECT_FALSE(context.tryAcquireConfigurationLease());
 }
 
 TEST(ProcessLaunchContextTrackerTest, FailStopRejectsNewLaunchesButAllowsCleanup)

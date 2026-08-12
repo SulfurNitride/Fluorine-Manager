@@ -45,7 +45,6 @@
 #include <questionboxmemory.h>
 #include <uibase/game_features/dataarchives.h>
 #include <uibase/game_features/localsavegames.h>
-#include <uibase/game_features/pluginlistlifecycle.h>
 #include <uibase/game_features/scriptextender.h>
 #include <uibase/registry.h>
 #include <uibase/report.h>
@@ -690,18 +689,15 @@ void OrganizerCore::setUserInterface(IUserInterface* ui)
 void OrganizerCore::suppressPersistenceForFailedRollback() noexcept
 {
   m_PluginMutationBarrier->suppress();
-  m_DownloadManager.suppressOperationAdmissionForFailedRollback();
+  m_DownloadManager.suppressAdmissionForFailedRollback();
   m_ProcessLaunchContext.suppressNewReservations();
   suppressSlrOperationsForFailedRollback();
   m_PersistenceSuppressed = true;
   m_CurrentProfileSavedForShutdown = true;
   CategoryFactory::instance().suppressWritesForFailedRollback();
-  suppressModInfoPersistenceForFailedRollback();
+  ModInfo::suppressAllWritesForFailedRollback();
   Profile::suppressAllWritesForFailedRollback();
   m_Settings.suppressWritesForFailedRollback();
-  if (m_CurrentProfile != nullptr) {
-    m_CurrentProfile->suppressWritesForFailedRollback();
-  }
 }
 
 void OrganizerCore::cancelPersistenceWritersForFailedRollback() noexcept
@@ -715,39 +711,6 @@ void OrganizerCore::cancelPersistenceWritersForFailedRollback() noexcept
     // Admission was already closed by suppressPersistenceForFailedRollback;
     // fail-stop shutdown must never be interrupted by cleanup bookkeeping.
   }
-}
-
-void OrganizerCore::suppressModInfoPersistenceForFailedRollback() noexcept
-{
-  ModInfo::suppressAllWritesForFailedRollback();
-}
-
-bool OrganizerCore::failedRollbackMutationsDrained() const noexcept
-{
-  if (!m_PluginMutationBarrier->suppressionDrained() ||
-      !m_DownloadManager.failedRollbackMutationsDrained() ||
-      !CategoryFactory::instance().failedRollbackWritesDrained() ||
-      !m_Settings.failedRollbackWritesDrained() ||
-      !GlobalSettings::failedRollbackWritesDrained() ||
-      !Profile::allWritesDrainedForFailedRollback() ||
-      !slrOperationsDrainedForFailedRollback()) {
-    return false;
-  }
-
-  if (!ModInfo::allWritesDrained()) {
-    return false;
-  }
-  return true;
-}
-
-void OrganizerCore::cancelDownloadOperationsForFailedRollback() noexcept
-{
-  m_DownloadManager.cancelOperationsForFailedRollback();
-}
-
-bool OrganizerCore::failedRollbackDownloadOperationsDrained() const noexcept
-{
-  return m_DownloadManager.failedRollbackOperationsDrained();
 }
 
 void OrganizerCore::checkForUpdates()
@@ -2263,20 +2226,15 @@ void OrganizerCore::refreshESPList(bool force)
   onNextRefresh(
       [this, force] {
         TimeThis const tt("OrganizerCore::refreshESPList()");
-        const auto refreshAttempt = m_PluginRefreshCoalescing.begin(force);
-
         try {
           m_CurrentProfile->writeModlist();
 
           // clear list
           m_PluginList.refresh(m_CurrentProfile->name(), *m_DirectoryStructure,
                                m_CurrentProfile->getLockedOrderFileName(), force);
-          m_PluginRefreshCoalescing.complete(refreshAttempt, true);
         } catch (const std::exception& e) {
-          m_PluginRefreshCoalescing.complete(refreshAttempt, false);
           reportError(tr("Failed to refresh list of esps: %1").arg(e.what()));
         } catch (...) {
-          m_PluginRefreshCoalescing.complete(refreshAttempt, false);
           reportError(tr("Failed to refresh list of esps: unknown error"));
         }
       },
@@ -2630,33 +2588,12 @@ void OrganizerCore::onDirectoryRefreshed()
   }
 
   log::debug("running post refresh tasks");
-  const auto pluginRefreshesBeforeCallbacks =
-      m_PluginRefreshCoalescing.snapshot();
   m_OnNextRefreshCallbacks();
   m_OnNextRefreshCallbacks.disconnect_all_slots();
 
   if (m_CurrentProfile != nullptr) {
-    if (!m_PluginRefreshCoalescing.canSkipFallbackSince(
-            pluginRefreshesBeforeCallbacks)) {
-      log::debug("refreshing lists");
-      refreshLists();
-    } else {
-      // A queued refreshESPList() already succeeded against this new
-      // directory structure. Persist any save queued after that refresh before
-      // reporting directoryStructureReady.
-      if (auto lifecycle = gameFeatures().gameFeature<PluginListLifecycle>()) {
-        try {
-          lifecycle->flushPendingWrites(managedGameOrganizer()->pluginList());
-        } catch (const std::exception& e) {
-          reportError(
-              tr("Failed to flush pending plugin-list writes: %1").arg(e.what()));
-        }
-      }
-      if (m_DirectoryStructure->isPopulated()) {
-        log::debug("plugin list already refreshed; refreshing archives");
-        refreshBSAList();
-      }
-    }
+    log::debug("refreshing lists");
+    refreshLists();
   }
 
   // Complete only requests assigned to the generation that just finished.
@@ -3767,6 +3704,11 @@ bool OrganizerCore::reserveProcessLaunch(const QString& launchToken,
                                          bool ownsVfs)
 {
   return m_ProcessLaunchContext.reserve(launchToken, profileName, ownsVfs);
+}
+
+OrganizerCore::ConfigurationLease OrganizerCore::tryAcquireConfigurationLease()
+{
+  return m_ProcessLaunchContext.tryAcquireConfigurationLease();
 }
 
 void OrganizerCore::abandonProcessLaunch(const QString& launchToken)

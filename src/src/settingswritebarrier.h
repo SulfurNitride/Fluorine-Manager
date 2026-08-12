@@ -59,14 +59,12 @@ public:
           try {
             m_SerializationLock.unlock();
           } catch (...) {
-            // The mutation cannot be proven retired if its serialization
-            // lock did not release. Preserve both depth and active count so
-            // fail-stop remains closed rather than authorizing teardown.
+            // Preserve the recursive-depth marker rather than allowing a
+            // nested mutation to be mistaken for new top-level work.
             return;
           }
         }
         finishCurrentThreadMutation(m_Barrier);
-        m_Barrier->finishMutation();
         m_Barrier = nullptr;
       }
     }
@@ -93,28 +91,25 @@ public:
     }
 
     {
-      const std::lock_guard stateLock(m_StateMutex);
+      const std::lock_guard admissionLock(m_AdmissionMutex);
       if (!recursive && m_Suppressed.load(std::memory_order_acquire)) {
         return {};
       }
       ++s_CurrentMutationDepth[this];
-      ++m_ActiveMutations;
     }
 
     try {
       std::unique_lock<std::recursive_mutex> serializationLock;
       if (m_SerializeMutations) {
-        // Admission and active counting happen before this potentially
-        // blocking lock. suppress() therefore remains nonblocking and drain
-        // accounts for mutations already waiting to enter the serialized
-        // persistence sink.
+        // Admission happens before this potentially blocking lock. A mutation
+        // already admitted when suppression closes remains one complete
+        // transaction rather than being rejected halfway through nested work.
         serializationLock =
             std::unique_lock<std::recursive_mutex>(m_MutationMutex);
       }
       return MutationLease(this, std::move(serializationLock));
     } catch (...) {
       finishCurrentThreadMutation(this);
-      finishMutation();
       throw;
     }
   }
@@ -133,14 +128,14 @@ public:
 
   void suppress() noexcept
   {
-    // Never wait here. A UI-thread fail-stop can be reached while an admitted
-    // worker mutation is synchronously waiting for that same UI thread. The
-    // caller closes admission now and defers teardown until
-    // suppressionDrained() reports that admitted work has returned.
+    // Never wait for a mutation to finish here. A UI-thread fail-stop can be
+    // reached while an admitted worker is synchronously waiting for that same
+    // UI thread. Close top-level admission and let already-admitted
+    // transactions return normally before the process-level _Exit.
     try {
-      // Synchronize the admission decision with the active-count transition.
-      // This mutex is held only for bookkeeping, never while a mutation runs.
-      const std::lock_guard lock(m_StateMutex);
+      // Synchronize the admission decision without holding a mutex while a
+      // mutation executes.
+      const std::lock_guard lock(m_AdmissionMutex);
       m_Suppressed.store(true, std::memory_order_release);
     } catch (...) {
       // Admission still fails closed if mutex acquisition itself fails.
@@ -153,33 +148,9 @@ public:
     return m_Suppressed.load(std::memory_order_acquire);
   }
 
-  bool suppressionDrained() const noexcept
-  {
-    try {
-      const std::lock_guard lock(m_StateMutex);
-      return m_ActiveMutations == 0;
-    } catch (...) {
-      // A state-query failure cannot safely prove quiescence.
-      return false;
-    }
-  }
-
-  std::size_t activeMutationCount() const noexcept
-  {
-    try {
-      const std::lock_guard lock(m_StateMutex);
-      return m_ActiveMutations;
-    } catch (...) {
-      // A conservative nonzero sentinel prevents callers from interpreting a
-      // failed state query as quiescence.
-      return static_cast<std::size_t>(-1);
-    }
-  }
-
   // Used before entering modal configuration flows that can end in terminal
-  // rollback. Those flows must not be nested inside any admitted mutation;
-  // after their event loops return, fail-stop can require an ordinary full
-  // active-count drain before destructively cancelling shared resources.
+  // rollback. Those flows must not suspend an admitted mutation under a nested
+  // event loop and then close that mutation's admission gate.
   static bool currentThreadHasMutation() noexcept
   {
     return !s_CurrentMutationDepth.empty();
@@ -199,22 +170,8 @@ private:
     }
   }
 
-  void finishMutation() const noexcept
-  {
-    try {
-      const std::lock_guard lock(m_StateMutex);
-      if (m_ActiveMutations > 0) {
-        --m_ActiveMutations;
-      }
-    } catch (...) {
-      // Keep reporting non-drained rather than authorizing teardown when the
-      // mutex cannot confirm that the active mutation was retired.
-    }
-  }
-
-  mutable std::mutex m_StateMutex;
+  mutable std::mutex m_AdmissionMutex;
   mutable std::recursive_mutex m_MutationMutex;
-  mutable std::size_t m_ActiveMutations{0};
   std::atomic_bool m_Suppressed{false};
   const bool m_SerializeMutations;
 };

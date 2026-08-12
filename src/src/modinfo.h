@@ -132,11 +132,6 @@ public:  // Static functions:
     s_MetaWriteBarrier.suppress();
   }
 
-  static bool allWritesDrained() noexcept
-  {
-    return s_MetaWriteBarrier.suppressionDrained();
-  }
-
   /**
    * @brief Retrieve the number of mods.
    *

@@ -359,17 +359,6 @@ void Profile::suppressAllWritesForFailedRollback() noexcept
   removeAllProfileSettingsSyncEvents();
 }
 
-bool Profile::allWritesDrainedForFailedRollback() noexcept
-{
-  if (!g_ProfileWriteBarrier.suppressionDrained()) {
-    return false;
-  }
-
-  // An admitted write can queue one last deferred sync after phase-one event
-  // removal. Remove it only once the global Profile active count reaches zero.
-  return removeAllProfileSettingsSyncEvents();
-}
-
 void Profile::doWriteModlist()
 {
   g_ProfileWriteBarrier.runIfAllowed([&] {

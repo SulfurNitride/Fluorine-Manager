@@ -66,7 +66,6 @@ bool verify(const Snapshot& original, const Snapshot& rejected,
             int lockTimeoutMs = 5000);
 
 void suppressWritesForFailedRollback() noexcept;
-bool failedRollbackWritesDrained() noexcept;
 }  // namespace ProtonSettingsEdit
 
 #endif  // PROTONSETTINGSEDIT_H

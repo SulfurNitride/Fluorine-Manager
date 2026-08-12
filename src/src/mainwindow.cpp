@@ -1615,21 +1615,19 @@ bool MainWindow::canExit(bool force, bool silentActiveLaunch)
   return true;
 }
 
-void MainWindow::failStopAfterSettingsRollback()
+[[noreturn]] void MainWindow::failStopAfterSettingsRollback(
+    const QString& title, const QString& message)
 {
-  if (m_StartupFailed) {
-    return;
-  }
-
-  // An incomplete rollback leaves persistence and live caches untrustworthy.
-  // Stop accepting work immediately and suppress every normal shutdown write.
-  // Active launch ownership still has to drain before process teardown, so a
-  // silent forced-exit request is retried until the launch gate authorizes it.
+  // The Settings flow owns ProcessLaunchContextTracker's exclusive launch-
+  // admission lease. Existing launches retain their normal mandatory cleanup,
+  // but no new launch can begin before this process terminates. A failed
+  // verified rollback is therefore handled as a fatal transaction error, not
+  // as a process-wide attempt to discover and drain every possible writer.
   m_StartupFailed = true;
 
-  // Close plugin mutation and process-launch admission before any cancellation
-  // below. Nexus cancellation can synchronously invoke plugin callbacks, and
-  // none of those callbacks may start new work after fail-stop begins.
+  // Close the known outward admissions before showing the diagnostic. Existing
+  // callbacks may finish, but the process exits with _Exit after acknowledgement
+  // so no QObject or QSettings destructor can flush the rejected state.
   m_OrganizerCore.suppressPersistenceForFailedRollback();
   GlobalSettings::suppressWritesForFailedRollback();
   ProtonSettingsEdit::suppressWritesForFailedRollback();
@@ -1637,10 +1635,11 @@ void MainWindow::failStopAfterSettingsRollback()
   auto& nexus = NexusInterface::instance();
   nexus.suppressRequestAdmissionForFailedRollback();
   auto* nexusAccess = nexus.getAccessManager();
+  nexusAccess->suppressPersistenceForFailedRollback();
 
   // Update checks may already have queued a prompt. Disconnect every updater
   // sender before removing queued callbacks so fail-stop cannot open a new
-  // modal dialog or start an installer while admitted mutations drain.
+  // modal dialog or start an installer before termination.
   disconnect(m_OrganizerCore.updater(), nullptr, this, nullptr);
   if (auto* fluorineUpdater = m_OrganizerCore.fluorineUpdater()) {
     disconnect(fluorineUpdater, nullptr, this, nullptr);
@@ -1654,77 +1653,31 @@ void MainWindow::failStopAfterSettingsRollback()
   hide();
   m_OrganizerCore.cancelPersistenceWritersForFailedRollback();
 
-  const auto finishFailStop = [this, nexusAccess]() {
-    // An admitted profile transition/setter may have installed a new current
-    // backend or queued an UpdateRequest after phase-one suppression. With the
-    // full drain proven, re-arm every core/profile/settings sink before any
-    // destructive cancellation.
-    m_OrganizerCore.suppressPersistenceForFailedRollback();
-    m_OrganizerCore.cancelPersistenceWritersForFailedRollback();
+  // Unlike the previous queued-exit design, display the diagnostic before
+  // terminating. A nested QMessageBox event loop must not get a chance to run
+  // an already-queued _Exit and make the explanation disappear.
+  QMessageBox::critical(nullptr, title, message);
 
-    // Plugin requests are now drained, so destructive queue/reply cancellation
-    // cannot race an admitted request*() call on another thread.
-    NexusInterface::instance().cancelSuppressedRequestsForFailedRollback();
-    nexusAccess->suppressPersistenceForFailedRollback();
-    // Download callbacks were admission-closed in phase one. With every
-    // admitted frame now drained, disconnect and abort their replies without
-    // running ordinary readyRead/finalize/meta persistence.
-    m_OrganizerCore.cancelDownloadOperationsForFailedRollback();
-
-    // The Settings dialog stops and joins this worker before edits begin; this
-    // wait is a defensive final quiescence point that prevents a cross-thread
-    // suppression-flag race.
-    m_MetaSave.waitForFinished();
-
-    auto* retry = new QTimer(qApp);
-    retry->setInterval(250);
-    const auto attemptExit = [this, retry]() {
-      if (!m_OrganizerCore.failedRollbackDownloadOperationsDrained()) {
-        // Idempotent retry covers a reply that was transitioning while abort
-        // ran. Exit is authorized only after the real request/reply/output
-        // lifetime, not merely its presentation state, is quiescent.
-        m_OrganizerCore.cancelDownloadOperationsForFailedRollback();
-        return;
+  // Existing launches may have predated the Settings transaction. Keep the UI
+  // event loop alive only for their already-owned lifetime observation and
+  // mandatory afterRun cleanup. We intentionally do not recreate the previous
+  // global writer/download drain: admissions above are closed best-effort, and
+  // _Exit avoids destructor-driven persistence once launch cleanup is complete.
+  if (m_OrganizerCore.waitForAllUSVFSProcesses(UILocker::NoReason) !=
+      ProcessRunner::Completed) {
+    QEventLoop launchCleanupLoop;
+    QTimer retry;
+    retry.setInterval(250);
+    connect(&retry, &QTimer::timeout, &launchCleanupLoop, [this, &launchCleanupLoop] {
+      if (m_OrganizerCore.waitForAllUSVFSProcesses(UILocker::NoReason) ==
+          ProcessRunner::Completed) {
+        launchCleanupLoop.quit();
       }
-
-      if (ExitModOrganizer(Exit::Force, /*silentActiveLaunch=*/true) ==
-          ExitRequestResult::Authorized) {
-        // Authorization means every tracked launch has completed its mandatory
-        // cleanup. Do not run ordinary QObject/static destructors after a failed
-        // rollback: QSettings and other caches may retry precisely the writes we
-        // could not safely restore. This is the final process-wide write barrier.
-        std::_Exit(EXIT_FAILURE);
-      }
-    };
-    connect(retry, &QTimer::timeout, qApp, attemptExit);
-    retry->start();
-    QMetaObject::invokeMethod(qApp, attemptExit, Qt::QueuedConnection);
-  };
-
-  if (m_OrganizerCore.failedRollbackMutationsDrained() &&
-      ProtonSettingsEdit::failedRollbackWritesDrained()) {
-    // Settings entry is rejected while this thread owns a mutation, so zero
-    // means no facade or persistence operation can retain cancelled objects.
-    finishFailStop();
-    return;
+    });
+    retry.start();
+    launchCleanupLoop.exec(QEventLoop::ExcludeUserInputEvents);
   }
-
-  // Never block the UI waiting for an admitted plugin worker: it may be waiting
-  // for a synchronous UI callback. Poll from the event loop, then destructively
-  // cancel request/download state only after the active count reaches zero.
-  auto* drainRetry = new QTimer(qApp);
-  drainRetry->setInterval(10);
-  connect(drainRetry, &QTimer::timeout, qApp,
-          [this, drainRetry, finishFailStop]() {
-            if (!m_OrganizerCore.failedRollbackMutationsDrained() ||
-                !ProtonSettingsEdit::failedRollbackWritesDrained()) {
-              return;
-            }
-            drainRetry->stop();
-            drainRetry->deleteLater();
-            finishFailStop();
-          });
-  drainRetry->start();
+  std::_Exit(EXIT_FAILURE);
 }
 
 void MainWindow::cleanup()
@@ -2515,7 +2468,7 @@ void MainWindow::processUpdates()
   const auto currentVersion =
       QVersionNumber::fromString(m_OrganizerCore.getVersion().string()).normalized();
   m_CurrentProductVersion = currentVersion;
-  if (!SettingsMigration::startupMayContinue(settings.beginUpdates())) {
+  if (!settings.beginUpdates()) {
     m_PreviousSettingsSchemaVersion = SettingsMigration::UnknownSchema;
     m_NewInstance                   = false;
     m_SettingsUpdatesPending        = false;
@@ -3235,12 +3188,19 @@ void MainWindow::on_actionSettings_triggered()
     return;
   }
 
-  // This modal flow is the sole origin of interactive rollback fail-stop. Do
-  // not nest it inside an admitted facade/write transaction: after exec()
-  // returns, fail-stop can safely wait for a true zero active count before it
-  // destroys Nexus replies or pauses download-manager operations.
+  // Do not suspend an admitted mutation frame under SettingsDialog's nested
+  // event loop. The fail-stop path may close that frame's admission gate.
   if (SettingsWriteBarrier::currentThreadHasMutation()) {
     log::warn("ignoring nested Settings request during an active mutation");
+    return;
+  }
+
+  auto configurationLease = m_OrganizerCore.tryAcquireConfigurationLease();
+  if (!configurationLease) {
+    QMessageBox::information(
+        this, tr("Settings already open"),
+        tr("Another Settings transaction is already active. Close it and try "
+           "again."));
     return;
   }
 
@@ -3448,17 +3408,12 @@ void MainWindow::on_actionSettings_triggered()
     case restart_transaction::RollbackResult::Complete:
       break;
     }
-    // Enter fail-stop before any nested event loop. Otherwise the modal error
-    // dialog can dispatch delayed writers and OAuth callbacks while the live
-    // state is already known to be untrustworthy.
-    failStopAfterSettingsRollback();
-    QMessageBox::critical(
-        nullptr, tr("Settings rollback incomplete"),
+    failStopAfterSettingsRollback(
+        tr("Settings rollback incomplete"),
         tr("%1, but %2. Fluorine Manager must close to prevent further changes. "
-           "It will exit as soon as any running applications finish.")
+           "It will exit after this message is acknowledged and any running "
+           "applications finish.")
             .arg(context, detail));
-
-    return false;
   };
 
   auto dialog =
@@ -3479,13 +3434,12 @@ void MainWindow::on_actionSettings_triggered()
     // Accepted tabs may already have persisted changes. Without a valid
     // rejected snapshot, a selective rollback cannot prove which external
     // values belong to this edit, so fail closed.
-    failStopAfterSettingsRollback();
-    QMessageBox::critical(
-        nullptr, tr("Settings state unavailable"),
+    failStopAfterSettingsRollback(
+        tr("Settings state unavailable"),
         tr("The edited Proton and launch settings could not be captured for "
            "verification. Fluorine Manager must close to prevent further "
-           "changes. It will exit as soon as any running applications finish."));
-    return;
+           "changes. It will exit after this message is acknowledged and any "
+           "running applications finish."));
   }
 
   if (dialogResult != QDialog::Accepted) {
@@ -3641,8 +3595,7 @@ void MainWindow::categoriesSaved()
     auto mod = ModInfo::getByName(modName);
     const auto categories = mod->getCategories();
     for (auto category : categories) {
-      if (CategoryAssignmentPolicy::shouldRemove(
-              m_CategoryFactory.categoryExists(category))) {
+      if (!m_CategoryFactory.categoryExists(category)) {
         mod->setCategory(category, false);
       }
     }

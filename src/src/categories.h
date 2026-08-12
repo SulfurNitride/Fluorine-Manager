@@ -140,13 +140,8 @@ public:
    **/
   bool saveCategories();
 
-  // Fail-stop after an incomplete Settings rollback. This closes admission;
-  // active work is observed through the drain query below.
+  // Fail-stop after an incomplete Settings rollback closes new admission.
   void suppressWritesForFailedRollback() noexcept;
-  bool failedRollbackWritesDrained() const noexcept
-  {
-    return m_WriteBarrier.suppressionDrained();
-  }
 
   // Replaces the complete Nexus category inventory and writes it once. The
   // caller may acknowledge an asynchronous migration only after this returns

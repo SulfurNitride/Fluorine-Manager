@@ -375,7 +375,7 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
     InstanceManager::singleton().clearCurrentInstance();
     return ReselectExitCode;
   }
-  if (!SettingsMigration::startupMayContinue(m_settings->beginUpdates())) {
+  if (!m_settings->beginUpdates()) {
     reportError(
         tr("Cannot acquire the settings migration transaction for instance "
            "'%1'. Another Fluorine Manager process may still be starting, or "

@@ -34,7 +34,6 @@
 #include "moshortcut.h"
 #include "pluginlist.h"
 #include "processlaunchcontext.h"
-#include "pluginrefreshcoalescing.h"
 #include "processrunner.h"
 #include "selfupdater.h"
 #include "settings.h"
@@ -332,6 +331,9 @@ public:
   bool reserveProcessLaunch(const QString& launchToken,
                             const QString& profileName, bool ownsVfs);
 
+  using ConfigurationLease = ProcessLaunchContextTracker::ConfigurationLease;
+  ConfigurationLease tryAcquireConfigurationLease();
+
   void abandonProcessLaunch(const QString& launchToken);
 
   enum class AfterRunState
@@ -408,10 +410,6 @@ public:
   MOBase::DelayedFileWriter& pluginsWriter() { return m_PluginListsWriter; }
   void suppressPersistenceForFailedRollback() noexcept;
   void cancelPersistenceWritersForFailedRollback() noexcept;
-  bool failedRollbackMutationsDrained() const noexcept;
-  void cancelDownloadOperationsForFailedRollback() noexcept;
-  bool failedRollbackDownloadOperationsDrained() const noexcept;
-  void suppressModInfoPersistenceForFailedRollback() noexcept;
 
   void prepareVFS();
   void unmountVFS();
@@ -693,7 +691,6 @@ private:
 
   ModList m_ModList;
   PluginList m_PluginList;
-  PluginRefreshCoalescing m_PluginRefreshCoalescing;
 
   QList<std::function<void()>> m_PostLoginTasks;
 

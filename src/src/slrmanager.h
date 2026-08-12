@@ -50,15 +50,11 @@ ensureXrandrInstalled(SlrCancellationToken cancellation,
 __attribute__((visibility("default"))) void
 suppressSlrOperationsForFailedRollback() noexcept;
 
-/// True once no admitted SLR network, extraction, or install work remains.
-__attribute__((visibility("default"))) bool
-slrOperationsDrainedForFailedRollback() noexcept;
-
 /// Used by delayed UI callbacks to reject prompts/installs after fail-stop.
 __attribute__((visibility("default"))) bool slrOperationAdmissionSuppressed() noexcept;
 
 /// Run a short SLR-owned UI persistence action under the same admission and
-/// drain accounting as installer commits.
+/// cancellation accounting as installer commits.
 __attribute__((visibility("default"))) bool
 runSlrUiCommitIfAllowed(const std::function<void()>& mutation);
 

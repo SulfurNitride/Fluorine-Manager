@@ -76,12 +76,6 @@ class _CommittedSnapshot:
     revision: int
 
 
-@dataclass
-class _InventoryRefresh:
-    diagnostics: dict | None = None
-    implicit: bool = False
-
-
 def _unique_names(*groups: Iterable[str]) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
@@ -342,7 +336,6 @@ class OpenMWGamePlugins(mobase.GamePlugins):
         self._export_revision: int | None = None
         self._next_revision = 1
         self._logged_inventory_details: set[str] = set()
-        self._inventory_refreshes: list[_InventoryRefresh] = []
 
     def _paths(self) -> _ProfilePaths:
         directory = Path(self._organizer.profile().absolutePath())
@@ -511,83 +504,76 @@ class OpenMWGamePlugins(mobase.GamePlugins):
         )
 
     def _inventory_directories(self) -> list[Path]:
-        """Return the ordered physical roots contributing inventory names."""
-        directories: list[tuple[Path, bool, str]] = []
+        """Return available physical roots contributing inventory names."""
+        directories: list[Path] = []
         try:
             game_dir = Path(
                 self._organizer.managedGame().gameDirectory().absolutePath()
             )
-            directories.append((game_dir / "Data Files", True, "game data"))
+            directories.append(game_dir / "Data Files")
         except Exception as error:
-            raise RuntimeError(
-                f"Could not discover the OpenMW game data directory: {error}"
-            ) from error
+            qWarning(
+                "OpenMW plugin inventory: could not discover the game data "
+                f"directory; continuing with the remaining roots: {error}"
+            )
 
         try:
             mod_list = self._organizer.modList()
             mod_names = list(mod_list.allModsByProfilePriority())
         except Exception as error:
-            raise RuntimeError(
-                f"Could not enumerate the OpenMW mod inventory: {error}"
-            ) from error
+            qWarning(
+                "OpenMW plugin inventory: could not enumerate active mods; "
+                f"continuing with the game data root: {error}"
+            )
+            mod_list = None
+            mod_names = []
 
-        for name in mod_names:
-            if name == "Overwrite":
-                continue
-            try:
-                if not (mod_list.state(name) & mobase.ModState.ACTIVE):
+        if mod_list is not None:
+            for name in mod_names:
+                if name == "Overwrite":
                     continue
-                mod = mod_list.getMod(name)
-                if mod is None:
-                    raise RuntimeError("the organizer returned no mod handle")
-                directories.append(
-                    (Path(mod.absolutePath()), True, f"active mod {name!r}")
-                )
-            except Exception as error:
-                raise RuntimeError(
-                    f"Could not inspect OpenMW mod {name!r}: {error}"
-                ) from error
-
-        try:
-            overwrite = mod_list.getMod("Overwrite")
-            if overwrite is None:
-                raise RuntimeError("the organizer returned no Overwrite handle")
-            if overwrite is not None:
-                directories.append(
-                    (
-                        Path(overwrite.absolutePath()),
-                        True,
-                        "Overwrite mod",
+                try:
+                    if not (mod_list.state(name) & mobase.ModState.ACTIVE):
+                        continue
+                    mod = mod_list.getMod(name)
+                    if mod is None:
+                        qWarning(
+                            "OpenMW plugin inventory: active mod "
+                            f"{name!r} has no directory handle; skipping it"
+                        )
+                        continue
+                    directories.append(Path(mod.absolutePath()))
+                except Exception as error:
+                    qWarning(
+                        f"OpenMW plugin inventory: could not inspect active mod "
+                        f"{name!r}; skipping it: {error}"
                     )
+
+            try:
+                overwrite = mod_list.getMod("Overwrite")
+                if overwrite is None:
+                    qDebug(
+                        "OpenMW plugin inventory: Overwrite has no directory "
+                        "handle; skipping it"
+                    )
+                else:
+                    directories.append(Path(overwrite.absolutePath()))
+            except Exception as error:
+                qWarning(
+                    "OpenMW plugin inventory: could not inspect Overwrite; "
+                    f"skipping it: {error}"
                 )
-        except Exception as error:
-            raise RuntimeError(
-                f"Could not inspect the OpenMW Overwrite mod: {error}"
-            ) from error
 
         result: list[Path] = []
         seen: set[str] = set()
-        for directory, required, label in directories:
-            resolved = directory.resolve(strict=False)
+        for directory in directories:
             try:
-                mode = resolved.stat().st_mode
-            except FileNotFoundError as error:
-                if required:
-                    raise OSError(
-                        f"Required OpenMW inventory root for {label} is missing: "
-                        f"{resolved}"
-                    ) from error
-                continue
-            except OSError as error:
-                raise OSError(
-                    f"Could not inspect OpenMW inventory root {resolved}: {error}"
-                ) from error
-            if not stat.S_ISDIR(mode):
-                if required:
-                    raise OSError(
-                        f"Required OpenMW inventory root for {label} is not a "
-                        f"directory: {resolved}"
-                    )
+                resolved = directory.resolve(strict=False)
+            except (OSError, RuntimeError) as error:
+                qWarning(
+                    f"OpenMW plugin inventory: could not resolve {directory}; "
+                    f"skipping it: {error}"
+                )
                 continue
             key = str(resolved)
             if key not in seen:
@@ -608,28 +594,33 @@ class OpenMWGamePlugins(mobase.GamePlugins):
         for directory in directories:
             try:
                 entries = sorted(directory.iterdir(), key=lambda path: path.name.casefold())
+            except FileNotFoundError:
+                qDebug(
+                    f"OpenMW plugin inventory: root {directory} is missing; "
+                    "skipping it"
+                )
+                continue
             except OSError as error:
-                raise OSError(
-                    f"Could not enumerate OpenMW inventory root {directory}: {error}"
-                ) from error
+                qWarning(
+                    f"OpenMW plugin inventory: could not enumerate {directory}; "
+                    f"skipping it: {error}"
+                )
+                continue
             for entry in entries:
                 try:
-                    mode = entry.stat().st_mode
-                except FileNotFoundError as error:
-                    try:
-                        is_broken_link = stat.S_ISLNK(entry.lstat().st_mode)
-                    except OSError:
-                        is_broken_link = False
-                    if is_broken_link:
+                    if not stat.S_ISREG(entry.stat().st_mode):
                         continue
-                    raise OSError(
-                        f"Could not inspect OpenMW inventory entry {entry}: {error}"
-                    ) from error
+                except FileNotFoundError:
+                    qDebug(
+                        f"OpenMW plugin inventory: entry {entry} disappeared; "
+                        "skipping it"
+                    )
+                    continue
                 except OSError as error:
-                    raise OSError(
-                        f"Could not inspect OpenMW inventory entry {entry}: {error}"
-                    ) from error
-                if not stat.S_ISREG(mode):
+                    qWarning(
+                        f"OpenMW plugin inventory: could not inspect {entry}; "
+                        f"skipping it: {error}"
+                    )
                     continue
                 folded = entry.name.casefold()
                 if folded.endswith(_WRAPPER_SUFFIXES):
@@ -644,7 +635,7 @@ class OpenMWGamePlugins(mobase.GamePlugins):
     def _scan_profile_inventory(
         self, _paths: _ProfilePaths
     ) -> tuple[list[str], list[str]]:
-        """Scan the complete physical inventory for the current profile."""
+        """Scan the currently available physical inventory roots."""
         directories = self._inventory_directories()
         return self._scan_inventory_directories(directories)
 
@@ -846,30 +837,8 @@ class OpenMWGamePlugins(mobase.GamePlugins):
                 f"{len(wrapper_only)}); install native plugins or remove "
                 "obsolete wrappers"
             )
-        else:
-            qInfo("OpenMW plugin inventory: ignored 0 legacy aliases")
-
         for diagnostic in result["duplicate_diagnostics"]:
             qWarning(f"OpenMW plugin inventory: {diagnostic}")
-
-    def pluginListRefreshStarted(self) -> None:
-        self._inventory_refreshes.append(_InventoryRefresh())
-
-    def pluginListRefreshCompleted(self) -> None:
-        if not self._inventory_refreshes:
-            raise RuntimeError(
-                "OpenMW plugin refresh completed without a matching start"
-            )
-        refresh = self._inventory_refreshes.pop()
-        if refresh.diagnostics is not None:
-            self._log_inventory_diagnostics(refresh.diagnostics)
-
-    def pluginListRefreshFailed(self) -> None:
-        if not self._inventory_refreshes:
-            raise RuntimeError(
-                "OpenMW plugin refresh failed without a matching start"
-            )
-        self._inventory_refreshes.pop()
 
     def _verify_files(
         self,
@@ -1121,12 +1090,6 @@ class OpenMWGamePlugins(mobase.GamePlugins):
                 f"Previous OpenMW plugin persistence failed: {self._sticky_error}"
             ) from self._sticky_error
 
-        if not self._inventory_refreshes:
-            self._inventory_refreshes.append(_InventoryRefresh(implicit=True))
-        elif self._inventory_refreshes[-1].implicit:
-            self._inventory_refreshes[-1] = _InventoryRefresh(implicit=True)
-        refresh = self._inventory_refreshes[-1]
-        refresh.diagnostics = None
         paths = self._paths()
         before = self._capture_ui(plugin_list)
         candidate, inventory_diagnostics = self._load_candidate(
@@ -1148,8 +1111,8 @@ class OpenMWGamePlugins(mobase.GamePlugins):
                 raise
             raise
         self._install_commit(paths, expected_ui, candidate)
-        refresh.diagnostics = inventory_diagnostics
         self._sticky_error = None
+        self._log_inventory_diagnostics(inventory_diagnostics)
 
     def getLoadOrder(self) -> Sequence[str]:
         """Read the best canonical order without mutating files, state, or UI."""
@@ -1392,23 +1355,3 @@ class OpenMWGamePlugins(mobase.GamePlugins):
 
     def blueprintPluginsAreSupported(self) -> bool:
         return False
-
-
-class OpenMWPluginListLifecycle(mobase.PluginListLifecycle):
-    """Forward core refresh boundaries to the OpenMW state adapter."""
-
-    def __init__(self, game_plugins: OpenMWGamePlugins):
-        super().__init__()
-        self._game_plugins = game_plugins
-
-    def refreshStarted(self) -> None:
-        self._game_plugins.pluginListRefreshStarted()
-
-    def refreshCompleted(self) -> None:
-        self._game_plugins.pluginListRefreshCompleted()
-
-    def refreshFailed(self) -> None:
-        self._game_plugins.pluginListRefreshFailed()
-
-    def flushPendingWrites(self, plugin_list: mobase.IPluginList) -> None:
-        self._game_plugins.flushPendingWrites(plugin_list)

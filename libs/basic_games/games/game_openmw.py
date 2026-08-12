@@ -60,10 +60,7 @@ from .openmw_support.openmw_cfg import (
     TransactionCleanupError,
     TransactionRollbackError,
 )
-from .openmw_support.game_plugins import (
-    OpenMWGamePlugins,
-    OpenMWPluginListLifecycle,
-)
+from .openmw_support.game_plugins import OpenMWGamePlugins
 from .openmw_support.process_lifetime import companion_process_names
 
 _FLATPAK_ID = "org.openmw.OpenMW"
@@ -154,11 +151,6 @@ class OpenMWGame(BasicGame):
         self._register_feature(OpenMWModDataChecker())
         self._openmw_game_plugins = OpenMWGamePlugins(organizer)
         if not self._register_feature(self._openmw_game_plugins):
-            return False
-        self._openmw_plugin_list_lifecycle = OpenMWPluginListLifecycle(
-            self._openmw_game_plugins
-        )
-        if not self._register_feature(self._openmw_plugin_list_lifecycle):
             return False
         organizer.onAboutToRun(self._export_openmw_cfg)
         return True
