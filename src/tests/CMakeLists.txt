@@ -771,6 +771,18 @@ target_link_libraries(test_instancepathidentity PRIVATE
 )
 add_test(NAME test_instancepathidentity COMMAND test_instancepathidentity)
 
+# ---------------------------------------------------------------------------
+# Serialized, recoverable bundle publication tests
+# ---------------------------------------------------------------------------
+add_test(NAME test_fluorine_publisher
+    COMMAND ${Python3_EXECUTABLE} -m unittest -v
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_fluorine_publisher.py
+)
+set_tests_properties(test_fluorine_publisher PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    TIMEOUT 30
+)
+
 # Register a "fluorine-tests" umbrella target that builds every test exe.
 add_custom_target(fluorine-tests
     DEPENDS test_esptk_tes3 test_bsatk_extraction

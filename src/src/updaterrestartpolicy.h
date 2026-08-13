@@ -33,6 +33,7 @@ inline QByteArray helperScript()
       "OLD_START=\"$2\"\n"
       "NEW_LAUNCHER=\"$3\"\n"
       "PROC_ROOT=\"${4:-/proc}\"\n"
+      "CLEANUP_DIR=\"${5:-}\"\n"
       "old_process_is_same_generation() {\n"
       "  local STAT REST STATE START\n"
       "  [[ -e \"$PROC_ROOT/$OLD_PID/stat\" ]] || return 1\n"
@@ -53,6 +54,11 @@ inline QByteArray helperScript()
       "while old_process_is_same_generation; do\n"
       "  sleep 0.1\n"
       "done\n"
+      "if [[ -n \"$CLEANUP_DIR\" ]]; then\n"
+      "  exec \"$NEW_LAUNCHER\" "
+      "\"--fluorine-clean-update=$CLEANUP_DIR\" "
+      "\"--fluorine-wait-publish=30\"\n"
+      "fi\n"
       "exec \"$NEW_LAUNCHER\"\n");
 }
 

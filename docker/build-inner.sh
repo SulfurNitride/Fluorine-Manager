@@ -380,6 +380,11 @@ PBS_SRC="/opt/python-bundled"
 PYTHON_OUT="${OUT_DIR}/python"
 mkdir -p "${PYTHON_OUT}/bin" "${PYTHON_OUT}/lib"
 cp -Lf "${PBS_SRC}/bin/python3.12" "${PYTHON_OUT}/bin/python3.12"
+cat > "${PYTHON_OUT}/bin/python3" <<'PYTHON_LAUNCHER'
+#!/usr/bin/env sh
+exec "$(dirname "$0")/python3.12" "$@"
+PYTHON_LAUNCHER
+chmod 755 "${PYTHON_OUT}/bin/python3"
 
 # Copy only the stdlib directory
 cp -a "${PBS_SRC}/lib/python3.12" "${PYTHON_OUT}/lib/"
@@ -442,6 +447,8 @@ find "${PYTHON_OUT}/lib/python3.12" -name "*.so" \
 cp -Lf "${PBS_SRC}/lib/libpython3.12.so.1.0" "${OUT_DIR}/lib/"
 strip --strip-unneeded "${OUT_DIR}/lib/libpython3.12.so.1.0" 2>/dev/null || true
 ln -sf libpython3.12.so.1.0 "${OUT_DIR}/lib/libpython3.12.so"
+cp -f /src/packaging/fluorine_publisher.py "${OUT_DIR}/fluorine-publisher.py"
+chmod 755 "${OUT_DIR}/fluorine-publisher.py"
 echo "Bundled PBS Python 3.12: $(du -sh "${PYTHON_OUT}" | cut -f1)"
 
 # ── Bundle PyQt6 (bindings only — reuse our bundled Qt, no duplicate Qt .so) ──
@@ -587,11 +594,18 @@ HERE="$(cd "$(dirname "$SELF")" && pwd)"
 # Save the original environment so launched games and setup tools can restore
 # it. Without this, Fluorine's bundled-runtime policy leaks into child
 # processes and can cause library conflicts.
-export FLUORINE_ORIG_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
-export FLUORINE_ORIG_LD_PRELOAD="${LD_PRELOAD:-}"
-export FLUORINE_ORIG_PATH="${PATH}"
-export FLUORINE_ORIG_XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
-export FLUORINE_ORIG_QT_PLUGIN_PATH="${QT_PLUGIN_PATH:-}"
+[[ -v FLUORINE_ORIG_LD_LIBRARY_PATH ]] || \
+    FLUORINE_ORIG_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
+[[ -v FLUORINE_ORIG_LD_PRELOAD ]] || \
+    FLUORINE_ORIG_LD_PRELOAD="${LD_PRELOAD:-}"
+[[ -v FLUORINE_ORIG_PATH ]] || FLUORINE_ORIG_PATH="${PATH}"
+[[ -v FLUORINE_ORIG_XDG_DATA_DIRS ]] || \
+    FLUORINE_ORIG_XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+[[ -v FLUORINE_ORIG_QT_PLUGIN_PATH ]] || \
+    FLUORINE_ORIG_QT_PLUGIN_PATH="${QT_PLUGIN_PATH:-}"
+export FLUORINE_ORIG_LD_LIBRARY_PATH FLUORINE_ORIG_LD_PRELOAD
+export FLUORINE_ORIG_PATH FLUORINE_ORIG_XDG_DATA_DIRS
+export FLUORINE_ORIG_QT_PLUGIN_PATH
 
 # Clear any injected preload for the bundled Qt6 process. Game launches restore
 # the original value via FLUORINE_ORIG_LD_PRELOAD.
@@ -609,90 +623,113 @@ export QT_LOGGING_RULES
 FLUORINE_DATA="${HOME}/.local/share/fluorine"
 BIN_DST="${FLUORINE_DATA}/bin"
 
-# Guard: if we ARE already running from the installed location, skip the sync.
-# Without this, running the binary directly from BIN_DST would rm -rf itself.
-HERE_REAL="$(readlink -f "${HERE}")"
-DST_REAL="$(readlink -f "${BIN_DST}" 2>/dev/null || echo "")"
-if [ "${HERE_REAL}" != "${DST_REAL}" ]; then
-    # Manifest lists top-level entries that belong to Fluorine. Without it we
-    # can't distinguish our files from whatever else the user parked next to
-    # the launcher (e.g. extracted into ~/Downloads alongside their mods).
-    MANIFEST="${HERE}/fluorine-manifest.txt"
-    if [ ! -f "${MANIFEST}" ] || [ ! -f "${HERE}/ModOrganizer-core" ]; then
-        echo "ERROR: Fluorine launcher can't find its bundle files in ${HERE}." >&2
-        echo "Extract the release archive into its own directory and run the" >&2
-        echo "launcher from there — not from a folder containing other files." >&2
-        exit 1
+PUBLISH_ONLY=0
+CLEAN_UPDATE=""
+PUBLISH_WAIT=0
+LOCKED_RUN=0
+while true; do
+    case "${1:-}" in
+        --fluorine-publish-only)
+            PUBLISH_ONLY=1
+            shift
+            ;;
+        --fluorine-clean-update=*)
+            CLEAN_UPDATE="${1#--fluorine-clean-update=}"
+            shift
+            ;;
+        --fluorine-wait-publish=*)
+            PUBLISH_WAIT="${1#--fluorine-wait-publish=}"
+            shift
+            ;;
+        --fluorine-run-locked)
+            LOCKED_RUN=1
+            shift
+            ;;
+        *) break ;;
+    esac
+done
+
+run_publisher() {
+    local ROOT="$1"
+    shift
+    local PYTHON="${ROOT}/python/bin/python3"
+    local PUBLISHER="${ROOT}/fluorine-publisher.py"
+    if [ ! -x "${PYTHON}" ] || [ ! -f "${PUBLISHER}" ]; then
+        echo "ERROR: Fluorine publication tools are missing from ${ROOT}." >&2
+        return 1
     fi
+    env \
+        LD_LIBRARY_PATH="${ROOT}/lib" \
+        PYTHONHOME="${ROOT}/python" \
+        PYTHONPATH= PYTHONNOUSERSITE=1 \
+        "${PYTHON}" "${PUBLISHER}" "$@"
+}
 
-    # New bundles carry a content-derived identity covering every shipped
-    # regular file. Hashing this tiny identity file keeps launches cheap while
-    # still noticing DLL/helper/plugin-only updates. Retain the old core
-    # size+mtime identity for bundles created before this file existed.
-    BUNDLE_VERSION="${HERE}/fluorine-bundle-version.txt"
-    if [ -f "${BUNDLE_VERSION}" ]; then
-        CURRENT_VER="bundle:$(sha256sum "${BUNDLE_VERSION}" | cut -d' ' -f1)"
-    else
-        CURRENT_VER="core:$(stat -c '%s:%Y' "${HERE}/ModOrganizer-core" 2>/dev/null || echo "unknown")"
-    fi
-    MARKER="${BIN_DST}/.version"
-
-    if [ ! -f "${MARKER}" ] || [ "$(cat "${MARKER}" 2>/dev/null)" != "${CURRENT_VER}" ]; then
-        if [ -d "${BIN_DST}" ]; then
-            echo "Updating Fluorine in ${BIN_DST}..." >&2
-        else
-            echo "Installing Fluorine to ${BIN_DST} (this may take a minute on first launch)..." >&2
+if [ "${LOCKED_RUN}" -eq 0 ]; then
+    # Recover through the immutable staged runtime, never through Python or
+    # libraries in the installation being replaced.
+    RECOVERY_ROOT=""
+    RECOVERY_POINTER="${FLUORINE_DATA}/publish-recovery"
+    if [ -f "${RECOVERY_POINTER}" ] && [ ! -L "${RECOVERY_POINTER}" ]; then
+        IFS= read -r RECOVERY_ID < "${RECOVERY_POINTER}" || true
+        if [[ "${RECOVERY_ID:-}" =~ ^[0-9a-f]{64}$ ]]; then
+            CANDIDATE="${FLUORINE_DATA}/publish-stage/${RECOVERY_ID}"
+            if [ -d "${CANDIDATE}" ] && [ ! -L "${CANDIDATE}" ]; then
+                RECOVERY_ROOT="${CANDIDATE}"
+            fi
         fi
-        mkdir -p "${BIN_DST}"
-
-        # Overlay update — preserves anything the user dropped into bin/
-        # (custom plugins under plugins/, a portable instance with
-        # ModOrganizer.ini, downloaded mods, etc.). The manifest is our
-        # authoritative list of "ours"; everything else is left alone.
-        #
-        # Step 1: orphan removal. Top-level entries we shipped before but no
-        # longer ship get removed. Top-level granularity is enough — when the
-        # entry is still in both manifests (e.g. "plugins"), we don't touch
-        # the directory itself, only overwrite our own files inside.
-        OLD_MANIFEST="${BIN_DST}/fluorine-manifest.txt"
-        if [ -f "${OLD_MANIFEST}" ]; then
-            # comm -23 = lines unique to the OLD manifest. sort -u for comm.
-            while IFS= read -r entry; do
-                [ -z "${entry}" ] && continue
-                # Refuse anything that could escape BIN_DST.
-                case "${entry}" in /*|*..*|.|..) continue ;; esac
-                rm -rf "${BIN_DST:?}/${entry}"
-            done < <(comm -23 \
-                <(sort -u "${OLD_MANIFEST}") \
-                <(sort -u "${MANIFEST}"))
-        fi
-
-        # Step 2: overlay copy. tar piped to tar streams the manifested entries
-        # from HERE into BIN_DST. Existing directories stay; existing files we
-        # ship get overwritten with the new version; user-added files inside
-        # our directories (e.g. plugins/MyCustomPlugin.so) are preserved.
-        if ! tar -C "${HERE}" -cf - --files-from="${MANIFEST}" 2>/dev/null \
-             | tar -C "${BIN_DST}" --no-same-owner -xf - ; then
-            echo "ERROR: Fluorine sync failed mid-copy. The install may be in a broken state." >&2
-            echo "Re-extract the release archive and run the launcher again." >&2
+        if [ -z "${RECOVERY_ROOT}" ]; then
+            echo "ERROR: Fluorine's publication recovery pointer is invalid." >&2
+            echo "Keep the update files and repair ${FLUORINE_DATA} before launching." >&2
             exit 1
         fi
-
-        # Do not retain stale bundled OpenSSL runtimes from older releases.
-        # TLS should resolve against the host so certificate handling can be
-        # updated by the OS instead of being pinned to our old package.
-        rm -f "${BIN_DST}"/lib/libssl.so* "${BIN_DST}"/lib/libcrypto.so* 2>/dev/null || true
-
-        # Refresh the manifest at the destination so the next update has it.
-        cp -af "${MANIFEST}" "${BIN_DST}/fluorine-manifest.txt"
-        echo "${CURRENT_VER}" > "${MARKER}"
-        echo "Sync complete." >&2
-
-        # Clean up the in-app updater's staging directory once the new bundle
-        # is live. Untouched if the user didn't go through the in-app updater.
-        STAGING_DIR="${FLUORINE_DATA}/update-staging"
-        [ -d "${STAGING_DIR}" ] && rm -rf "${STAGING_DIR}" 2>/dev/null || true
     fi
+
+    if [ -n "${RECOVERY_ROOT}" ]; then
+        run_publisher "${RECOVERY_ROOT}" publish \
+            "${RECOVERY_ROOT}" "${BIN_DST}" "${FLUORINE_DATA}" \
+            --wait-runtime "${PUBLISH_WAIT}"
+    fi
+
+    # A source bundle publishes exact, verified leaves through one serialized,
+    # restartable transaction. A launcher already in BIN_DST must prove that
+    # the prior transaction committed before starting the core.
+    HERE_REAL="$(readlink -f "${HERE}")"
+    DST_REAL="$(readlink -f "${BIN_DST}" 2>/dev/null || echo "")"
+    if [ "${HERE_REAL}" != "${DST_REAL}" ]; then
+        if [ ! -f "${HERE}/fluorine-manifest-v2.json" ] || \
+           [ ! -f "${HERE}/ModOrganizer-core" ]; then
+            echo "ERROR: Fluorine launcher can't find its bundle files in ${HERE}." >&2
+            echo "Extract the release archive into its own directory and run the" >&2
+            echo "launcher from there — not from a folder containing other files." >&2
+            exit 1
+        fi
+        echo "Publishing Fluorine to ${BIN_DST}..." >&2
+        run_publisher "${HERE}" publish \
+            "${HERE}" "${BIN_DST}" "${FLUORINE_DATA}" \
+            --wait-runtime "${PUBLISH_WAIT}"
+        echo "Publication complete." >&2
+    else
+        run_publisher "${HERE}" check-installed "${BIN_DST}" "${FLUORINE_DATA}"
+    fi
+else
+    # This read-only recheck occurs while the outer flock process holds the
+    # shared runtime lease. A publisher cannot begin after validation and race
+    # the core into a mixed generation.
+    run_publisher "${HERE}" verify-committed "${BIN_DST}" "${FLUORINE_DATA}"
+fi
+
+if [ -n "${CLEAN_UPDATE}" ]; then
+    STAGING_ROOT="$(readlink -m "${FLUORINE_DATA}/update-staging")"
+    CLEAN_REAL="$(readlink -m "${CLEAN_UPDATE}")"
+    case "${CLEAN_REAL}" in
+        "${STAGING_ROOT}"/attempt-*) rm -rf -- "${CLEAN_REAL}" ;;
+        *) echo "WARNING: refusing unsafe update cleanup path ${CLEAN_UPDATE}" >&2 ;;
+    esac
+fi
+
+if [ "${PUBLISH_ONLY}" -eq 1 ] && [ "${LOCKED_RUN}" -eq 0 ]; then
+    exit 0
 fi
 
 # ── Install icon + desktop file for Wayland taskbar/decoration ──
@@ -752,6 +789,18 @@ export QT_QPA_PLATFORM_PLUGIN_PATH="${RUN}/qt6plugins/platforms"
 ulimit -n 65536 2>/dev/null
 
 cd "${RUN}"
+if ! command -v flock >/dev/null 2>&1; then
+    echo "ERROR: Fluorine requires the util-linux flock command." >&2
+    exit 1
+fi
+if [ "${LOCKED_RUN}" -eq 0 ]; then
+    # Re-enter the installed launcher under the shared lease so it can verify
+    # the commit while publication is excluded, then exec the core. --close
+    # keeps games/helper children from inheriting the descriptor; flock's
+    # parent owns it for the complete launcher/core lifetime.
+    exec flock --shared --close "${FLUORINE_DATA}/runtime.lock" \
+        "${RUN}/fluorine-manager" --fluorine-run-locked "$@"
+fi
 exec "${RUN}/ModOrganizer-core" "$@"
 LAUNCH
 chmod +x "${OUT_DIR}/fluorine-manager"
@@ -822,32 +871,13 @@ cp -f /src/data/icons/com.fluorine.manager.desktop "${OUT_DIR}/icons/"
 cp -f /src/data/icons/com.fluorine.manager.png "${OUT_DIR}/icons/"
 cp -f /src/data/icons/com.fluorine.manager.metainfo.xml "${OUT_DIR}/icons/"
 
-# ── Content-derived bundle identity ──
-# Compute this once while packaging. The launcher hashes only this tiny file,
-# not the full payload, on normal startup. Exclude the identity itself and the
-# subsequently generated manifest to avoid circular input.
-BUNDLE_SHA256="$(
-    cd "${OUT_DIR}"
-    find . -type f \
-        ! -path './fluorine-bundle-version.txt' \
-        ! -path './fluorine-manifest.txt' -print0 \
-        | LC_ALL=C sort -z \
-        | xargs -0 sha256sum \
-        | sha256sum \
-        | cut -d' ' -f1
-)"
-{
-    printf 'format=1\n'
-    printf 'payload_sha256=%s\n' "${BUNDLE_SHA256}"
-} > "${OUT_DIR}/fluorine-bundle-version.txt"
-
-# ── Manifest of top-level entries ──
-# The launcher's sync step copies only files listed here into
-# ~/.local/share/fluorine/bin/. Without a manifest it would have to guess
-# (previously: tar the whole extraction dir), and would slurp any unrelated
-# files the user parked next to the launcher — e.g. 38 GB of mods in Downloads.
-(cd "${OUT_DIR}" && ls -A | grep -v '^fluorine-manifest\.txt$') > "${OUT_DIR}/fluorine-manifest.txt"
-echo "Wrote manifest: $(wc -l < "${OUT_DIR}/fluorine-manifest.txt") entries"
+# ── Typed leaf manifest and content-derived identity ──
+# The publisher owns only these exact leaves. Removed nested libraries/plugins
+# can therefore be retired without deleting user additions in the same trees;
+# modes and symlink targets participate in the identity as well as file bytes.
+"${BUILD_PY}" /src/packaging/fluorine_publisher.py \
+    build-manifest "${OUT_DIR}"
+echo "Wrote typed manifest: $(wc -c < "${OUT_DIR}/fluorine-manifest-v2.json") bytes"
 
 # ── Determine build mode ──
 # BUILD_MODE is passed from build.sh: tarball (default), installer, all
@@ -878,9 +908,17 @@ build_installer() {
 set -euo pipefail
 
 APP_NAME="Fluorine Manager"
-INSTALL_DIR="${HOME}/.local/share/fluorine/bin"
+FLUORINE_DATA="${HOME}/.local/share/fluorine"
+INSTALL_DIR="${FLUORINE_DATA}/bin"
 DESKTOP_DIR="${HOME}/.local/share/applications"
 ICON_DIR="${HOME}/.local/share/icons/hicolor/256x256/apps"
+
+extract_payload() {
+    local TARGET="$1"
+    local ARCHIVE_START
+    ARCHIVE_START=$(awk '/^__PAYLOAD__$/{print NR + 1; exit 0;}' "$0")
+    tail -n +"${ARCHIVE_START}" "$0" | tar xzf - -C "${TARGET}"
+}
 
 echo ""
 echo "╔══════════════════════════════════════════╗"
@@ -909,10 +947,18 @@ case "${CHOICE}" in
     1)
         echo ""
         echo "Installing to ${INSTALL_DIR}..."
-        mkdir -p "${INSTALL_DIR}"
-        # Extract payload (everything after the __PAYLOAD__ marker)
-        ARCHIVE_START=$(awk '/^__PAYLOAD__$/{print NR + 1; exit 0;}' "$0")
-        tail -n +"${ARCHIVE_START}" "$0" | tar xzf - -C "${INSTALL_DIR}" --strip-components=1
+        mkdir -p "${FLUORINE_DATA}/installer-stage"
+        chmod 700 "${FLUORINE_DATA}/installer-stage"
+        INSTALL_STAGE=$(mktemp -d "${FLUORINE_DATA}/installer-stage/attempt-XXXXXX")
+        trap 'rm -rf -- "${INSTALL_STAGE}"' EXIT
+        extract_payload "${INSTALL_STAGE}"
+        BUNDLE_ROOT="${INSTALL_STAGE}/fluorine-manager"
+        if [ ! -x "${BUNDLE_ROOT}/fluorine-manager" ] || \
+           [ ! -f "${BUNDLE_ROOT}/fluorine-manifest-v2.json" ]; then
+            echo "ERROR: installer payload is not a valid Fluorine bundle" >&2
+            exit 1
+        fi
+        "${BUNDLE_ROOT}/fluorine-manager" --fluorine-publish-only
 
         # Create desktop shortcut
         mkdir -p "${DESKTOP_DIR}" "${ICON_DIR}"
@@ -948,9 +994,29 @@ DESKTOP_EOF
         echo ""
         PORTABLE_DIR="$(pwd)/fluorine-manager"
         echo "Extracting portable copy to ${PORTABLE_DIR}..."
-        mkdir -p "${PORTABLE_DIR}"
-        ARCHIVE_START=$(awk '/^__PAYLOAD__$/{print NR + 1; exit 0;}' "$0")
-        tail -n +"${ARCHIVE_START}" "$0" | tar xzf - -C "${PORTABLE_DIR}" --strip-components=1
+        if [ -L "${PORTABLE_DIR}" ]; then
+            echo "ERROR: ${PORTABLE_DIR} is a symlink; refusing portable extraction." >&2
+            exit 1
+        fi
+        if [ -e "${PORTABLE_DIR}" ] && [ ! -d "${PORTABLE_DIR}" ]; then
+            echo "ERROR: ${PORTABLE_DIR} is not a directory." >&2
+            exit 1
+        fi
+        if [ -d "${PORTABLE_DIR}" ] && \
+           [ -n "$(find "${PORTABLE_DIR}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+            echo "ERROR: ${PORTABLE_DIR} is not empty; refusing an in-place overlay." >&2
+            exit 1
+        fi
+        PORTABLE_PARENT="$(dirname "${PORTABLE_DIR}")"
+        PORTABLE_STAGE=$(mktemp -d "${PORTABLE_PARENT}/.fluorine-portable-XXXXXX")
+        trap 'rm -rf -- "${PORTABLE_STAGE}"' EXIT
+        extract_payload "${PORTABLE_STAGE}"
+        if [ ! -x "${PORTABLE_STAGE}/fluorine-manager/fluorine-manager" ]; then
+            echo "ERROR: installer payload is missing its launcher" >&2
+            exit 1
+        fi
+        rmdir "${PORTABLE_DIR}" 2>/dev/null || true
+        mv -T "${PORTABLE_STAGE}/fluorine-manager" "${PORTABLE_DIR}"
 
         echo ""
         echo "Portable extraction complete!"

@@ -469,6 +469,9 @@ TEST(UpdaterRestartPolicyTest, HelperNeverLaunchesWhileOldProcessIsAlive)
   EXPECT_FALSE(script.contains("kill -0"));
   EXPECT_FALSE(script.contains("for _ in"));
   EXPECT_FALSE(script.contains("seq 1"));
+  EXPECT_TRUE(script.contains("CLEANUP_DIR=\"${5:-}\""));
+  EXPECT_TRUE(script.contains("--fluorine-clean-update=$CLEANUP_DIR"));
+  EXPECT_TRUE(script.contains("--fluorine-wait-publish=30"));
   EXPECT_LT(script.indexOf("while old_process_is_same_generation"),
             script.indexOf("exec \"$NEW_LAUNCHER\""));
 }

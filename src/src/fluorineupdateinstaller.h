@@ -6,15 +6,16 @@
 #include <QObject>
 #include <QString>
 
-// Downloads a release into the existing update staging directory, validates
-// that it contains a launcher, and hands it to the launcher's existing
-// single-copy sync process after Fluorine exits.
+// Downloads a release into a private update attempt directory, validates that
+// it contains a launcher, and hands it to the launcher's serialized publisher
+// after Fluorine exits.
 class FluorineUpdateInstaller : public QObject
 {
   Q_OBJECT
 
 public:
   explicit FluorineUpdateInstaller(QObject* parent = nullptr);
+  ~FluorineUpdateInstaller() override;
 
   bool isBusy() const { return m_busy; }
   void install(const FluorineUpdater::ReleaseInfo& info);
@@ -26,8 +27,11 @@ signals:
 
 private:
   void fail(const QString& reason);
+  void cleanFailedAttempt();
 
   bool m_busy = false;
+  bool m_attemptHandedOff = false;
+  QString m_attemptDirectory;
 };
 
 #endif  // FLUORINE_UPDATE_INSTALLER_H

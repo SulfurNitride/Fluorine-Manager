@@ -1,4 +1,5 @@
 #include "fluorineupdateinstaller.h"
+#include "fluorinepaths.h"
 #include "processlifetime.h"
 #include "updaterrestartpolicy.h"
 
@@ -14,7 +15,7 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QProcess>
-#include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <QUrl>
 
@@ -25,7 +26,26 @@ namespace
 {
 bool isLauncherFile(const QString& path)
 {
-  return QFileInfo(path).isFile();
+  const QFileInfo info(path);
+  return info.isFile() && !info.isSymLink() && info.isExecutable();
+}
+
+bool isBundleRoot(const QString& path)
+{
+  const QDir root(path);
+  const QFileInfo core(root.absoluteFilePath(QStringLiteral("ModOrganizer-core")));
+  const QFileInfo manifest(
+      root.absoluteFilePath(QStringLiteral("fluorine-manifest-v2.json")));
+  const QFileInfo publisher(
+      root.absoluteFilePath(QStringLiteral("fluorine-publisher.py")));
+  const QFileInfo python(
+      root.absoluteFilePath(QStringLiteral("python/bin/python3")));
+  return isLauncherFile(
+             root.absoluteFilePath(QStringLiteral("fluorine-manager"))) &&
+         core.isFile() && !core.isSymLink() && manifest.isFile() &&
+         !manifest.isSymLink() && publisher.isFile() &&
+         !publisher.isSymLink() && python.isFile() && !python.isSymLink() &&
+         python.isExecutable();
 }
 }  // namespace
 
@@ -33,8 +53,22 @@ FluorineUpdateInstaller::FluorineUpdateInstaller(QObject* parent)
     : QObject(parent)
 {}
 
+FluorineUpdateInstaller::~FluorineUpdateInstaller()
+{
+  cleanFailedAttempt();
+}
+
+void FluorineUpdateInstaller::cleanFailedAttempt()
+{
+  if (!m_attemptHandedOff && !m_attemptDirectory.isEmpty()) {
+    QDir(m_attemptDirectory).removeRecursively();
+  }
+  m_attemptDirectory.clear();
+}
+
 void FluorineUpdateInstaller::fail(const QString& reason)
 {
+  cleanFailedAttempt();
   m_busy = false;
   emit failed(reason);
 }
@@ -52,10 +86,23 @@ void FluorineUpdateInstaller::install(
 
   m_busy = true;
 
-  const QString dataRoot =
-      QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) +
-      QStringLiteral("/fluorine");
-  const QString stagingDir = dataRoot + QStringLiteral("/update-staging");
+  const QString dataRoot = fluorineDataDir();
+  const QString stagingRoot =
+      dataRoot + QStringLiteral("/update-staging");
+  if (!QDir().mkpath(stagingRoot)) {
+    fail(tr("Cannot create update staging directory '%1'.").arg(stagingRoot));
+    return;
+  }
+  QTemporaryDir attempt(stagingRoot + QStringLiteral("/attempt-XXXXXX"));
+  attempt.setAutoRemove(false);
+  if (!attempt.isValid()) {
+    fail(tr("Cannot create a private update staging directory in '%1'.")
+             .arg(stagingRoot));
+    return;
+  }
+  const QString stagingDir = attempt.path();
+  m_attemptDirectory = stagingDir;
+  m_attemptHandedOff   = false;
   const QString extractDir = stagingDir + QStringLiteral("/extract");
   const bool isZip =
       info.downloadUrl.endsWith(QStringLiteral(".zip"), Qt::CaseInsensitive);
@@ -63,10 +110,6 @@ void FluorineUpdateInstaller::install(
       stagingDir + (isZip ? QStringLiteral("/download.zip")
                           : QStringLiteral("/download.tar.gz"));
 
-  if (!QDir().mkpath(stagingDir)) {
-    fail(tr("Cannot create update staging directory '%1'.").arg(stagingDir));
-    return;
-  }
   QFile::remove(archivePath);
   QDir(extractDir).removeRecursively();
   if (!QDir().mkpath(extractDir)) {
@@ -136,33 +179,28 @@ void FluorineUpdateInstaller::install(
                   }
 
                   QDir extracted(extractDir);
-                  QString newLauncher = extracted.absoluteFilePath(
-                      QStringLiteral("fluorine-manager"));
-                  if (!isLauncherFile(newLauncher)) {
-                    const QStringList topDirectories = extracted.entryList(
-                        QDir::Dirs | QDir::NoDotAndDotDot);
-                    for (const QString& top : topDirectories) {
-                      const QString candidate = extracted.absoluteFilePath(
-                          top + QStringLiteral("/fluorine-manager"));
-                      if (isLauncherFile(candidate)) {
-                        newLauncher = candidate;
-                        break;
-                      }
+                  QStringList bundleRoots;
+                  if (isBundleRoot(extractDir)) {
+                    bundleRoots.append(extractDir);
+                  }
+                  const QStringList topDirectories = extracted.entryList(
+                      QDir::Dirs | QDir::NoDotAndDotDot);
+                  for (const QString& top : topDirectories) {
+                    const QString candidate =
+                        extracted.absoluteFilePath(top);
+                    if (isBundleRoot(candidate)) {
+                      bundleRoots.append(candidate);
                     }
                   }
-
-                  if (isLauncherFile(newLauncher)) {
-                    QFile::setPermissions(
-                        newLauncher,
-                        QFile::permissions(newLauncher) | QFile::ExeOwner |
-                            QFile::ExeGroup | QFile::ExeOther);
-                  }
-                  if (!isLauncherFile(newLauncher) ||
-                      !QFileInfo(newLauncher).isExecutable()) {
-                    fail(tr("The extracted archive does not contain an "
-                            "executable Fluorine launcher."));
+                  if (bundleRoots.size() != 1) {
+                    fail(tr("The extracted archive must contain exactly one "
+                            "complete Fluorine bundle."));
                     return;
                   }
+                  const QString newLauncher = QDir(bundleRoots.front())
+                                                  .absoluteFilePath(
+                                                      QStringLiteral(
+                                                          "fluorine-manager"));
 
                   const QString helperPath =
                       stagingDir + QStringLiteral("/install.sh");
@@ -172,13 +210,23 @@ void FluorineUpdateInstaller::install(
                     fail(tr("Cannot write the update restart helper."));
                     return;
                   }
-                  helper.write(updater_restart::helperScript());
+                  const QByteArray helperContents =
+                      updater_restart::helperScript();
+                  if (helper.write(helperContents) != helperContents.size()) {
+                    helper.close();
+                    fail(tr("Cannot write the complete update restart helper."));
+                    return;
+                  }
                   helper.close();
-                  QFile::setPermissions(
-                      helperPath,
-                      QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner |
-                          QFile::ReadGroup | QFile::ExeGroup |
-                          QFile::ReadOther | QFile::ExeOther);
+                  if (!QFile::setPermissions(
+                          helperPath,
+                          QFile::ReadOwner | QFile::WriteOwner |
+                              QFile::ExeOwner | QFile::ReadGroup |
+                              QFile::ExeGroup | QFile::ReadOther |
+                              QFile::ExeOther)) {
+                    fail(tr("Cannot make the update restart helper executable."));
+                    return;
+                  }
 
                   emit statusChanged(tr("Update staged. Restarting when running "
                                         "applications have closed…"));
@@ -194,11 +242,12 @@ void FluorineUpdateInstaller::install(
                       {QStringLiteral("bash"), helperPath,
                        QString::number(static_cast<qint64>(::getpid())),
                        QString::number(static_cast<qulonglong>(*oldStartTime)),
-                       newLauncher});
+                       newLauncher, QStringLiteral("/proc"), stagingDir});
                   if (!helperStarted) {
                     fail(tr("Unable to start the update restart helper."));
                     return;
                   }
+                  m_attemptHandedOff = true;
                   MOBase::log::info(
                       "update installer: spawned helper to restart into {}",
                       newLauncher);

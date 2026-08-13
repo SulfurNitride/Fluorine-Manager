@@ -37,6 +37,11 @@ Download the latest zip from the [releases](https://github.com/SulfurNitride/Flu
 
 You are able to run it with this command: `./fluorine-manager` or by double-clicking it.
 
+Before manually applying the first update from an older installation that did
+not use the typed bundle manifest, close every running Fluorine Manager window.
+The in-app updater waits for the old process automatically. Subsequent releases
+serialize publication against the running application.
+
 More information can be found in the [FAQ](https://github.com/SulfurNitride/Fluorine-Manager/blob/main/docs/FAQ.md).
 
 You can find me in the [NaK Discord](https://discord.gg/9JWQzSeUWt)

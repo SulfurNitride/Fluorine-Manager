@@ -188,21 +188,25 @@ by running `fluorine-usvfs-launcher.exe --self-test` through the same Proton.
 
 ## Portable update identity
 
-The portable launcher installs/updates its shipped manifest into
+The portable launcher publishes its shipped payload into
 `~/.local/share/fluorine/bin`. A core-only size/mtime marker is insufficient:
-an USVFS DLL, helper, plugin or library can change while `ModOrganizer-core`
-does not, leaving the stable installation stale. Builds therefore create
-`fluorine-bundle-version.txt` from a deterministic SHA-256 digest of every
-regular payload file except the manifest and version file themselves. The
-launcher hashes that small file on startup and performs the normal manifest
-overlay whenever it differs from the installed marker. Older bundles without
-the version file retain the core size/mtime compatibility fallback.
+an USVFS DLL, helper, plugin, symlink or executable mode can change while
+`ModOrganizer-core` does not. Builds therefore create a typed, deterministic
+leaf manifest containing each shipped file digest and mode or symlink target.
 
-The digest is computed once during packaging, not across the full payload on
-every launch. The benchmark candidate-staging helper recomputes it after an
-experimental DLL replacement, and the game harness byte-compares the portable
-and installed core/helper/DLL before launch. Thus a DLL-only experiment cannot
-silently execute the previous installed payload.
+Publication validates an immutable private stage, serializes publishers,
+preflights ownership conflicts, and writes exact leaves through a restartable
+forward transaction. The commit marker is published last. Removed v2-owned
+leaves are retired precisely; ambiguous legacy and user-added files are not
+recursively deleted. The launcher also holds a shared runtime lease and
+rechecks the committed manifest before starting the core, preventing an update
+from mixing two generations. Direct installed launches hash only the small
+manifest, not the full installed tree.
+
+For the first manual update from a legacy top-level-manifest release, close all
+running Fluorine Manager windows first because those old processes did not hold
+the runtime lease. The in-app updater already waits for the old process before
+publication.
 
 ## Benchmarking
 
