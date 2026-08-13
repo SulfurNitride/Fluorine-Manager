@@ -1,6 +1,7 @@
 #include "createinstancedialog.h"
 #include "createinstancedialogpages.h"
 #include "instancemanager.h"
+#include "portablelauncherscript.h"
 #include "restarttransaction.h"
 #include "settings.h"
 #include "shared/appconfig.h"
@@ -385,6 +386,13 @@ void CreateInstanceDialog::finish()
       }
 
       throw Failed();
+    }
+
+    if (ci.type == Portable) {
+      const auto launcher = portable_launcher_script::create(ci.dataPath);
+      if (launcher.status == portable_launcher_script::Status::Failed) {
+        logCreation(tr("Warning: %1").arg(launcher.error));
+      }
     }
 
     // committing all the directories so they don't get deleted

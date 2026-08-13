@@ -4,6 +4,7 @@
 #include "instancemanager.h"
 #include "nexusinterface.h"
 #include "nxmaccessmanager.h"
+#include "portablelauncherscript.h"
 #include "settingsmigration.h"
 
 #include <QDir>
@@ -824,6 +825,11 @@ void CollectionInstaller::finalise()
 
   // ── Register with InstanceManager ────────────────────────────────────────
   if (m_config.portable) {
+    const auto launcher = portable_launcher_script::create(m_config.instanceDir);
+    if (launcher.status == portable_launcher_script::Status::Failed) {
+      emit log(QStringLiteral("Warning: %1").arg(launcher.error));
+    }
+
     // Portable instances are discovered by path — just record the path in
     // the registered portables list so the manager shows them.
     InstanceManager::registerPortableInstance(m_config.instanceDir);
