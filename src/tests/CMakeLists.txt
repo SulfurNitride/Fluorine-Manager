@@ -441,6 +441,22 @@ add_test(NAME test_multiprocess COMMAND test_multiprocess)
 set_tests_properties(test_multiprocess PROPERTIES TIMEOUT 30)
 
 # ---------------------------------------------------------------------------
+# External IPC readiness queue tests
+# ---------------------------------------------------------------------------
+add_executable(test_externalmessagequeue EXCLUDE_FROM_ALL
+    test_externalmessagequeue.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/externalmessagequeue.cpp
+)
+target_include_directories(test_externalmessagequeue PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_externalmessagequeue PRIVATE
+    Qt6::Core
+    GTest::gtest_main
+)
+add_test(NAME test_externalmessagequeue COMMAND test_externalmessagequeue)
+
+# ---------------------------------------------------------------------------
 # Portable instance launcher-script tests
 # ---------------------------------------------------------------------------
 add_executable(test_portablelauncherscript EXCLUDE_FROM_ALL
@@ -745,7 +761,7 @@ add_custom_target(fluorine-tests
             test_fluorineconfigownership test_protonsettingsedit
             test_heroicjson test_protondetection
             test_external_dir_mapping test_stalemountcleanup
-            test_multiprocess
+            test_multiprocess test_externalmessagequeue
             test_portablelauncherscript test_vfs_file_ops
             test_vfs_descriptor_cleanup test_vfs_runtime_index
             test_game_save_migration

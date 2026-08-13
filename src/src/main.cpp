@@ -116,14 +116,16 @@ int run(int argc, char* argv[])
     return 1;
   }
 
+  // Install the primary's receiver before any command-line phase can open a
+  // nested event loop. Messages remain behind MOApplication's readiness
+  // barrier until a complete OrganizerCore generation exists.
+  app.firstTimeSetup(multiProcess);
+
   if (auto r = cl.runPostMultiProcess(multiProcess)) {
     return *r;
   }
 
   tt.stop();
-
-  // stuff that's done only once, even if MO restarts in the loop below
-  app.firstTimeSetup(multiProcess);
 
   // force the "Select instance" dialog on startup, only for first loop or when
   // the current instance cannot be used

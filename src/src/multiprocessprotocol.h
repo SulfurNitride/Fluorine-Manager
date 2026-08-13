@@ -25,6 +25,7 @@ QByteArray encodeMessage(QStringView message);
 DecodeResult decodeMessage(const QByteArray &bytes);
 
 QByteArray acceptedReply();
+QByteArray rejectedReply();
 bool isAcceptedReply(const QByteArray &bytes);
 
 } // namespace multiprocess_ipc

@@ -13,6 +13,7 @@ constexpr char Magic[] = {'F', 'M', 'I', 'P'};
 constexpr quint8 ProtocolVersion = 1;
 constexpr quint8 MessageType = 1;
 constexpr char Accepted[] = {'F', 'M', 'O', 'K', 1};
+constexpr char Rejected[] = {'F', 'M', 'N', 'O', 1};
 
 } // namespace
 
@@ -76,6 +77,8 @@ DecodeResult decodeMessage(const QByteArray &bytes) {
 }
 
 QByteArray acceptedReply() { return QByteArray(Accepted, sizeof(Accepted)); }
+
+QByteArray rejectedReply() { return QByteArray(Rejected, sizeof(Rejected)); }
 
 bool isAcceptedReply(const QByteArray &bytes) {
   return bytes.size() == static_cast<qsizetype>(sizeof(Accepted)) &&

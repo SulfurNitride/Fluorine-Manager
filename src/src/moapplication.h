@@ -22,6 +22,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "applicationappearance.h"
 #include "env.h"
+#include "externalmessagequeue.h"
 #include <QApplication>
 #include <QFileSystemWatcher>
 #include <QStringList>
@@ -47,6 +48,7 @@ class MOApplication : public QApplication
 
 public:
   MOApplication(int& argc, char** argv);
+  ~MOApplication() override;
 
   // called from main() only once for stuff that persists across "restarts"
   //
@@ -94,11 +96,15 @@ private:
   std::unique_ptr<NexusInterface> m_nexus;
   std::unique_ptr<PluginContainer> m_plugins;
   std::unique_ptr<OrganizerCore> m_core;
-  bool m_coreReady = false;
-  QStringList m_pendingExternalLinks;
+  ExternalMessageQueue m_externalMessages;
+  bool m_externalDrainScheduled = false;
+  bool m_externalDispatching = false;
 
-  void externalMessage(const QString& message);
-  void processPendingExternalLinks();
+  bool enqueueExternalMessage(const QString& message);
+  void scheduleExternalMessageDrain();
+  void dispatchNextExternalMessage();
+  void dispatchExternalMessage(const QString& message);
+  void pauseExternalMessages();
   std::unique_ptr<Instance> getCurrentInstance(bool forceSelect);
   bool applyAppearance(const ApplicationAppearance::Spec& appearance,
                        bool watchFile);

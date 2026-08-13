@@ -98,6 +98,8 @@ TEST(MultiProcessProtocol, RoundTripsUnicodeAndRejectsMalformedFrames) {
             multiprocess_ipc::DecodeStatus::Complete);
   EXPECT_TRUE(multiprocess_ipc::encodeMessage(maximumMessage + QLatin1Char('x'))
                   .isEmpty());
+  EXPECT_FALSE(
+      multiprocess_ipc::isAcceptedReply(multiprocess_ipc::rejectedReply()));
 
   QByteArray oversized = frameWithPayload("x");
   const quint32 length =
@@ -182,6 +184,7 @@ TEST(MultiProcess, ForwardsOneFramedMessageAndAcknowledgesIt) {
   const auto testEndpoint = endpoint(temporary, QStringLiteral("forward"));
   MOMultiProcess primary(false, testEndpoint);
   MOMultiProcess secondary(false, testEndpoint);
+  primary.setMessageHandler([](const QString &) { return true; });
 
   const QString expected = QString::fromUtf8("run /tmp/Grüße '$HOME;*.esp'");
   QString received;
@@ -204,6 +207,7 @@ TEST(MultiProcess, FragmentedClientDoesNotBlockTheEventLoop) {
   ASSERT_TRUE(temporary.isValid());
   const auto testEndpoint = endpoint(temporary, QStringLiteral("fragmented"));
   MOMultiProcess primary(false, testEndpoint);
+  primary.setMessageHandler([](const QString &) { return true; });
 
   QString received;
   QObject::connect(&primary, &MOMultiProcess::messageSent,
@@ -277,6 +281,7 @@ TEST(MultiProcess, RejectsMalformedClientsAndAcceptsTheNextMessage) {
   ASSERT_TRUE(temporary.isValid());
   const auto testEndpoint = endpoint(temporary, QStringLiteral("malformed"));
   MOMultiProcess primary(false, testEndpoint);
+  primary.setMessageHandler([](const QString &) { return true; });
 
   QStringList received;
   QObject::connect(&primary, &MOMultiProcess::messageSent,
@@ -314,6 +319,27 @@ TEST(MultiProcess, RejectsMalformedClientsAndAcceptsTheNextMessage) {
   }));
   EXPECT_TRUE(result.get());
   EXPECT_EQ(received, QStringList{QStringLiteral("refresh")});
+}
+
+TEST(MultiProcess, ReportsApplicationRejectionToTheSender) {
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const auto testEndpoint = endpoint(temporary, QStringLiteral("rejected"));
+  MOMultiProcess primary(false, testEndpoint);
+  MOMultiProcess secondary(false, testEndpoint);
+  primary.setMessageHandler([](const QString &) { return false; });
+  int emitted = 0;
+  QObject::connect(&primary, &MOMultiProcess::messageSent,
+                   [&](const QString &) { ++emitted; });
+
+  auto result = std::async(std::launch::async,
+                           [&] { return secondary.sendMessage("refresh"); });
+  ASSERT_TRUE(waitUntil([&] {
+    return result.wait_for(std::chrono::milliseconds(0)) ==
+           std::future_status::ready;
+  }));
+  EXPECT_FALSE(result.get());
+  EXPECT_EQ(emitted, 0);
 }
 
 TEST(MultiProcess, RefusesToReplaceARegularFile) {

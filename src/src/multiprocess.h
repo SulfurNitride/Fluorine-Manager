@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QString>
 
+#include <functional>
 #include <memory>
 
 class QLocalSocket;
@@ -55,6 +56,7 @@ public:
    * @param message message to send
    **/
   bool sendMessage(const QString& message);
+  void setMessageHandler(std::function<bool(const QString&)> handler);
 
 signals:
 
@@ -88,6 +90,7 @@ private:
   QLocalServer m_Server;
   QHash<QLocalSocket*, QByteArray> m_ConnectionBuffers;
   QHash<QLocalSocket*, QTimer*> m_ConnectionTimers;
+  std::function<bool(const QString&)> m_MessageHandler;
 };
 
 #endif  // MODORGANIZER_MOMULTIPROCESS_INCLUDED

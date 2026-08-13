@@ -55,6 +55,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <QSslSocket>
 #include <QStringList>
 #include <QStyleFactory>
+#include <QTimer>
 #include <QUrl>
 #include <iplugingame.h>
 #include <log.h>
@@ -262,6 +263,15 @@ MOApplication::MOApplication(int& argc, char** argv) : QApplication(argc, argv)
   }
 }
 
+MOApplication::~MOApplication()
+{
+  const qsizetype discarded = m_externalMessages.stop();
+  if (discarded > 0) {
+    log::warn("discarding {} external message(s) during application shutdown",
+              discarded);
+  }
+}
+
 OrganizerCore& MOApplication::core()
 {
   return *m_core;
@@ -284,18 +294,17 @@ bool MOApplication::finishCommandLineSetup()
 
 void MOApplication::firstTimeSetup(MOMultiProcess& multiProcess)
 {
-  connect(
-      &multiProcess, &MOMultiProcess::messageSent, this,
-      [this](auto&& s) {
-        externalMessage(s);
-      },
-      Qt::QueuedConnection);
+  // MOMultiProcess receives on the GUI thread. Capture the message before its
+  // acknowledgement is sent so restart cleanup cannot remove the only queued
+  // Qt delivery event and silently lose accepted work.
+  multiProcess.setMessageHandler(
+      [this](const QString& message) { return enqueueExternalMessage(message); });
 }
 
 int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
 {
   TimeThis tt("MOApplication setup()");
-  m_coreReady = false;
+  pauseExternalMessages();
 
   // makes plugin data path available to plugins, see
   // IOrganizer::getPluginDataPath()
@@ -532,12 +541,6 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
   m_core->updateExecutablesList();
   m_core->updateModInfoFromDisc();
   m_core->setCurrentProfile(m_instance->profileName());
-  m_coreReady = true;
-
-  // The single-instance listener is active before setup() finishes. Preserve
-  // NXM links received during that window and start them as soon as the core
-  // is ready instead of rejecting or losing them.
-  processPendingExternalLinks();
 
   return 0;
 }
@@ -600,12 +603,21 @@ int MOApplication::run(MOMultiProcess& multiProcess)
     tt.stop();
 
     if (mainWindow.startupFailed()) {
+      pauseExternalMessages();
       mainWindowStartupFailed = true;
       log::error("main window startup failed; the event loop will not be started");
       mainWindow.hide();
     } else {
       mainWindow.activateWindow();
+      const qsizetype staleMessages = m_externalMessages.resume();
+      if (staleMessages > 0) {
+        log::warn(
+            "discarding {} external command(s) from the retired core generation",
+            staleMessages);
+      }
+      scheduleExternalMessageDrain();
       res = exec();
+      pauseExternalMessages();
       mainWindowStartupFailed = mainWindow.startupFailed();
       mainWindow.close();
     }
@@ -635,7 +647,92 @@ int MOApplication::run(MOMultiProcess& multiProcess)
   return res;
 }
 
-void MOApplication::externalMessage(const QString& message)
+bool MOApplication::enqueueExternalMessage(const QString& message)
+{
+  if (ModOrganizerExiting() || ModOrganizerCanCloseNow()) {
+    log::warn("rejecting external message during exit authorization");
+    return false;
+  }
+
+  const auto scope = isNxmLink(message)
+                         ? ExternalMessageQueue::Scope::AnyGeneration
+                         : ExternalMessageQueue::Scope::CurrentGeneration;
+  if (!m_externalMessages.enqueue(message, scope)) {
+    log::warn("rejecting external message: the application is not ready or its "
+              "pending-message limit was reached");
+    return false;
+  }
+
+  log::debug("captured external IPC message ({} UTF-8 bytes); {} pending",
+             message.toUtf8().size(), m_externalMessages.size());
+  scheduleExternalMessageDrain();
+  return true;
+}
+
+void MOApplication::scheduleExternalMessageDrain()
+{
+  const auto action = m_externalMessages.dispatchAction(
+      ModOrganizerExiting(), ModOrganizerCanCloseNow());
+  if (action == ExternalMessageQueue::DispatchAction::Stop) {
+    pauseExternalMessages();
+    return;
+  }
+  if (m_externalDrainScheduled || m_externalDispatching ||
+      action == ExternalMessageQueue::DispatchAction::Wait) {
+    // Exit authorization can pump a nested event loop and later be refused.
+    // Retry after that transient attempt instead of stranding an accepted
+    // message in an otherwise-ready generation.
+    if (ModOrganizerExiting() && !m_externalDrainScheduled &&
+        m_externalMessages.ready() && m_externalMessages.size() > 0) {
+      m_externalDrainScheduled = true;
+      QTimer::singleShot(50, this, [this] {
+        m_externalDrainScheduled = false;
+        scheduleExternalMessageDrain();
+      });
+    }
+    return;
+  }
+
+  m_externalDrainScheduled = true;
+  QTimer::singleShot(0, this, [this] {
+    m_externalDrainScheduled = false;
+    dispatchNextExternalMessage();
+  });
+}
+
+void MOApplication::dispatchNextExternalMessage()
+{
+  if (ModOrganizerCanCloseNow()) {
+    pauseExternalMessages();
+    return;
+  }
+  if (ModOrganizerExiting()) {
+    scheduleExternalMessageDrain();
+    return;
+  }
+  if (m_core == nullptr || m_instance == nullptr) {
+    pauseExternalMessages();
+    return;
+  }
+
+  const auto message = m_externalMessages.takeNext();
+  if (!message) {
+    return;
+  }
+
+  m_externalDispatching = true;
+  try {
+    dispatchExternalMessage(*message);
+  } catch (const std::exception& e) {
+    log::error("failed to process external message: {}", e.what());
+  } catch (...) {
+    log::error("failed to process external message: unknown exception");
+  }
+  m_externalDispatching = false;
+  scheduleExternalMessageDrain();
+}
+
+void MOApplication::dispatchExternalMessage(const QString& message)
 {
   log::debug("processing external IPC message ({} UTF-8 bytes)",
              message.toUtf8().size());
@@ -654,13 +751,8 @@ void MOApplication::externalMessage(const QString& message)
       }
     }
   } else if (isNxmLink(message)) {
-    if (!m_coreReady) {
-      log::info("queueing external download link until instance setup completes");
-      m_pendingExternalLinks.append(message);
-    } else {
-      MessageDialog::showMessage(tr("Download started"), qApp->activeWindow(), false);
-      m_core->downloadRequestedNXM(message);
-    }
+    MessageDialog::showMessage(tr("Download started"), qApp->activeWindow(), false);
+    m_core->downloadRequestedNXM(message);
   } else {
     cl::CommandLine cl;
 
@@ -672,14 +764,12 @@ void MOApplication::externalMessage(const QString& message)
     }
 
     if (auto i = cl.instance()) {
-      const auto ci = InstanceManager::singleton().currentInstance();
-
-      if (*i != ci->displayName()) {
+      if (*i != m_instance->displayName()) {
         reportError(
             tr("This shortcut or command line is for instance '%1', but the current "
                "instance is '%2'.")
                 .arg(*i)
-                .arg(ci->displayName()));
+                .arg(m_instance->displayName()));
 
         return;
       }
@@ -701,18 +791,12 @@ void MOApplication::externalMessage(const QString& message)
   }
 }
 
-void MOApplication::processPendingExternalLinks()
+void MOApplication::pauseExternalMessages()
 {
-  if (!m_coreReady || m_core == nullptr || m_pendingExternalLinks.isEmpty()) {
-    return;
-  }
-
-  QStringList links;
-  links.swap(m_pendingExternalLinks);
-  log::info("processing {} download link(s) queued during startup", links.size());
-  for (const QString& link : links) {
-    m_core->downloadRequestedNXM(link);
-  }
+  m_externalMessages.pause();
+  // resetForRestart removes posted events. Allow the next successful setup to
+  // schedule a fresh drain even when that removal consumed the old callback.
+  m_externalDrainScheduled = false;
 }
 
 std::unique_ptr<Instance> MOApplication::getCurrentInstance(bool forceSelect)
@@ -785,7 +869,7 @@ void MOApplication::purgeOldFiles()
 
 void MOApplication::resetForRestart()
 {
-  m_coreReady = false;
+  pauseExternalMessages();
   LogModel::instance().clear();
   ResetExitFlag();
 

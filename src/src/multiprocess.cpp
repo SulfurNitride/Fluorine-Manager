@@ -19,6 +19,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <utility>
 
 namespace {
 
@@ -104,6 +105,11 @@ MOMultiProcess::MOMultiProcess(bool allowMultiple, Endpoint endpoint,
 }
 
 MOMultiProcess::~MOMultiProcess() = default;
+
+void MOMultiProcess::setMessageHandler(
+    std::function<bool(const QString &)> handler) {
+  m_MessageHandler = std::move(handler);
+}
 
 MOMultiProcess::Endpoint MOMultiProcess::defaultEndpoint() {
   return {QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation),
@@ -365,11 +371,17 @@ void MOMultiProcess::rejectConnection(QLocalSocket *socket,
 void MOMultiProcess::acceptMessage(QLocalSocket *socket,
                                    const QString &message) {
   forgetConnection(socket);
-  MOBase::log::debug("accepted external IPC message ({} UTF-8 bytes)",
-                     message.toUtf8().size());
-  emit messageSent(message);
+  const bool accepted = m_MessageHandler && m_MessageHandler(message);
+  if (accepted) {
+    MOBase::log::debug("accepted external IPC message ({} UTF-8 bytes)",
+                       message.toUtf8().size());
+    emit messageSent(message);
+  } else {
+    MOBase::log::debug("application rejected external IPC message");
+  }
 
-  const QByteArray reply = multiprocess_ipc::acceptedReply();
+  const QByteArray reply = accepted ? multiprocess_ipc::acceptedReply()
+                                    : multiprocess_ipc::rejectedReply();
   if (socket->write(reply) != reply.size()) {
     socket->abort();
     socket->deleteLater();
