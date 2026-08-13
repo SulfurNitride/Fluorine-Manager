@@ -1344,6 +1344,196 @@ class OpenMWConfigTests(unittest.TestCase):
                 },
             )
 
+    def test_launcher_profile_builder_uses_writer_canonicalization(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            launcher_path = directory / "launcher.cfg"
+            data = [directory / "Data", directory / "Data", directory / "data"]
+            content = ["Addon.esp", "addon.ESP", "Other.omwaddon"]
+            archives = ["Custom.bsa", "custom.BSA", "Other.bsa"]
+            expected = openmw_cfg.build_openmw_launcher_profile(
+                data,
+                content,
+                archives,
+                vanilla_masters=["Game.esm", "game.ESM"],
+                vanilla_bsas=["Game.bsa", "game.BSA"],
+            )
+
+            self.assertEqual(
+                expected,
+                {
+                    "current_profile": "Fluorine",
+                    "data": [str(directory / "Data"), str(directory / "data")],
+                    "content": ["Game.esm", "Addon.esp", "Other.omwaddon"],
+                    "fallback_archive": [
+                        "Game.bsa",
+                        "Custom.bsa",
+                        "Other.bsa",
+                    ],
+                },
+            )
+
+            openmw_cfg.write_openmw_launcher_cfg(
+                launcher_path,
+                data,
+                content,
+                archives,
+                vanilla_masters=["Game.esm", "game.ESM"],
+                vanilla_bsas=["Game.bsa", "game.BSA"],
+            )
+            self.assertEqual(
+                openmw_cfg.read_openmw_launcher_profile(launcher_path), expected
+            )
+
+    def test_launcher_profile_reader_streams_and_does_not_modify_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            launcher_path = Path(temporary) / "launcher.cfg"
+            launcher_path.write_bytes(
+                b"[General]\r\nfirstrun=true\r\n"
+                b"[Unrelated]\r\nvalue=\xff\r\n"
+                b"[Profiles]\r\ncurrentprofile=Fluorine\r\n"
+                b"Other/data=/unrelated\r\n"
+                b"Fluorine/data=/game/Data Files\r\n"
+                b"Fluorine/content=Example.esp"
+            )
+            before = launcher_path.read_bytes()
+            before_stat = launcher_path.stat()
+
+            with mock.patch.object(
+                openmw_cfg,
+                "_read_lines",
+                side_effect=AssertionError("launcher reader must stream"),
+            ):
+                profile = openmw_cfg.read_openmw_launcher_profile(launcher_path)
+
+            after_stat = launcher_path.stat()
+            self.assertEqual(
+                profile,
+                {
+                    "current_profile": "Fluorine",
+                    "data": ["/game/Data Files"],
+                    "content": ["Example.esp"],
+                    "fallback_archive": [],
+                },
+            )
+            self.assertEqual(launcher_path.read_bytes(), before)
+            self.assertEqual(after_stat.st_ino, before_stat.st_ino)
+            self.assertEqual(after_stat.st_mtime_ns, before_stat.st_mtime_ns)
+            self.assertEqual(after_stat.st_ctime_ns, before_stat.st_ctime_ns)
+            self.assertEqual(list(launcher_path.parent.glob(".*.tmp")), [])
+            self.assertEqual(list(launcher_path.parent.glob(".*.rollback")), [])
+
+    def test_current_launcher_is_excluded_only_from_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            launcher_path = directory / "launcher.cfg"
+            root_path = directory / "openmw.cfg"
+            root_path.write_text("root\n", encoding="utf-8")
+            launcher_path.write_bytes(
+                b"[General]\r\nfirstrun=true\r\n"
+                b"[Historical Profile]\r\ncomment=preserve me\r\n"
+                b"[Profiles]\r\ncurrentprofile=Fluorine\r\n"
+                b"Other/data=/unrelated\r\n"
+                b"Fluorine/data=/game/Data Files\r\n"
+                b"Fluorine/content=Example.esp"
+            )
+            expected = openmw_cfg.build_openmw_launcher_profile(
+                ["/game/Data Files"],
+                ["Example.esp"],
+                vanilla_masters=[],
+                vanilla_bsas=[],
+            )
+            before = launcher_path.read_bytes()
+            before_stat = launcher_path.stat()
+            file_roles = {
+                "launcher config": launcher_path,
+                "root config": root_path,
+            }
+
+            launcher_needs_update = not openmw_cfg.openmw_launcher_cfg_is_current(
+                launcher_path,
+                expected,
+            )
+            openmw_cfg.validate_file_roles(file_roles)
+            transaction_paths = [
+                path
+                for role, path in file_roles.items()
+                if role != "launcher config" or launcher_needs_update
+            ]
+
+            self.assertFalse(launcher_needs_update)
+            self.assertIn(launcher_path, file_roles.values())
+            self.assertNotIn(launcher_path, transaction_paths)
+            with mock.patch.object(
+                openmw_cfg,
+                "_atomic_text_writer",
+                side_effect=AssertionError("current launcher must not be written"),
+            ):
+                with openmw_cfg.rollback_file_changes(transaction_paths):
+                    if launcher_needs_update:
+                        openmw_cfg.write_openmw_launcher_cfg(
+                            launcher_path,
+                            ["/game/Data Files"],
+                            ["Example.esp"],
+                            vanilla_masters=[],
+                            vanilla_bsas=[],
+                        )
+
+            after_stat = launcher_path.stat()
+            self.assertEqual(launcher_path.read_bytes(), before)
+            self.assertEqual(after_stat.st_ino, before_stat.st_ino)
+            self.assertEqual(after_stat.st_mtime_ns, before_stat.st_mtime_ns)
+            self.assertEqual(after_stat.st_ctime_ns, before_stat.st_ctime_ns)
+            self.assertEqual(list(directory.glob(".*.tmp")), [])
+            self.assertEqual(list(directory.glob(".*.rollback")), [])
+
+    def test_launcher_currentness_includes_general_initialization(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            launcher_path = Path(temporary) / "launcher.cfg"
+            expected = openmw_cfg.build_openmw_launcher_profile(
+                ["/game/Data"],
+                ["Example.esp"],
+                vanilla_masters=[],
+                vanilla_bsas=[],
+            )
+            launcher_path.write_text(
+                "[Profiles]\n"
+                "currentprofile=Fluorine\n"
+                "Fluorine/data=/game/Data\n"
+                "Fluorine/content=Example.esp\n",
+                encoding="utf-8",
+            )
+
+            self.assertFalse(
+                openmw_cfg.openmw_launcher_cfg_is_current(
+                    launcher_path, expected
+                )
+            )
+            openmw_cfg.write_openmw_launcher_cfg(
+                launcher_path,
+                ["/game/Data"],
+                ["Example.esp"],
+                vanilla_masters=[],
+                vanilla_bsas=[],
+            )
+            self.assertTrue(
+                openmw_cfg.openmw_launcher_cfg_is_current(
+                    launcher_path, expected
+                )
+            )
+
+            launcher_path.write_text(
+                launcher_path.read_text(encoding="utf-8").replace(
+                    "Example.esp", "Changed.esp"
+                ),
+                encoding="utf-8",
+            )
+            self.assertFalse(
+                openmw_cfg.openmw_launcher_cfg_is_current(
+                    launcher_path, expected
+                )
+            )
+
     def test_writer_removes_managed_targets_from_multi_replace(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             cfg_path = Path(temporary) / "openmw.cfg"

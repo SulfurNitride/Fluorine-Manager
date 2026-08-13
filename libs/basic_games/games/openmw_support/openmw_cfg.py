@@ -157,6 +157,11 @@ class OpenMWLauncherProfile(TypedDict):
     fallback_archive: list[str]
 
 
+class OpenMWLauncherInspection(TypedDict):
+    profile: OpenMWLauncherProfile
+    general_initialized: bool
+
+
 def find_openmw_cfg(
     native_cfg: Path, flatpak_cfg: Path, flatpak_launch: bool
 ) -> Path | None:
@@ -1816,6 +1821,26 @@ def _dedup_paths_preserving_order(paths: Iterable[Path | str]) -> list[str]:
     return result
 
 
+def build_openmw_launcher_profile(
+    data_dirs: Iterable[Path | str],
+    content_plugins: Iterable[str],
+    fallback_archives: Iterable[str] = (),
+    *,
+    vanilla_masters: Iterable[str] = VANILLA_MASTERS,
+    vanilla_bsas: Iterable[str] = VANILLA_BSAS,
+    profile_name: str = "Fluorine",
+) -> OpenMWLauncherProfile:
+    """Build the exact launcher profile projection owned by Fluorine."""
+    return {
+        "current_profile": profile_name,
+        "data": _dedup_paths_preserving_order(data_dirs),
+        "content": _dedup_preserving_order(vanilla_masters, content_plugins),
+        "fallback_archive": _dedup_preserving_order(
+            vanilla_bsas, fallback_archives
+        ),
+    }
+
+
 def write_openmw_launcher_cfg(
     cfg_path: Path,
     data_dirs: Iterable[Path | str],
@@ -1835,9 +1860,17 @@ def write_openmw_launcher_cfg(
     content lists and launcher settings remain intact.
     """
     _log = log_fn or (lambda _: None)
-    data = _dedup_paths_preserving_order(data_dirs)
-    content = _dedup_preserving_order(vanilla_masters, content_plugins)
-    archives = _dedup_preserving_order(vanilla_bsas, fallback_archives)
+    profile = build_openmw_launcher_profile(
+        data_dirs,
+        content_plugins,
+        fallback_archives,
+        vanilla_masters=vanilla_masters,
+        vanilla_bsas=vanilla_bsas,
+        profile_name=profile_name,
+    )
+    data = profile["data"]
+    content = profile["content"]
+    archives = profile["fallback_archive"]
 
     def write_line(stream: TextIO, line: str = "") -> None:
         stream.write(line)
@@ -1919,39 +1952,85 @@ def read_openmw_launcher_profile(
     cfg_path: Path, profile_name: str = "Fluorine"
 ) -> OpenMWLauncherProfile:
     """Read one launcher's generated profile for exact write verification."""
+    return inspect_openmw_launcher_cfg(cfg_path, profile_name)["profile"]
+
+
+def inspect_openmw_launcher_cfg(
+    cfg_path: Path, profile_name: str = "Fluorine"
+) -> OpenMWLauncherInspection:
+    """Stream the launcher state that Fluorine's writer owns."""
     result: OpenMWLauncherProfile = {
         "current_profile": None,
         "data": [],
         "content": [],
         "fallback_archive": [],
     }
+    if not cfg_path.is_file():
+        return {"profile": result, "general_initialized": False}
+
     in_profiles = False
+    in_general = False
+    saw_general = False
+    general_has_first_run = False
+    all_general_sections_initialized = True
     prefix = profile_name + "/"
-    for raw in _read_lines(cfg_path):
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("[") and line.endswith("]"):
-            in_profiles = line[1:-1].strip().casefold() == "profiles"
-            continue
-        if not in_profiles or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if key.casefold() == "currentprofile":
-            result["current_profile"] = value
-            continue
-        if not key.startswith(prefix):
-            continue
-        option = key[len(prefix) :].casefold()
-        if option == "data":
-            result["data"].append(value)
-        elif option == "content":
-            result["content"].append(value)
-        elif option == "fallback-archive":
-            result["fallback_archive"].append(value)
-    return result
+    with cfg_path.open("r", encoding="utf-8", errors="replace") as source:
+        for raw in source:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                if in_general and not general_has_first_run:
+                    all_general_sections_initialized = False
+                section = line[1:-1].strip().casefold()
+                in_profiles = section == "profiles"
+                in_general = section == "general"
+                if in_general:
+                    saw_general = True
+                    general_has_first_run = False
+                continue
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+            if in_general and key.casefold() == "firstrun":
+                general_has_first_run = True
+            if not in_profiles:
+                continue
+            if key.casefold() == "currentprofile":
+                result["current_profile"] = value
+                continue
+            if not key.startswith(prefix):
+                continue
+            option = key[len(prefix) :].casefold()
+            if option == "data":
+                result["data"].append(value)
+            elif option == "content":
+                result["content"].append(value)
+            elif option == "fallback-archive":
+                result["fallback_archive"].append(value)
+    if in_general and not general_has_first_run:
+        all_general_sections_initialized = False
+    return {
+        "profile": result,
+        "general_initialized": saw_general and all_general_sections_initialized,
+    }
+
+
+def openmw_launcher_cfg_is_current(
+    cfg_path: Path,
+    expected_profile: OpenMWLauncherProfile,
+) -> bool:
+    """Return whether writing would change Fluorine-owned launcher state."""
+    profile_name = expected_profile["current_profile"]
+    if profile_name is None:
+        return False
+    inspection = inspect_openmw_launcher_cfg(cfg_path, profile_name)
+    return (
+        inspection["general_initialized"]
+        and inspection["profile"] == expected_profile
+    )
 
 
 def build_managed_block(

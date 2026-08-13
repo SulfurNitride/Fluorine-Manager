@@ -38,13 +38,13 @@ from .openmw_support.flatpak_access import (
     probe_flatpak_access,
 )
 from .openmw_support.openmw_cfg import (
-    VANILLA_BSAS,
+    build_openmw_launcher_profile,
     find_openmw_cfg,
     is_openmw_player_stub,
+    openmw_launcher_cfg_is_current,
     order_selected_files,
     parse_openmw_selection_chain,
     read_openmw_data_dirs,
-    read_openmw_launcher_profile,
     read_profile_selector,
     read_selection_state,
     restore_profile_config_entries,
@@ -486,6 +486,16 @@ class OpenMWGame(BasicGame):
             selected_archives = order_selected_files(
                 bsa_archives, state["archives"]
             )
+            launcher_cfg = cfg.parent / "launcher.cfg"
+            expected_launcher_profile = build_openmw_launcher_profile(
+                data_dirs,
+                content,
+                selected_archives,
+            )
+            launcher_needs_update = not openmw_launcher_cfg_is_current(
+                launcher_cfg,
+                expected_launcher_profile,
+            )
 
             # Helpful, non-destructive nudge: flag likely groundcover plugins the
             # user hasn't listed yet (we never reroute automatically).
@@ -501,7 +511,6 @@ class OpenMWGame(BasicGame):
                     )
 
             log_fn = lambda m: qInfo("OpenMW:" + m)
-            launcher_cfg = cfg.parent / "launcher.cfg"
             file_roles = {
                 "selection state": state_path,
                 "active plugin projection": profile_dir / "plugins.txt",
@@ -518,8 +527,13 @@ class OpenMWGame(BasicGame):
             if previous_state_path is not None and previous_state_dirty:
                 file_roles["previous profile state"] = previous_state_path
             validate_file_roles(file_roles)
+            transaction_paths = [
+                path
+                for role, path in file_roles.items()
+                if role != "launcher config" or launcher_needs_update
+            ]
 
-            with rollback_file_changes(file_roles.values()):
+            with rollback_file_changes(transaction_paths):
                 if state_dirty and chained_profile:
                     write_selection_state(state_path, state)
                 write_openmw_cfg(
@@ -532,13 +546,19 @@ class OpenMWGame(BasicGame):
                     strip_config=chained_profile,
                     log_fn=log_fn,
                 )
-                write_openmw_launcher_cfg(
-                    launcher_cfg,
-                    data_dirs=data_dirs,
-                    content_plugins=content,
-                    fallback_archives=selected_archives,
-                    log_fn=log_fn,
-                )
+                if launcher_needs_update:
+                    write_openmw_launcher_cfg(
+                        launcher_cfg,
+                        data_dirs=data_dirs,
+                        content_plugins=content,
+                        fallback_archives=selected_archives,
+                        log_fn=log_fn,
+                    )
+                else:
+                    log_fn(
+                        f"  Launcher profile in {launcher_cfg} is already current; "
+                        "left the file unchanged."
+                    )
                 if chained_profile:
                     # The profile is the highest-priority OpenMW config directory.
                     # OpenMW consequently reads and writes settings.cfg, Lua storage,
@@ -600,20 +620,10 @@ class OpenMWGame(BasicGame):
                         is_flatpak_launch, app_name
                     ),
                 )
-                expected_content = []
-                seen_content: set[str] = set()
-                for name in [*self.primaryPlugins(), *content]:
-                    folded = name.casefold()
-                    if folded not in seen_content:
-                        seen_content.add(folded)
-                        expected_content.append(name)
-                expected_archives = []
-                seen_archives: set[str] = set()
-                for name in [*VANILLA_BSAS, *selected_archives]:
-                    folded = name.casefold()
-                    if folded not in seen_archives:
-                        seen_archives.add(folded)
-                        expected_archives.append(name)
+                expected_content = expected_launcher_profile["content"]
+                expected_archives = expected_launcher_profile[
+                    "fallback_archive"
+                ]
                 if (
                     persisted_selection["content"] != expected_content
                     or persisted_selection["groundcover"] != active_groundcover
@@ -625,20 +635,10 @@ class OpenMWGame(BasicGame):
                     raise RuntimeError(
                         "OpenMW config read-back differs from canonical plugin state"
                     )
-                launcher_profile = read_openmw_launcher_profile(launcher_cfg)
-                launcher_data = []
-                seen_data: set[str] = set()
-                for path in data_dirs:
-                    value = str(path)
-                    if value not in seen_data:
-                        seen_data.add(value)
-                        launcher_data.append(value)
-                if launcher_profile != {
-                    "current_profile": "Fluorine",
-                    "data": launcher_data,
-                    "content": expected_content,
-                    "fallback_archive": expected_archives,
-                }:
+                if not openmw_launcher_cfg_is_current(
+                    launcher_cfg,
+                    expected_launcher_profile,
+                ):
                     raise RuntimeError(
                         "OpenMW launcher config read-back differs from export"
                     )
