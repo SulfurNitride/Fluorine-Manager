@@ -3973,7 +3973,8 @@ OrganizerCore::AfterRunResult OrganizerCore::continueAfterRun(
                   log::warn("afterRun: stale FUSE mount encountered under "
                             "'{}'; cleaning up",
                             gameDir.toStdString());
-                  FuseConnector::tryCleanupStaleMount(gameDir);
+                  FuseConnector::tryCleanupStaleMount(
+                      managedGame()->dataDirectory().absolutePath());
                 }
                 const auto ms =
                     std::chrono::duration_cast<std::chrono::milliseconds>(

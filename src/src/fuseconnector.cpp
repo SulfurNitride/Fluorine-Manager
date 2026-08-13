@@ -4,6 +4,7 @@
 #include "sleepinhibitor.h"
 #include "vfs/vfscatalog.h"
 #include "vfs/vfsindex.h"
+#include "vfs/stalemountcleanup.h"
 #include "vfs/vfstree.h"
 
 #include <QCoreApplication>
@@ -25,6 +26,7 @@
 #include <iplugingame.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cerrno>
 #include <cstdio>
@@ -34,9 +36,11 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <utility>
 
 using namespace MOBase;
 
@@ -73,57 +77,10 @@ std::string digestPrefix(const VfsDigest& digest)
   return result;
 }
 
-std::string decodeProcMountField(const std::string& in)
-{
-  std::string out;
-  out.reserve(in.size());
-
-  for (size_t i = 0; i < in.size();) {
-    if (in[i] == '\\' && i + 3 < in.size() && std::isdigit(in[i + 1]) &&
-        std::isdigit(in[i + 2]) && std::isdigit(in[i + 3])) {
-      const std::string oct = in.substr(i + 1, 3);
-      const int value       = std::stoi(oct, nullptr, 8);
-      out.push_back(static_cast<char>(value));
-      i += 4;
-      continue;
-    }
-
-    out.push_back(in[i]);
-    ++i;
-  }
-
-  return out;
-}
-
-bool isMountPoint(const QString& path)
-{
-  QFile mounts(QStringLiteral("/proc/mounts"));
-  if (!mounts.open(QIODevice::ReadOnly)) {
-    return false;
-  }
-
-  const auto mountPoint = QDir::cleanPath(path);
-  while (!mounts.atEnd()) {
-    const auto line  = QString::fromUtf8(mounts.readLine()).trimmed();
-    const auto parts = line.split(' ', Qt::SkipEmptyParts);
-    if (parts.size() < 2) {
-      continue;
-    }
-
-    const QString current = QString::fromStdString(
-        decodeProcMountField(parts[1].toStdString()));
-    if (QDir::cleanPath(current) == mountPoint) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 bool runUnmountCommand(const QString& program, const QStringList& args)
 {
-  // Suppress stderr from fusermount/umount to avoid confusing terminal output
-  // when unmount fails (e.g. permission denied in Flatpak sandbox).
+  // Suppress stderr from FUSE helpers to avoid confusing terminal output when
+  // unmount fails (e.g. permission denied in a Flatpak sandbox).
   auto tryRun = [&](const QString& cmd, const QStringList& cmdArgs) -> bool {
     QProcess p;
     p.setStandardErrorFile(QProcess::nullDevice());
@@ -526,13 +483,13 @@ bool FuseConnector::mount(
   m_dataDirPath = mount_point.toStdString();
   m_mountPoint  = m_dataDirPath;
 
+  tryCleanupStaleMount(QString::fromStdString(m_mountPoint));
+
   if (!fs::exists(m_dataDirPath)) {
     throw FuseConnectorException(
         QObject::tr("Game data directory does not exist: %1")
             .arg(QString::fromStdString(m_dataDirPath)));
   }
-
-  tryCleanupStaleMount(QString::fromStdString(m_mountPoint));
 
   const fs::path overwritePath(m_overwriteDir);
   m_stagingDir = (overwritePath.parent_path() / "VFS_staging").string();
@@ -808,8 +765,8 @@ bool FuseConnector::mount(
   // libfuse's receive buffer is sized off max_write + header and the
   // kernel reads don't fit.  1MB is the safe ceiling.
   std::vector<std::string> argvStorage = {
-      "mo2fuse", "-o", "fsname=mo2linux", "-o", "noatime",
-      "-o", "max_read=1048576"};
+      "mo2fuse", "-o", "fsname=mo2linux", "-o", "subtype=mo2linux",
+      "-o", "noatime", "-o", "max_read=1048576"};
   std::fprintf(stderr, "[VFS] libfuse=%s headers=%d.%d\n",
                fuse_pkgversion(), FUSE_MAJOR_VERSION, FUSE_MINOR_VERSION);
 
@@ -1911,93 +1868,96 @@ void FuseConnector::flushStagingLive()
   log::debug("Live staging flush complete");
 }
 
-// Detect a stale FUSE mount by probing with stat().  Returns true if
-// the path exists in the mount table OR if accessing it gives ENOTCONN
-// (which happens when the FUSE daemon died but the mount is listed
-// under a different path due to symlinks).
-static bool isStaleOrMounted(const QString& path)
-{
-  if (isMountPoint(path)) {
-    return true;
-  }
-
-  // Probe the path directly — ENOTCONN means dead FUSE mount even if
-  // /proc/mounts lists it under a different (canonical) path.
-  struct stat st;
-  return ::stat(path.toLocal8Bit().constData(), &st) != 0 && errno == ENOTCONN;
-}
-
-static void doUnmount(const QString& path)
-{
-  const QString clean = QDir::cleanPath(path);
-
-  if (runUnmountCommand("fusermount3", {"-u", clean}) ||
-      runUnmountCommand("fusermount", {"-u", clean})) {
-    log::info("stale mount at '{}' cleaned up successfully", path);
-    return;
-  }
-
-  // Graceful unmount failed — try force/lazy variants.
-  runUnmountCommand("umount", {clean});
-  runUnmountCommand("umount", {"-l", clean});
-  runUnmountCommand("fusermount3", {"-uz", clean});
-  runUnmountCommand("fusermount", {"-uz", clean});
-
-  if (!isStaleOrMounted(path)) {
-    log::info("stale mount at '{}' cleaned up (lazy unmount)", path);
-  } else {
-    log::error("failed to clean up stale mount at '{}'", path);
-  }
-}
-
-static void cleanupStaleMo2Mounts(const QString& keepPath)
-{
-  QFile mounts(QStringLiteral("/proc/mounts"));
-  if (!mounts.open(QIODevice::ReadOnly)) {
-    return;
-  }
-
-  const QString cleanKeep = QDir::cleanPath(keepPath);
-  const QString trashRoot =
-      QDir::cleanPath(QDir::homePath() + "/.local/share/Trash/files");
-
-  while (!mounts.atEnd()) {
-    const auto line  = QString::fromUtf8(mounts.readLine()).trimmed();
-    const auto parts = line.split(' ', Qt::SkipEmptyParts);
-    if (parts.size() < 3) {
-      continue;
-    }
-    if (parts[0] != QStringLiteral("mo2linux")) {
-      continue;
-    }
-
-    const QString mp = QDir::cleanPath(QString::fromStdString(
-        decodeProcMountField(parts[1].toStdString())));
-    if (mp == cleanKeep) {
-      continue;
-    }
-
-    const bool underTrash =
-        mp == trashRoot || mp.startsWith(trashRoot + QDir::separator());
-    if (!underTrash && !isStaleOrMounted(mp)) {
-      continue;
-    }
-
-    log::warn("cleaning stale mo2linux mount at '{}'", mp);
-    doUnmount(mp);
-  }
-}
-
 void FuseConnector::tryCleanupStaleMount(const QString& path)
 {
-  cleanupStaleMo2Mounts(path);
+  auto readMountInfo = []() -> std::optional<QVector<stale_mount_cleanup::MountEntry>> {
+    QFile mountInfo(QStringLiteral("/proc/self/mountinfo"));
+    if (!mountInfo.open(QIODevice::ReadOnly)) {
+      return std::nullopt;
+    }
+    return stale_mount_cleanup::parseMountInfo(mountInfo.readAll());
+  };
 
-  if (!isStaleOrMounted(path)) {
+  const auto entries = readMountInfo();
+  if (!entries.has_value()) {
+    log::warn("cannot inspect mount ownership for '{}'; stale cleanup skipped", path);
     return;
   }
 
-  log::warn("stale FUSE mount detected at '{}', attempting cleanup", path);
-  doUnmount(path);
+  const auto candidate =
+      stale_mount_cleanup::uniqueContainingFluorineMount(*entries, path);
+  if (!candidate.has_value()) {
+    return;
+  }
+
+  auto isSameDisconnectedMount = [&]() {
+    const auto current = readMountInfo();
+    if (!current.has_value() ||
+        !stale_mount_cleanup::containsSameMount(*current, *candidate)) {
+      return false;
+    }
+
+    const auto currentAtPath = stale_mount_cleanup::uniqueContainingFluorineMount(
+        *current, candidate->mountPoint);
+    if (!currentAtPath.has_value() || *currentAtPath != *candidate) {
+      return false;
+    }
+
+    struct stat st;
+    errno            = 0;
+    const int result = ::stat(candidate->mountPoint.toLocal8Bit().constData(), &st);
+    return result != 0 && stale_mount_cleanup::isDisconnectedProbeError(errno);
+  };
+
+  if (!isSameDisconnectedMount()) {
+    return;
+  }
+
+  log::warn("disconnected Fluorine FUSE mount detected at '{}'; attempting cleanup",
+            candidate->mountPoint);
+
+  const std::array attempts = {
+      std::pair{QStringLiteral("fusermount3"), QStringLiteral("-u")},
+      std::pair{QStringLiteral("fusermount"), QStringLiteral("-u")},
+      std::pair{QStringLiteral("fusermount3"), QStringLiteral("-uz")},
+      std::pair{QStringLiteral("fusermount"), QStringLiteral("-uz")},
+  };
+
+  for (const auto& [program, option] : attempts) {
+    if (!isSameDisconnectedMount()) {
+      const auto current = readMountInfo();
+      if (current.has_value() &&
+          !stale_mount_cleanup::containsSameMount(*current, *candidate)) {
+        log::info("disconnected mount at '{}' was cleaned up", candidate->mountPoint);
+      } else {
+        log::warn("mount at '{}' changed during cleanup; no further action taken",
+                  candidate->mountPoint);
+      }
+      return;
+    }
+
+    if (runUnmountCommand(program, {option, candidate->mountPoint})) {
+      const auto current = readMountInfo();
+      if (!current.has_value()) {
+        log::warn("{} reported successful cleanup of '{}' but mount state cannot "
+                  "be verified; no further unmount will be attempted",
+                  program, candidate->mountPoint);
+      } else if (stale_mount_cleanup::containsSameMount(*current, *candidate)) {
+        log::warn("{} reported success but mount {} at '{}' remains; no further "
+                  "unmount will be attempted",
+                  program, candidate->mountId, candidate->mountPoint);
+      } else {
+        log::info("disconnected mount at '{}' cleaned up successfully",
+                  candidate->mountPoint);
+      }
+      return;
+    }
+  }
+
+  if (isSameDisconnectedMount()) {
+    log::error("failed to clean up disconnected Fluorine mount at '{}'",
+               candidate->mountPoint);
+  }
 }
 
 // ── VFS Root Builder ─────────────────────────────────────────────────────────

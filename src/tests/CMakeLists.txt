@@ -394,6 +394,28 @@ target_link_libraries(test_external_dir_mapping PRIVATE
 add_test(NAME test_external_dir_mapping COMMAND test_external_dir_mapping)
 
 # ---------------------------------------------------------------------------
+# Disconnected Fluorine FUSE mount classification tests
+# ---------------------------------------------------------------------------
+add_executable(test_stalemountcleanup EXCLUDE_FROM_ALL
+    test_stalemountcleanup.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/vfs/stalemountcleanup.cpp
+)
+set_target_properties(test_stalemountcleanup PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_stalemountcleanup PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_stalemountcleanup PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_stalemountcleanup COMMAND test_stalemountcleanup)
+
+# ---------------------------------------------------------------------------
 # VFS file-operation regression tests
 # ---------------------------------------------------------------------------
 add_executable(test_vfs_file_ops EXCLUDE_FROM_ALL
@@ -675,7 +697,7 @@ add_custom_target(fluorine-tests
             test_vfs_backend
             test_fluorineconfigownership test_protonsettingsedit
             test_heroicjson test_protondetection
-            test_external_dir_mapping test_vfs_file_ops
+            test_external_dir_mapping test_stalemountcleanup test_vfs_file_ops
             test_vfs_descriptor_cleanup test_vfs_runtime_index
             test_game_save_migration
             test_vfs_catalog test_vfs_index

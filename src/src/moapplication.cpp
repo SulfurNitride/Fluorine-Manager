@@ -458,8 +458,6 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
 
   tt.start("MOApplication::doOneRun() OrganizerCore setup");
 
-  sanity::checkPaths(*m_instance->gamePlugin(), *m_settings);
-
   // setting up organizer core
   m_core->setManagedGame(m_instance->gamePlugin());
 
@@ -470,6 +468,8 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
     log::info("checking for stale FUSE mount on '{}'", dataDir);
     FuseConnector::tryCleanupStaleMount(dataDir);
   }
+
+  sanity::checkPaths(*m_instance->gamePlugin(), *m_settings);
 
   // Restore any stale INI/save backups left by a previous Wine/Proton crash.
   // Native Linux game instances do not use the prefix during launch.
@@ -885,11 +885,14 @@ bool MOApplication::notify(QObject* receiver, QEvent* event)
     // workflow triggered it (refresh, restore, etc.) and showing a hard
     // error on a state we just recovered from is just noise.
     if (fe.code().value() == ENOTCONN) {
-      bool recovered = false;
-      auto attemptCleanup = [&recovered](const std::filesystem::path& p) {
+      bool attempted       = false;
+      bool allPathsCleared = true;
+      auto attemptCleanup = [&attempted, &allPathsCleared](
+                                const std::filesystem::path& p) {
         if (p.empty()) {
           return;
         }
+        attempted = true;
         const QString qpath = QString::fromStdString(p.string());
         log::warn("ENOTCONN on '{}' — attempting stale mount cleanup",
                   p.string());
@@ -901,14 +904,12 @@ bool MOApplication::notify(QObject* receiver, QEvent* event)
         const bool stillWedged =
             ::stat(qpath.toLocal8Bit().constData(), &st) != 0 &&
             errno == ENOTCONN;
-        if (!stillWedged) {
-          recovered = true;
-        }
+        allPathsCleared = allPathsCleared && !stillWedged;
       };
       attemptCleanup(fe.path1());
       attemptCleanup(fe.path2());
 
-      if (recovered) {
+      if (attempted && allPathsCleared) {
         log::info(
             "stale FUSE mount recovered; suppressing error dialog. "
             "The triggering operation will need to be retried.");
