@@ -79,9 +79,46 @@ RUNDIR="build/src/src"
 # ── Output layout (staging area — installed to ~/.local/share/fluorine by build-native.sh) ──
 OUT_DIR="/src/build/staging"
 rm -rf "${OUT_DIR}"
-mkdir -p "${OUT_DIR}/plugins" "${OUT_DIR}/lib"
+mkdir -p "${OUT_DIR}/plugins" "${OUT_DIR}/lib" "${OUT_DIR}/fonts"
 
 mkdir -p "${OUT_DIR}/licenses"
+
+# Fluorine deliberately selects DejaVu Sans through QFontDatabase so its UI
+# does not depend on a desktop theme choosing a sensible application font.
+# These are application assets, not a private Fontconfig installation: the
+# runtime library and configuration remain host-provided below.
+DEJAVU_DIR=""
+for candidate in \
+    /usr/share/fonts/truetype/dejavu \
+    /usr/share/fonts/dejavu \
+    /usr/share/TTF; do
+    if [ -s "${candidate}/DejaVuSans.ttf" ] && \
+       [ -s "${candidate}/DejaVuSans-Bold.ttf" ]; then
+        DEJAVU_DIR="${candidate}"
+        break
+    fi
+done
+if [ -z "${DEJAVU_DIR}" ]; then
+    echo "ERROR: required DejaVu Sans application fonts were not found" >&2
+    exit 1
+fi
+for font in DejaVuSans.ttf DejaVuSans-Bold.ttf; do
+    cp -f "${DEJAVU_DIR}/${font}" "${OUT_DIR}/fonts/${font}"
+    if [ ! -s "${OUT_DIR}/fonts/${font}" ]; then
+        echo "ERROR: failed to stage application font ${font}" >&2
+        exit 1
+    fi
+done
+DEJAVU_LICENSE=/usr/share/doc/fonts-dejavu-core/copyright
+if [ ! -s "${DEJAVU_LICENSE}" ]; then
+    echo "ERROR: DejaVu font license was not found" >&2
+    exit 1
+fi
+cp -f "${DEJAVU_LICENSE}" "${OUT_DIR}/licenses/fonts-dejavu-core.txt"
+if [ ! -s "${OUT_DIR}/licenses/fonts-dejavu-core.txt" ]; then
+    echo "ERROR: failed to stage the DejaVu font license" >&2
+    exit 1
+fi
 
 # ── Main binary + helpers ──
 cp -f "${RUNDIR}/ModOrganizer" "${OUT_DIR}/ModOrganizer-core"
@@ -742,8 +779,36 @@ if find "${OUT_DIR}/lib" -maxdepth 1 \
     echo "ERROR: portable bundle unexpectedly staged libfontconfig" >&2
     exit 1
 fi
+
+# Validate the exact application-font assets independently of Fontconfig's
+# matching policy. QFontDatabase loads these files directly at startup; fc-scan
+# is used here only to catch an absent, swapped, or corrupt packaged face.
+REGULAR_FONT_METADATA="$(
+    fc-scan --format='%{family[0]}|%{style[0]}' \
+        "${OUT_DIR}/fonts/DejaVuSans.ttf"
+)"
+BOLD_FONT_METADATA="$(
+    fc-scan --format='%{family[0]}|%{style[0]}' \
+        "${OUT_DIR}/fonts/DejaVuSans-Bold.ttf"
+)"
+if [ "${REGULAR_FONT_METADATA}" != 'DejaVu Sans|Book' ]; then
+    echo "ERROR: unexpected regular application font: ${REGULAR_FONT_METADATA}" >&2
+    exit 1
+fi
+if [ "${BOLD_FONT_METADATA}" != 'DejaVu Sans|Bold' ]; then
+    echo "ERROR: unexpected bold application font: ${BOLD_FONT_METADATA}" >&2
+    exit 1
+fi
+if find "${OUT_DIR}/fonts" -maxdepth 1 -name 'DejaVuSansMono*.ttf' | grep -q .; then
+    echo "ERROR: unused DejaVu Sans Mono assets were staged" >&2
+    exit 1
+fi
+if [ -e "${OUT_DIR}/etc/fonts/fonts.conf" ]; then
+    echo "ERROR: private Fontconfig configuration was unexpectedly staged" >&2
+    exit 1
+fi
 bash -n "${OUT_DIR}/fluorine-manager"
-echo "Host fontconfig policy verified: ${FONTCONFIG_RUNTIME}"
+echo "Host fontconfig policy verified: ${FONTCONFIG_RUNTIME}; application fonts: ${REGULAR_FONT_METADATA}, ${BOLD_FONT_METADATA}"
 
 # ── qt.conf — tells Qt where to find plugins without QT_PLUGIN_PATH env ──
 cat > "${OUT_DIR}/qt.conf" <<'QTCONF'

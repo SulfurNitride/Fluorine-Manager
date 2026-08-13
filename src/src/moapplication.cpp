@@ -143,23 +143,34 @@ void addLinuxLibrariesToPath()
 QString configureApplicationFont()
 {
   const QDir fontDir(QCoreApplication::applicationDirPath() + "/fonts");
-  const QStringList bundledFonts{
-      "DejaVuSans.ttf",
-      "DejaVuSans-Bold.ttf",
-      "DejaVuSansMono.ttf",
-      "DejaVuSansMono-Bold.ttf",
+  struct ApplicationFont
+  {
+    const char* fileName;
+    bool regular;
+  };
+  const ApplicationFont applicationFonts[]{
+      {"DejaVuSans.ttf", true},
+      {"DejaVuSans-Bold.ttf", false},
   };
 
   QString uiFamily;
-  for (const QString& font : bundledFonts) {
-    const int id = QFontDatabase::addApplicationFont(fontDir.filePath(font));
-    if (id < 0 || !uiFamily.isEmpty()) {
+  for (const auto& font : applicationFonts) {
+    const QString path = fontDir.filePath(QString::fromLatin1(font.fileName));
+    const int id = QFontDatabase::addApplicationFont(path);
+    if (id < 0) {
+      log::warn("failed to load application font '{}'", path);
       continue;
     }
 
     const QStringList families = QFontDatabase::applicationFontFamilies(id);
-    if (!families.isEmpty()) {
-      uiFamily = families.first();
+    if (!families.contains(QStringLiteral("DejaVu Sans"))) {
+      log::warn("application font '{}' reports unexpected families [{}]", path,
+                families.join(", "));
+      continue;
+    }
+    log::debug("loaded application font '{}'", path);
+    if (font.regular) {
+      uiFamily = QStringLiteral("DejaVu Sans");
     }
   }
 
@@ -167,6 +178,9 @@ QString configureApplicationFont()
     QFont font = QApplication::font();
     font.setFamily(uiFamily);
     QApplication::setFont(font);
+  } else {
+    log::warn("DejaVu Sans application font is unavailable; using host UI font '{}'.",
+              QApplication::font().family());
   }
 
   return uiFamily;
