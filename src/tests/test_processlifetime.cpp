@@ -16,6 +16,7 @@
 #include <QProcess>
 #include <QProcessEnvironment>
 
+#include <algorithm>
 #include <atomic>
 #include <array>
 #include <cerrno>
@@ -30,11 +31,53 @@
 #include <thread>
 #include <unistd.h>
 #include <utility>
+#include <vector>
 
 namespace
 {
 
 using namespace std::chrono_literals;
+
+std::vector<MOBase::log::Entry>* g_CapturedProcessLogs = nullptr;
+
+void captureProcessLog(MOBase::log::Entry entry)
+{
+  if (g_CapturedProcessLogs != nullptr) {
+    g_CapturedProcessLogs->push_back(std::move(entry));
+  }
+}
+
+class ScopedInfoLogCapture
+{
+public:
+  ScopedInfoLogCapture()
+  {
+    g_CapturedProcessLogs = &entries;
+    auto& logger = MOBase::log::getDefault();
+    logger.setCallback(&captureProcessLog);
+    logger.setLevel(MOBase::log::Info);
+  }
+
+  ~ScopedInfoLogCapture()
+  {
+    auto& logger = MOBase::log::getDefault();
+    logger.setCallback(nullptr);
+    logger.setLevel(MOBase::log::Warning);
+    g_CapturedProcessLogs = nullptr;
+  }
+
+  ScopedInfoLogCapture(const ScopedInfoLogCapture&) = delete;
+  ScopedInfoLogCapture& operator=(const ScopedInfoLogCapture&) = delete;
+
+  bool contains(const std::string& text) const
+  {
+    return std::any_of(entries.begin(), entries.end(), [&](const auto& entry) {
+      return entry.message.find(text) != std::string::npos;
+    });
+  }
+
+  std::vector<MOBase::log::Entry> entries;
+};
 
 class ThrowingPayload
 {
@@ -1541,11 +1584,19 @@ TEST_F(ProcessLifetimeTest, CompanionExtendsButDoesNotReplaceRootLifetime)
   const pid_t root = spawnLongRootWithShortCompanion();
   ASSERT_GT(root, 0);
 
+  ScopedInfoLogCapture logs;
+  pid_t adoptedPid = 0;
+  process_lifetime::Callbacks callbacks;
+  callbacks.updateProcess = [&](pid_t observed, const QString& name) {
+    if (name == QStringLiteral("fm-short-life")) {
+      adoptedPid = observed;
+    }
+  };
   const auto started = std::chrono::steady_clock::now();
   std::uint32_t exitCode = 0;
   const auto result = process_lifetime::waitForPid(
-      root, &exitCode, {}, {QStringLiteral("fm-short-life")}, false, {},
-      true);
+      root, &exitCode, callbacks, {QStringLiteral("fm-short-life")}, false,
+      {}, true);
   const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now() - started);
 
@@ -1554,6 +1605,30 @@ TEST_F(ProcessLifetimeTest, CompanionExtendsButDoesNotReplaceRootLifetime)
   EXPECT_FALSE(kernelProcessIsRunning(root));
   EXPECT_GE(elapsed, 2400ms);
   EXPECT_LT(elapsed, 5s);
+  ASSERT_GT(adoptedPid, 0);
+  EXPECT_TRUE(logs.contains("last adopted pid " + std::to_string(adoptedPid) +
+                            " (fm-short-life)"));
+  EXPECT_FALSE(logs.contains("adopted pid 0"));
+}
+
+TEST_F(ProcessLifetimeTest, RootOnlySummaryReportsNoAdoptedProcess)
+{
+  const pid_t root = ::fork();
+  ASSERT_GE(root, 0);
+  if (root == 0) {
+    ::usleep(100'000);
+    _exit(23);
+  }
+
+  ScopedInfoLogCapture logs;
+  std::uint32_t exitCode = 0;
+  const auto result = process_lifetime::waitForPid(
+      root, &exitCode, {}, {}, false);
+
+  EXPECT_EQ(result, process_lifetime::Result::Completed);
+  EXPECT_EQ(exitCode, 23u);
+  EXPECT_TRUE(logs.contains("no adopted lifetime process"));
+  EXPECT_FALSE(logs.contains("adopted pid 0"));
 }
 
 TEST_F(ProcessLifetimeTest, WaitsForAllSimultaneousCompanions)

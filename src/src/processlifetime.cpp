@@ -1503,6 +1503,15 @@ Result waitForPid(pid_t pid, std::uint32_t* exitCode, const Callbacks& callbacks
   pid_t lastTrackedPid = 0;
   std::uint64_t lastTrackedStartTime = 0;
   QString lastTrackedName;
+  pid_t lastAdoptedPid = 0;
+  QString lastAdoptedName;
+  const auto rememberAdoption = [&](pid_t adoptedPid,
+                                    const QString& adoptedName) {
+    if (adoptedPid > 0) {
+      lastAdoptedPid = adoptedPid;
+      lastAdoptedName = adoptedName;
+    }
+  };
   const auto finish = [&](Result result) {
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                              std::chrono::steady_clock::now() - started)
@@ -1524,11 +1533,20 @@ Result waitForPid(pid_t pid, std::uint32_t* exitCode, const Callbacks& callbacks
       break;
     }
 
-    log::info("process runner: root pid {} lifetime ended; adopted pid {} ({}), "
-              "exit code {}, elapsed {} ms, result {}",
-              pid, lastTrackedPid,
-              lastTrackedName.isEmpty() ? "none" : lastTrackedName.toStdString(), code,
-              elapsed, resultName);
+    if (lastAdoptedPid > 0) {
+      log::info(
+          "process runner: root pid {} lifetime ended; last adopted pid {} "
+          "({}), exit code {}, elapsed {} ms, result {}",
+          pid, lastAdoptedPid,
+          lastAdoptedName.isEmpty() ? "unknown"
+                                    : lastAdoptedName.toStdString(),
+          code, elapsed, resultName);
+    } else {
+      log::info(
+          "process runner: root pid {} lifetime ended; no adopted lifetime "
+          "process, exit code {}, elapsed {} ms, result {}",
+          pid, code, elapsed, resultName);
+    }
     return result;
   };
 
@@ -1685,6 +1703,7 @@ Result waitForPid(pid_t pid, std::uint32_t* exitCode, const Callbacks& callbacks
     sawInaccessibleCandidate = false;
     companionDeadline.reset();
     lastTrackedName = initialTrackedName;
+    rememberAdoption(lastTrackedPid, lastTrackedName);
     log::info("process runner: root pid {} adopted lifetime pid {} ({})", pid,
               lastTrackedPid, lastTrackedName.toStdString());
   }
@@ -2044,6 +2063,7 @@ Result waitForPid(pid_t pid, std::uint32_t* exitCode, const Callbacks& callbacks
         }
       }
       lastTrackedName = trackedName;
+      rememberAdoption(lastTrackedPid, lastTrackedName);
       companionDeadline.reset();
       clearProcUnavailable();
       displayPid = tracked;
@@ -2192,6 +2212,7 @@ Result waitForPid(pid_t pid, std::uint32_t* exitCode, const Callbacks& callbacks
             lastTrackedPid = rescanned;
             lastTrackedStartTime = rescannedStartTime;
             lastTrackedName = rescanName;
+            rememberAdoption(lastTrackedPid, lastTrackedName);
             companionDeadline.reset();
             continue;
           }
@@ -2208,6 +2229,7 @@ Result waitForPid(pid_t pid, std::uint32_t* exitCode, const Callbacks& callbacks
             lastTrackedPid = transition;
             lastTrackedStartTime = transitionStartTime;
             lastTrackedName = transitionName;
+            rememberAdoption(lastTrackedPid, lastTrackedName);
             companionDeadline.reset();
             continue;
           }
@@ -2292,6 +2314,7 @@ Result waitForPid(pid_t pid, std::uint32_t* exitCode, const Callbacks& callbacks
           lastTrackedPid     = detached;
           lastTrackedStartTime = detachedStartTime;
           lastTrackedName    = detachedName;
+          rememberAdoption(lastTrackedPid, lastTrackedName);
           companionDeadline.reset();
           useKillPoll = true;
           log::info("root process {} exited; adopted detached lifetime pid {} ({})",
