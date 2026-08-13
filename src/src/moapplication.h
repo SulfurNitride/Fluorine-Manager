@@ -20,10 +20,14 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #ifndef MOAPPLICATION_H
 #define MOAPPLICATION_H
 
+#include "applicationappearance.h"
 #include "env.h"
 #include <QApplication>
 #include <QFileSystemWatcher>
 #include <QStringList>
+
+#include <memory>
+#include <optional>
 
 class Settings;
 class MOMultiProcess;
@@ -78,13 +82,11 @@ public:
 public slots:
   bool setStyleFile(const QString& style);
 
-private slots:
-  void updateStyle(const QString& fileName);
-
 private:
   QFileSystemWatcher m_styleWatcher;
   QString m_defaultStyle;
-  QString m_defaultFontFamily;
+  std::unique_ptr<ApplicationAppearance::Controller> m_appearance;
+  std::optional<ApplicationAppearance::Spec> m_requestedAppearance;
   std::unique_ptr<env::ModuleNotification> m_modules;
 
   std::unique_ptr<Instance> m_instance;
@@ -97,7 +99,11 @@ private:
 
   void externalMessage(const QString& message);
   void processPendingExternalLinks();
-  static std::unique_ptr<Instance> getCurrentInstance(bool forceSelect);
+  std::unique_ptr<Instance> getCurrentInstance(bool forceSelect);
+  bool applyAppearance(const ApplicationAppearance::Spec& appearance,
+                       bool watchFile);
+  void resetAppearance();
+  void updateAppearanceWatcher(bool watchFile);
   static std::optional<int> setupInstanceLoop(Instance& currentInstance,
                                               PluginContainer& pc,
                                               Settings& settings);

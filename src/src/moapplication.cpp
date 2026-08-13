@@ -18,6 +18,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include "moapplication.h"
+#include "applicationappearance.h"
 #include "commandline.h"
 #include "instancemanager.h"
 #include "loglist.h"
@@ -29,7 +30,6 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "organizercore.h"
 #include "sanitychecks.h"
 #include "settings.h"
-#include "stylesheetpath.h"
 #include "settingsmigration.h"
 #include "fluorineconfig.h"
 #include "fluorinepaths.h"
@@ -49,19 +49,16 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <QFile>
 #include <QFont>
 #include <QFontDatabase>
+#include <QFontInfo>
+#include <QFontMetrics>
 #include <QMessageBox>
-#include <QPainter>
-#include <QProxyStyle>
-#include <QRegularExpression>
 #include <QSslSocket>
 #include <QStringList>
 #include <QStyleFactory>
-#include <QStyleOption>
 #include <QUrl>
 #include <iplugingame.h>
 #include <log.h>
 #include <report.h>
-#include <scopeguard.h>
 #include <utility.h>
 
 using namespace MOBase;
@@ -80,55 +77,6 @@ public slots:
   void open(const QUrl& url) { MOBase::shell::Open(url); }
 };
 
-// style proxy that changes the appearance of drop indicators
-//
-class ProxyStyle : public QProxyStyle
-{
-public:
-  ProxyStyle(QStyle* baseStyle = nullptr) : QProxyStyle(baseStyle) {}
-
-  void drawPrimitive(PrimitiveElement element, const QStyleOption* option,
-                     QPainter* painter, const QWidget* widget) const override
-  {
-    if (element == QStyle::PE_IndicatorItemViewItemDrop) {
-
-      // 0. Fix a bug that made the drop indicator sometimes appear on top
-      // of the mod list when selecting a mod.
-      if (option->rect.height() == 0 && option->rect.bottomRight() == QPoint(-1, -1)) {
-        return;
-      }
-
-      // 1. full-width drop indicator
-      QRect rect(option->rect);
-      if (const auto* view = qobject_cast<const QTreeView*>(widget)) {
-        rect.setLeft(view->indentation());
-        rect.setRight(widget->width());
-      }
-
-      // 2. stylish drop indicator
-      painter->setRenderHint(QPainter::Antialiasing, true);
-
-      QColor col(option->palette.windowText().color());
-      QPen pen(col);
-      pen.setWidth(2);
-      col.setAlpha(50);
-
-      painter->setPen(pen);
-      painter->setBrush(QBrush(col));
-      if (rect.height() == 0) {
-        QPoint tri[3] = {rect.topLeft(), rect.topLeft() + QPoint(-5, 5),
-                         rect.topLeft() + QPoint(-5, -5)};
-        painter->drawPolygon(tri, 3);
-        painter->drawLine(rect.topLeft(), rect.topRight());
-      } else {
-        painter->drawRoundedRect(rect, 5, 5);
-      }
-    } else {
-      QProxyStyle::drawPrimitive(element, option, painter, widget);
-    }
-  }
-};
-
 void addLinuxLibrariesToPath()
 {
   const auto libsPath =
@@ -140,8 +88,12 @@ void addLinuxLibrariesToPath()
   env::prependToPath(libsPath);
 }
 
-QString configureApplicationFont()
+void configureApplicationFont()
 {
+  // Measured legacy packaged baseline. Keep this in point units so Qt
+  // continues to scale it for each screen's DPI.
+  constexpr qreal PackagedUiPointSize = 9.0;
+
   const QDir fontDir(QCoreApplication::applicationDirPath() + "/fonts");
   struct ApplicationFont
   {
@@ -177,13 +129,18 @@ QString configureApplicationFont()
   if (!uiFamily.isEmpty()) {
     QFont font = QApplication::font();
     font.setFamily(uiFamily);
+    font.setPointSizeF(PackagedUiPointSize);
     QApplication::setFont(font);
+    log::debug("configured packaged application font '{}' at {} pt", uiFamily,
+               PackagedUiPointSize);
   } else {
-    log::warn("DejaVu Sans application font is unavailable; using host UI font '{}'.",
-              QApplication::font().family());
+    const QFont hostFont = QApplication::font();
+    log::warn(
+        "DejaVu Sans application font is unavailable; preserving host UI font "
+        "'{}' (pointSize={}, pixelSize={}).",
+        hostFont.family(), hostFont.pointSizeF(), hostFont.pixelSize());
   }
 
-  return uiFamily;
 }
 
 #ifdef MO2_WEBENGINE
@@ -256,7 +213,7 @@ void configureQtWebEngineProcessPath()
 MOApplication::MOApplication(int& argc, char** argv) : QApplication(argc, argv)
 {
   TimeThis const tt("MOApplication()");
-  m_defaultFontFamily = configureApplicationFont();
+  configureApplicationFont();
 
   // Ensure the app name is always "ModOrganizer" regardless of the binary
   // filename (settings/profile lookups key off this).
@@ -266,9 +223,11 @@ MOApplication::MOApplication(int& argc, char** argv) : QApplication(argc, argv)
 
   qputenv("QML_DISABLE_DISK_CACHE", "true");
 
-  connect(&m_styleWatcher, &QFileSystemWatcher::fileChanged, [&](auto&& file) {
+  connect(&m_styleWatcher, &QFileSystemWatcher::fileChanged, [this](auto&& file) {
     log::debug("style file '{}' changed, reloading", file);
-    updateStyle(file);
+    if (m_requestedAppearance.has_value()) {
+      applyAppearance(*m_requestedAppearance, true);
+    }
   });
 
   // Pick a Qt style available on this system. "Fusion" is bundled with Qt and
@@ -280,9 +239,9 @@ MOApplication::MOApplication(int& argc, char** argv) : QApplication(argc, argv)
   } else if (!availableStyles.isEmpty()) {
     m_defaultStyle = availableStyles.first();
   }
-  // Start with "None" style setting and only apply custom styles from settings
-  // later during setup().
-  setStyleFile("");
+  m_appearance = std::make_unique<ApplicationAppearance::Controller>(
+      *this, applicationDirPath(), m_defaultStyle, QApplication::font());
+  resetAppearance();
   addLinuxLibrariesToPath();
 #ifdef MO2_WEBENGINE
   configureQtWebEngineProcessPath();
@@ -341,6 +300,11 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
   // makes plugin data path available to plugins, see
   // IOrganizer::getPluginDataPath()
   MOBase::details::setPluginDataPath(OrganizerCore::pluginDataPath());
+
+  // Instance selection is application-level UI: it must not inherit or preview
+  // a modlist stylesheet. The selected instance appearance is applied only
+  // after the selector closes and its Settings transaction is admitted below.
+  resetAppearance();
 
   // figuring out the current instance
   m_instance = getCurrentInstance(forceSelect);
@@ -403,6 +367,12 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
   }
   log::getDefault().setLevel(m_settings->diagnostics().logLevel());
   log::debug("using ini at '{}'", m_settings->filename());
+
+  // Apply through the authoritative Settings facade after admission. This is
+  // the first instance-appearance read and installs the live file watcher.
+  if (!setStyleFile(m_settings->interface().styleName().value_or(""))) {
+    m_settings->interface().setStyleName("");
+  }
 
   OrganizerCore::setGlobalCoreDumpType(m_settings->diagnostics().coreDumpType());
 
@@ -598,12 +568,6 @@ int MOApplication::run(MOMultiProcess& multiProcess)
                             QString::fromStdWString(AppConfig::tutorialsPath()) + "/",
                         m_core.get());
 
-  // styling
-  if (!setStyleFile(m_settings->interface().styleName().value_or(""))) {
-    // disable invalid stylesheet
-    m_settings->interface().setStyleName("");
-  }
-
   int res = 1;
   bool mainWindowStartupFailed = false;
 
@@ -775,6 +739,7 @@ std::unique_ptr<Instance> MOApplication::getCurrentInstance(bool forceSelect)
                 .arg(currentInstance->directory()));
       }
 
+      resetAppearance();
       currentInstance = selectInstance();
     }
   }
@@ -842,55 +807,68 @@ void MOApplication::resetForRestart()
   m_settings = {};
   m_instance = {};
 
+  resetAppearance();
+
   QCoreApplication::removePostedEvents(nullptr);
 }
 
 bool MOApplication::setStyleFile(const QString& styleName)
 {
-  // remove all files from watch
-  QStringList const currentWatch = m_styleWatcher.files();
-  if (currentWatch.count() != 0) {
-    m_styleWatcher.removePaths(currentWatch);
+  ApplicationAppearance::Spec appearance;
+  appearance.styleName = styleName;
+  if (m_settings != nullptr) {
+    appearance.fontFamily = m_settings->interface().fontFamily();
+    appearance.fontSize   = m_settings->interface().qssFontSize();
   }
-  // set new stylesheet or clear it
-  if (styleName.length() != 0) {
-    // Portable MO2 instances commonly carry their selected QSS and assets.
-    // Installed styles retain precedence, and the resolver accepts only a
-    // contained basename from either stylesheet directory.
-    const QString portableDirectory =
-        m_instance != nullptr && m_instance->isPortable()
-            ? m_instance->directory()
-            : QString();
-    const auto directories = StyleSheetPath::searchDirectories(
-        applicationDirPath(), portableDirectory);
-    const QString resolved = StyleSheetPath::resolve(styleName, directories);
-
-    if (!resolved.isEmpty()) {
-      m_styleWatcher.addPath(resolved);
-      updateStyle(resolved);
-    } else if (QStyleFactory::keys().contains(styleName)) {
-      updateStyle(styleName);
-    } else {
-      log::warn("stylesheet '{}' was not found in [{}]", styleName,
-                directories.join(", "));
-      return false;
-    }
-  } else {
-    setStyle(new ProxyStyle(QStyleFactory::create(m_defaultStyle)));
-    setStyleSheet("");
-
-    const QString fontFamily =
-        m_settings != nullptr ? m_settings->interface().fontFamily() : QString();
-    const int fontSize =
-        m_settings != nullptr ? m_settings->interface().qssFontSize() : 0;
-    QFont appFont = QApplication::font();
-    appFont.setFamily(!fontFamily.isEmpty() ? fontFamily : m_defaultFontFamily);
-    if (fontSize > 0) {
-      appFont.setPixelSize(fontSize);
-    }
-    QApplication::setFont(appFont);
+  if (m_instance != nullptr && m_instance->isPortable()) {
+    appearance.instanceDirectory = m_instance->directory();
   }
-  return true;
+  return applyAppearance(appearance, true);
+}
+
+bool MOApplication::applyAppearance(
+    const ApplicationAppearance::Spec& appearance, bool watchFile)
+{
+  m_requestedAppearance = appearance;
+  QString error;
+  const bool applied = m_appearance->apply(appearance, &error);
+  updateAppearanceWatcher(watchFile && applied);
+
+  if (!applied) {
+    log::warn("{}; restored the default application appearance", error);
+  }
+
+  const QFontInfo baseFont(QApplication::font());
+  const QFontMetrics baseMetrics(QApplication::font());
+  log::debug(
+      "application appearance: requested style='{}', active file='{}', "
+      "application font='{}', pixelSize={}, pointSize={}, weight={}, "
+      "metrics={}x{}, settings font-size override={}",
+      appearance.styleName, m_appearance->activeStyleFile(), baseFont.family(),
+      baseFont.pixelSize(), baseFont.pointSizeF(), baseFont.weight(),
+      baseMetrics.height(),
+      baseMetrics.horizontalAdvance(QStringLiteral("Fluorine")),
+      appearance.fontSize);
+  return applied;
+}
+
+void MOApplication::resetAppearance()
+{
+  m_requestedAppearance = ApplicationAppearance::Spec{};
+  m_appearance->reset();
+  updateAppearanceWatcher(false);
+}
+
+void MOApplication::updateAppearanceWatcher(bool watchFile)
+{
+  const QStringList watched = m_styleWatcher.files();
+  if (!watched.isEmpty()) {
+    m_styleWatcher.removePaths(watched);
+  }
+  const QString active = m_appearance->activeStyleFile();
+  if (watchFile && !active.isEmpty()) {
+    m_styleWatcher.addPath(active);
+  }
 }
 
 bool MOApplication::notify(QObject* receiver, QEvent* event)
@@ -951,157 +929,6 @@ bool MOApplication::notify(QObject* receiver, QEvent* event)
     reportError(tr("an error occurred"));
     return false;
   }
-}
-
-namespace
-{
-QString styleSheetFontSizeOverride(int fontSize)
-{
-  if (fontSize <= 0) {
-    return {};
-  }
-
-  return QStringLiteral("\n\n/* Fluorine QSS font size override */\n"
-                        "QWidget { font-size: %1px; }\n")
-      .arg(fontSize);
-}
-
-QString applyQssFontSize(const QString& stylesheet, int fontSize)
-{
-  if (fontSize <= 0) {
-    return stylesheet;
-  }
-
-  static const QRegularExpression fontSizeRe(
-      QStringLiteral(R"(font-size\s*:\s*[^;{}]+;)"),
-      QRegularExpression::CaseInsensitiveOption);
-
-  QString result = stylesheet;
-  result.replace(fontSizeRe, QStringLiteral("font-size: %1px;").arg(fontSize));
-  result += styleSheetFontSizeOverride(fontSize);
-  return result;
-}
-
-std::optional<QString> loadStyleSheet(const QString& fileName, int fontSize)
-{
-  QFile stylesheet(fileName);
-  if (!stylesheet.open(QFile::ReadOnly | QFile::Text)) {
-    log::error("failed to open stylesheet file {}", fileName);
-    return {};
-  }
-
-  QString content = QString::fromUtf8(stylesheet.readAll());
-  content = StyleSheetPath::resolveAssets(
-      content, QFileInfo(fileName).absolutePath());
-  return applyQssFontSize(content, fontSize);
-}
-
-QStringList extractTopStyleSheetComments(QFile& stylesheet)
-{
-  if (!stylesheet.open(QFile::ReadOnly)) {
-    log::error("failed to open stylesheet file {}", stylesheet.fileName());
-    return {};
-  }
-  ON_BLOCK_EXIT([&stylesheet]() {
-    stylesheet.close();
-  });
-
-  QStringList topComments;
-
-  while (true) {
-    const auto byteLine = stylesheet.readLine();
-    if (byteLine.isNull()) {
-      break;
-    }
-
-    const auto line = QString(byteLine).trimmed();
-
-    // skip empty lines
-    if (line.isEmpty()) {
-      continue;
-    }
-
-    // only handle single line comments
-    if (!line.startsWith("/*")) {
-      break;
-    }
-
-    topComments.push_back(line.mid(2, line.size() - 4).trimmed());
-  }
-
-  return topComments;
-}
-
-QString extractBaseStyleFromStyleSheet(QFile& stylesheet, const QString& defaultStyle)
-{
-  // read the first line of the files that are either empty or comments
-  //
-  const auto topLines = extractTopStyleSheetComments(stylesheet);
-
-  const auto factoryStyles = QStyleFactory::keys();
-
-  QString style = defaultStyle;
-
-  for (const auto& line : topLines) {
-    if (!line.startsWith("mo2-base-style")) {
-      continue;
-    }
-
-    const auto parts = line.split(":");
-    if (parts.size() != 2) {
-      log::warn("found invalid top-comment for mo2 in {}: {}", stylesheet.fileName(),
-                line);
-      continue;
-    }
-
-    const auto tmpStyle = parts[1].trimmed();
-    const auto index    = factoryStyles.indexOf(tmpStyle, 0, Qt::CaseInsensitive);
-    if (index == -1) {
-      log::warn("base style '{}' from style '{}' not found", tmpStyle,
-                stylesheet.fileName(), line);
-      continue;
-    }
-
-    style = factoryStyles[index];
-    log::info("found base style '{}' for style '{}'", style, stylesheet.fileName());
-    break;
-  }
-
-  return style;
-}
-
-}  // namespace
-
-void MOApplication::updateStyle(const QString& fileName)
-{
-  const int qssFontSize =
-      m_settings != nullptr ? m_settings->interface().qssFontSize() : 0;
-
-  if (QStyleFactory::keys().contains(fileName)) {
-    setStyleSheet("");
-    setStyle(new ProxyStyle(QStyleFactory::create(fileName)));
-  } else {
-    QFile stylesheet(fileName);
-    if (stylesheet.exists()) {
-      setStyle(new ProxyStyle(QStyleFactory::create(
-          extractBaseStyleFromStyleSheet(stylesheet, m_defaultStyle))));
-      if (auto content = loadStyleSheet(fileName, qssFontSize)) {
-        setStyleSheet(*content);
-      }
-    } else {
-      log::warn("invalid stylesheet: {}", fileName);
-    }
-  }
-
-  // Apply user's font family/size override (or fall back to bundled DejaVu Sans)
-  const QString fontFamily =
-      m_settings != nullptr ? m_settings->interface().fontFamily() : QString();
-  QFont appFont = QApplication::font();
-  appFont.setFamily(!fontFamily.isEmpty() ? fontFamily : m_defaultFontFamily);
-  if (qssFontSize > 0) {
-    appFont.setPixelSize(qssFontSize);
-  }
-  QApplication::setFont(appFont);
 }
 
 MOSplash::MOSplash(const Settings& settings, const QString& dataPath,

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Network)
+find_package(Qt6 REQUIRED COMPONENTS Core Network Widgets)
 find_package(GTest REQUIRED)
 find_package(SQLite3 REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -619,6 +619,30 @@ target_link_libraries(test_stylesheetpath PRIVATE
 add_test(NAME test_stylesheetpath COMMAND test_stylesheetpath)
 
 # ---------------------------------------------------------------------------
+# Atomic application appearance transitions
+# ---------------------------------------------------------------------------
+add_executable(test_applicationappearance EXCLUDE_FROM_ALL
+    test_applicationappearance.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/applicationappearance.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/stylesheetpath.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/shared/appconfig.cpp
+)
+set_target_properties(test_applicationappearance PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_applicationappearance PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_applicationappearance PRIVATE
+    Qt6::Widgets
+    mo2::uibase
+    GTest::gtest
+)
+add_test(NAME test_applicationappearance COMMAND test_applicationappearance)
+
+# ---------------------------------------------------------------------------
 # Per-plugin legacy resource path compatibility tests
 # ---------------------------------------------------------------------------
 add_executable(test_plugindatapath EXCLUDE_FROM_ALL
@@ -656,4 +680,4 @@ add_custom_target(fluorine-tests
             test_game_save_migration
             test_vfs_catalog test_vfs_index
             test_staging_promotion test_python_module_switch
-            test_stylesheetpath test_plugindatapath)
+            test_stylesheetpath test_applicationappearance test_plugindatapath)

@@ -453,7 +453,7 @@
           <item>
            <widget class="QSpinBox" name="qssFontSizeSpinBox">
             <property name="toolTip">
-             <string>Overrides font-size values in QSS themes. Default uses the theme value.</string>
+             <string>Overrides the interface font size. Zero uses the stylesheet value, or the application default when no stylesheet is selected.</string>
             </property>
             <property name="specialValueText">
              <string>Default</string>

@@ -7,7 +7,7 @@
 #include "ui_settingsdialog.h"
 
 #include <QFontDatabase>
-#include <QFontInfo>
+#include <QStyleFactory>
 
 #include <questionboxmemory.h>
 #include <utility.h>
@@ -110,11 +110,20 @@ void ThemeSettingsTab::selectQssFontSize()
 
 void ThemeSettingsTab::updateDefaultFontSizeHint()
 {
-  int px = QFontInfo(QApplication::font()).pixelSize();
-  if (px > 0) {
+  const QString styleName =
+      ui->styleBox->itemData(ui->styleBox->currentIndex()).toString();
+  const bool isStylesheet =
+      !styleName.isEmpty() &&
+      QStyleFactory::keys().indexOf(styleName, 0, Qt::CaseSensitive) < 0;
+
+  if (isStylesheet) {
     ui->qssFontSizeSpinBox->setSpecialValueText(
-        QStringLiteral("Default (%1 px)").arg(px));
+        QStringLiteral("Theme default"));
+    return;
   }
+
+  ui->qssFontSizeSpinBox->setSpecialValueText(
+      QStringLiteral("Application default"));
 }
 
 void ThemeSettingsTab::populateFontFamilies()
