@@ -204,19 +204,17 @@ std::optional<int> CommandLine::process(const std::wstring& line)
   }
 }
 
-bool CommandLine::forwardToPrimary(MOMultiProcess& multiProcess)
+std::optional<bool> CommandLine::forwardToPrimary(MOMultiProcess& multiProcess)
 {
   if (m_shortcut.isValid()) {
-    multiProcess.sendMessage(m_shortcut.toString());
+    return multiProcess.sendMessage(m_shortcut.toString());
   } else if (m_nxmLink) {
-    multiProcess.sendMessage(*m_nxmLink);
+    return multiProcess.sendMessage(*m_nxmLink);
   } else if (m_command && m_command->canForwardToPrimary()) {
-    multiProcess.sendMessage(QString::fromStdWString(m_originalLine));
+    return multiProcess.sendMessage(QString::fromStdWString(m_originalLine));
   } else {
-    return false;
+    return std::nullopt;
   }
-
-  return true;
 }
 
 std::optional<int> CommandLine::runEarly()

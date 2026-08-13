@@ -187,7 +187,6 @@
 #include <QScrollBar>
 #include <QSet>
 #include <QSettings>
-#include <QSharedMemory>
 #include <QSharedPointer>
 #include <QShortcut>
 #include <QSignalMapper>

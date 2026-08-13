@@ -327,17 +327,17 @@ public:
   //
   // if a command was executed and the command returns true for
   // canForwardToPrimary(), this forwards the command line as an external
-  // message and returns true
+  // message and returns whether delivery succeeded
   //
-  // if the command returns false for canForwardToPrimary(), returns false
+  // if the command returns false for canForwardToPrimary(), returns nullopt
   //
   // if there was no valid command on the command line, this also forwards
   // moshortcut and nxm links
   //
-  // if there was no command, moshortcut or nxm links, this returns false, which
+  // if there was no command, moshortcut or nxm links, this returns nullopt, which
   // will end up displaying an error message about an instance already running
   //
-  bool forwardToPrimary(MOMultiProcess& multiProcess);
+  std::optional<bool> forwardToPrimary(MOMultiProcess& multiProcess);
 
   // clears parsed options, used when MO is "restarted" so the options aren't
   // processed again

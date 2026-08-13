@@ -637,7 +637,8 @@ int MOApplication::run(MOMultiProcess& multiProcess)
 
 void MOApplication::externalMessage(const QString& message)
 {
-  log::debug("received external message '{}'", message);
+  log::debug("processing external IPC message ({} UTF-8 bytes)",
+             message.toUtf8().size());
 
   MOShortcut const moshortcut(message);
 

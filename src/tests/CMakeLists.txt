@@ -416,6 +416,31 @@ target_link_libraries(test_stalemountcleanup PRIVATE
 add_test(NAME test_stalemountcleanup COMMAND test_stalemountcleanup)
 
 # ---------------------------------------------------------------------------
+# Per-user single-instance IPC security and framing tests
+# ---------------------------------------------------------------------------
+add_executable(test_multiprocess EXCLUDE_FROM_ALL
+    test_multiprocess.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/multiprocess.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/multiprocessprotocol.cpp
+)
+set_target_properties(test_multiprocess PROPERTIES
+    AUTOMOC ON
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_multiprocess PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_multiprocess PRIVATE
+    Qt6::Core
+    Qt6::Network
+    mo2::uibase
+    GTest::gtest
+)
+add_test(NAME test_multiprocess COMMAND test_multiprocess)
+set_tests_properties(test_multiprocess PROPERTIES TIMEOUT 30)
+
+# ---------------------------------------------------------------------------
 # Portable instance launcher-script tests
 # ---------------------------------------------------------------------------
 add_executable(test_portablelauncherscript EXCLUDE_FROM_ALL
@@ -720,6 +745,7 @@ add_custom_target(fluorine-tests
             test_fluorineconfigownership test_protonsettingsedit
             test_heroicjson test_protondetection
             test_external_dir_mapping test_stalemountcleanup
+            test_multiprocess
             test_portablelauncherscript test_vfs_file_ops
             test_vfs_descriptor_cleanup test_vfs_runtime_index
             test_game_save_migration

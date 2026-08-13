@@ -104,9 +104,9 @@ int run(int argc, char* argv[])
   if (multiProcess.ephemeral()) {
     // not the primary process
 
-    if (cl.forwardToPrimary(multiProcess)) {
-      // there's something on the command line that could be forwarded — exit
-      return 0;
+    if (const auto forwarded = cl.forwardToPrimary(multiProcess)) {
+      // Delivery failures already produce a specific transport error.
+      return *forwarded ? 0 : 1;
     }
 
     QMessageBox::information(
