@@ -749,6 +749,28 @@ target_link_libraries(test_plugindatapath PRIVATE
 )
 add_test(NAME test_plugindatapath COMMAND test_plugindatapath)
 
+# ---------------------------------------------------------------------------
+# Stable physical identity for instance directory aliases
+# ---------------------------------------------------------------------------
+add_executable(test_instancepathidentity EXCLUDE_FROM_ALL
+    test_instancepathidentity.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/instancepathidentity.cpp
+)
+set_target_properties(test_instancepathidentity PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_instancepathidentity PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_instancepathidentity PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_instancepathidentity COMMAND test_instancepathidentity)
+
 # Register a "fluorine-tests" umbrella target that builds every test exe.
 add_custom_target(fluorine-tests
     DEPENDS test_esptk_tes3 test_bsatk_extraction
@@ -767,4 +789,5 @@ add_custom_target(fluorine-tests
             test_game_save_migration
             test_vfs_catalog test_vfs_index
             test_staging_promotion test_python_module_switch
-            test_stylesheetpath test_applicationappearance test_plugindatapath)
+            test_stylesheetpath test_applicationappearance test_plugindatapath
+            test_instancepathidentity)

@@ -22,6 +22,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "createinstancedialogpages.h"
 #include "filesystemutilities.h"
 #include "fluorinepaths.h"
+#include "instancepathidentity.h"
 #include "instancemanagerdialog.h"
 #include "nexusinterface.h"
 #include "plugincontainer.h"
@@ -108,10 +109,16 @@ bool Instance::isActive() const
   auto& m = InstanceManager::singleton();
 
   if (auto i = m.currentInstance()) {
-    if (m_portable && i->isPortable()) {
-      return QDir(m_dir).absolutePath() == QDir(i->directory()).absolutePath();
-    } else if (!m_portable && !i->isPortable()) {
-      return (i->displayName() == displayName());
+    const auto physical = instance_path::relation(m_dir, i->directory());
+    if (physical == instance_path::DirectoryRelation::Same) {
+      return true;
+    }
+    if (physical == instance_path::DirectoryRelation::Indeterminate) {
+      // Retain the legacy spelling/name fallback for temporarily unavailable
+      // paths, but never let differing instance type metadata bypass identity.
+      return instance_path::sameDirectoryOrPath(m_dir, i->directory()) ||
+             (!m_portable && !i->isPortable() &&
+              i->displayName() == displayName());
     }
   }
 
@@ -378,30 +385,16 @@ std::vector<Instance::Object> Instance::objectsForDeletion() const
     return QDir::toNativeSeparators(s);
   };
 
-  // lowercase, native separators and ending slash
-  auto canonicalDir = [](QString s) {
-    s = s.toLower();
-
-    if (!s.endsWith("/") || !s.endsWith("\\")) {
-      s += "/";
-    }
-
-    return QDir::toNativeSeparators(s);
-  };
-
-  // lower and native separators
-  auto canonicalFile = [](auto s) {
-    return QDir::toNativeSeparators(s.toLower());
-  };
-
   // whether the given directory is contained in the root
-  auto dirInRoot = [&](const QString& root, const QString& dir) {
-    return canonicalDir(dir).startsWith(canonicalDir(root));
+  auto dirInRoot = [](const QString& root, const QString& dir) {
+    return instance_path::contains(root, dir) ==
+           instance_path::PathContainment::Contained;
   };
 
   // whether the given file is contained in the root
-  auto fileInRoot = [&](const QString& root, const QString& file) {
-    return canonicalFile(file).startsWith(canonicalDir(root));
+  auto fileInRoot = [](const QString& root, const QString& file) {
+    return instance_path::contains(root, file) ==
+           instance_path::PathContainment::Contained;
   };
 
   Settings settings(iniPath());
@@ -428,7 +421,7 @@ std::vector<Instance::Object> Instance::objectsForDeletion() const
 
   // the base directory is the location directory by default, don't add it
   // if it's the same
-  if (canonicalDir(base) != canonicalDir(loc)) {
+  if (!instance_path::sameDirectoryOrPath(base, loc)) {
     if (QDir(base).exists()) {
       roots.emplace_back(base, false);
     }

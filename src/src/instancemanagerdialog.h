@@ -12,6 +12,11 @@ class InstanceManagerDialog;
 class Instance;
 class PluginContainer;
 
+namespace instance_path
+{
+struct DirectoryIdentity;
+}
+
 // a dialog to manage existing instances
 //
 class InstanceManagerDialog : public QDialog
@@ -123,6 +128,17 @@ private:
   // shows a confirmation to the user before switching
   //
   bool confirmSwitch(const Instance& to);
+
+  // Revalidates the filesystem object selected before a modal prompt and
+  // refuses to mutate it if it changed or is the active instance.
+  bool validateMutationTarget(
+      const Instance& instance,
+      const instance_path::DirectoryIdentity& expectedIdentity,
+      const QString& title);
+
+  // Refuses a filesystem mutation when one of its targets overlaps files or
+  // directories owned by the active instance.
+  bool validateFilesystemTargets(const QStringList& selected, const QString& title);
 
   // returns the index of selected instance, NoSelection if none
   //

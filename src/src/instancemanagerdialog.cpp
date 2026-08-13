@@ -3,6 +3,7 @@
 #include "nexuscollections.h"
 #include "createinstancedialog.h"
 #include "filesystemutilities.h"
+#include "instancepathidentity.h"
 #include "instancemanager.h"
 #include "plugincontainer.h"
 #include "restarttransaction.h"
@@ -398,9 +399,9 @@ void InstanceManagerDialog::selectActiveInstance()
   const auto active = InstanceManager::singleton().currentInstance();
 
   if (active) {
-    const QString activeDir = QDir(active->directory()).absolutePath();
     for (std::size_t i = 0; i < m_instances.size(); ++i) {
-      if (QDir(m_instances[i]->directory()).absolutePath() == activeDir) {
+      if (instance_path::sameDirectoryOrPath(m_instances[i]->directory(),
+                                             active->directory())) {
         select(i);
 
         ui->list->scrollTo(m_filter.mapFromSource(m_filter.sourceModel()->index(i, 0)));
@@ -487,10 +488,8 @@ void InstanceManagerDialog::rename()
 
   const auto selIndex = singleSelectionIndex();
 
-  auto& m = InstanceManager::singleton();
-  if (i->isActive()) {
-    QMessageBox::information(this, tr("Rename instance"),
-                             tr("The active instance cannot be renamed."));
+  const auto identity = instance_path::captureDirectory(i->directory());
+  if (!validateMutationTarget(*i, identity, tr("Rename instance"))) {
     return;
   }
 
@@ -502,11 +501,27 @@ void InstanceManagerDialog::rename()
     return;
   }
 
+  if (!validateMutationTarget(*i, identity, tr("Rename instance"))) {
+    return;
+  }
+
   // renaming
   const QString src      = i->directory();
   const bool wasPortable = i->isPortable();
   const QString dest =
       QDir::toNativeSeparators(QFileInfo(src).dir().path() + "/" + newName);
+
+  if (!validateFilesystemTargets({src}, tr("Rename instance"))) {
+    return;
+  }
+  const QFileInfo destination(dest);
+  if (destination.exists() || destination.isSymLink()) {
+    QMessageBox::warning(
+        this, tr("Rename instance"),
+        tr("The destination '%1' already exists. No files were changed.")
+            .arg(dest));
+    return;
+  }
 
   log::info("renaming {} to {}", src, dest);
 
@@ -574,10 +589,8 @@ void InstanceManagerDialog::removeFromList()
     return;
   }
 
-  auto& m = InstanceManager::singleton();
-  if (i->isActive()) {
-    QMessageBox::information(this, tr("Remove from list"),
-                             tr("The active instance cannot be removed."));
+  const auto identity = instance_path::captureDirectory(i->directory());
+  if (!validateMutationTarget(*i, identity, tr("Remove from list"))) {
     return;
   }
 
@@ -592,12 +605,19 @@ void InstanceManagerDialog::removeFromList()
     return;
   }
 
+  if (!validateMutationTarget(*i, identity, tr("Remove from list"))) {
+    return;
+  }
+
   if (i->isPortable()) {
     InstanceManager::unregisterPortableInstance(i->directory());
   } else {
     // for global instances, rename the INI so it's no longer auto-discovered
     const QString ini = i->iniPath();
     if (!ini.isEmpty() && QFile::exists(ini)) {
+      if (!validateFilesystemTargets({ini}, tr("Remove from list"))) {
+        return;
+      }
       QFile::rename(ini, ini + ".disabled");
     }
   }
@@ -613,10 +633,8 @@ void InstanceManagerDialog::deleteInstance()
     return;
   }
 
-  auto& m = InstanceManager::singleton();
-  if (i->isActive()) {
-    QMessageBox::information(this, tr("Deleting instance"),
-                             tr("The active instance cannot be deleted."));
+  const auto identity = instance_path::captureDirectory(i->directory());
+  if (!validateMutationTarget(*i, identity, tr("Deleting instance"))) {
     return;
   }
 
@@ -626,6 +644,9 @@ void InstanceManagerDialog::deleteInstance()
   const auto Cancel  = QMessageBox::Cancel;
 
   const auto files = i->objectsForDeletion();
+  if (!validateMutationTarget(*i, identity, tr("Deleting instance"))) {
+    return;
+  }
 
   MOBase::TaskDialog dlg(this);
 
@@ -685,6 +706,13 @@ void InstanceManagerDialog::deleteInstance()
     return;
   }
 
+  if (!validateMutationTarget(*i, identity, tr("Deleting instance"))) {
+    return;
+  }
+  if (!validateFilesystemTargets(selected, tr("Deleting instance"))) {
+    return;
+  }
+
   // deleting
   if (!doDelete(selected, false)) {
     return;
@@ -728,6 +756,75 @@ bool InstanceManagerDialog::doDelete(const QStringList& files, bool recycle)
   }
 
   return false;
+}
+
+bool InstanceManagerDialog::validateMutationTarget(
+    const Instance& instance,
+    const instance_path::DirectoryIdentity& expectedIdentity,
+    const QString& title)
+{
+  const auto active = InstanceManager::singleton().currentInstance();
+  const auto status = instance_path::mutationStatus(
+      expectedIdentity, instance.directory(), active ? active->directory() : QString());
+
+  if (status == instance_path::MutationStatus::TargetChanged) {
+    QMessageBox::warning(
+        this, title,
+        tr("The instance folder changed or can no longer be verified. Refresh the "
+           "instance list before trying again."));
+    return false;
+  }
+
+  if (status != instance_path::MutationStatus::Safe) {
+    QMessageBox::information(
+        this, title,
+        status == instance_path::MutationStatus::Active
+            ? tr("The active instance cannot be changed by this operation.")
+            : tr("The active instance folder could not be verified. No files were "
+                 "changed."));
+    return false;
+  }
+
+  return true;
+}
+
+bool InstanceManagerDialog::validateFilesystemTargets(const QStringList& selected,
+                                                       const QString& title)
+{
+  const auto active = InstanceManager::singleton().currentInstance();
+  if (!active) {
+    return true;
+  }
+
+  QStringList protectedPaths{active->directory(), active->iniPath()};
+  const auto activeObjects = active->objectsForDeletion();
+  if (activeObjects.empty()) {
+    QMessageBox::warning(
+        this, title,
+        tr("The active instance files could not be verified. No files were changed."));
+    return false;
+  }
+  for (const auto& object : activeObjects) {
+    if (!protectedPaths.contains(object.path)) {
+      protectedPaths.append(object.path);
+    }
+  }
+
+  const auto result = instance_path::firstOverlap(selected, protectedPaths);
+  if (result.status != instance_path::PathOverlap::Separate) {
+    QMessageBox::warning(
+        this, title,
+        result.status == instance_path::PathOverlap::Overlaps
+            ? tr("The selected path '%1' overlaps files used by the active "
+                 "instance. No files were changed.")
+                  .arg(result.selectedPath)
+            : tr("The selected path '%1' could not be verified safely. No files "
+                 "were changed.")
+                  .arg(result.selectedPath));
+    return false;
+  }
+
+  return true;
 }
 
 void InstanceManagerDialog::convertToGlobal()
