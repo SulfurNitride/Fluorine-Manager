@@ -195,6 +195,30 @@ target_link_libraries(test_launchcoordination PRIVATE
 add_test(NAME test_launchcoordination COMMAND test_launchcoordination)
 
 # ---------------------------------------------------------------------------
+# Unix process termination and inherited runtime publication lease tests
+# ---------------------------------------------------------------------------
+add_executable(test_unixshutdown EXCLUDE_FROM_ALL
+    test_unixshutdown.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/runtimelock.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/unixtermination.cpp
+)
+set_target_properties(test_unixshutdown PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_unixshutdown PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_unixshutdown PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_unixshutdown COMMAND test_unixshutdown)
+set_tests_properties(test_unixshutdown PROPERTIES TIMEOUT 15)
+
+# ---------------------------------------------------------------------------
 # Game-feature facade provenance and owner-scoped registration tests
 # ---------------------------------------------------------------------------
 add_executable(test_gamefeatureownership EXCLUDE_FROM_ALL
@@ -788,7 +812,7 @@ add_custom_target(fluorine-tests
     DEPENDS test_esptk_tes3 test_bsatk_extraction
             test_plugincompatibility test_pluginregistrationpolicy
             test_settingsmigration test_processlifetime
-            test_launchcoordination test_gamefeatureownership
+            test_launchcoordination test_unixshutdown test_gamefeatureownership
             test_slroperationcontext test_pluginreloadpolicy test_launchlifecycle
             test_metainiutils
             test_vfs_backend

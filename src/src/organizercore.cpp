@@ -4357,6 +4357,13 @@ OrganizerCore::waitForAllUSVFSProcesses(UILocker::Reasons reason) const
   return ProcessRunner::Completed;
 }
 
+void OrganizerCore::prepareForExternalShutdown()
+{
+  m_ProcessLaunchContext.suppressNewReservations();
+  m_DownloadManager.suppressAdmissionForShutdown();
+  m_DownloadManager.pauseAll();
+}
+
 bool OrganizerCore::waitForDirectoryRefreshes()
 {
   QPointer<OrganizerCore> self(this);

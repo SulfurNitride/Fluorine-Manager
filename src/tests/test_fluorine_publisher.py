@@ -503,6 +503,103 @@ class PublisherTest(unittest.TestCase):
         publisher.check_installed(self.destination, self.data)
         self.assertFalse(any(stage_root.glob(".*.retired-*")))
 
+    def test_launcher_execs_core_in_place_and_holds_runtime_lease(self) -> None:
+        build_script = (SOURCE_ROOT / "docker" / "build-inner.sh").read_text(
+            encoding="utf-8"
+        )
+        launcher = build_script.split(
+            'cat > "${OUT_DIR}/fluorine-manager" <<\'LAUNCH\'\n', 1
+        )[1].split("\nLAUNCH\n", 1)[0]
+        self.assertNotIn("exec flock --shared", launcher)
+        self.assertNotIn("--fluorine-run-locked", launcher)
+
+        bundle = self.root / "launcher-bundle"
+        bundle.mkdir()
+        launcher_path = bundle / "fluorine-manager"
+        launcher_path.write_text(launcher, encoding="utf-8")
+        launcher_path.chmod(0o755)
+        (bundle / "fluorine-publisher.py").write_bytes(PUBLISHER_PATH.read_bytes())
+
+        python_wrapper = bundle / "python" / "bin" / "python3"
+        python_wrapper.parent.mkdir(parents=True)
+        python_wrapper.write_text(
+            "#!/usr/bin/env bash\nunset PYTHONHOME\n"
+            f'exec "{sys.executable}" "$@"\n',
+            encoding="utf-8",
+        )
+        python_wrapper.chmod(0o755)
+
+        core = bundle / "ModOrganizer-core"
+        core.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, os, signal, time\n"
+            "marker = os.environ['FLUORINE_TEST_CORE_MARKER']\n"
+            "fd = int(os.environ['FLUORINE_RUNTIME_LOCK_FD'])\n"
+            "os.fstat(fd)\n"
+            "with open(marker, 'w', encoding='utf-8') as stream:\n"
+            "    json.dump({'pid': os.getpid(), 'fd': fd}, stream)\n"
+            "def stop(sig, frame):\n"
+            "    with open(marker + '.signal', 'w', encoding='ascii') as stream:\n"
+            "        stream.write(str(sig))\n"
+            "    raise SystemExit(128 + sig)\n"
+            "signal.signal(signal.SIGTERM, stop)\n"
+            "while True:\n"
+            "    time.sleep(0.05)\n",
+            encoding="utf-8",
+        )
+        core.chmod(0o755)
+        publisher.build_manifest(bundle)
+
+        home = self.root / "launcher-home"
+        home.mkdir()
+        marker = self.root / "core-marker.json"
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "HOME": str(home),
+                "FLUORINE_TEST_CORE_MARKER": str(marker),
+            }
+        )
+        process = subprocess.Popen(
+            [str(launcher_path)],
+            env=environment,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            deadline = time.monotonic() + 10
+            while not marker.exists() and process.poll() is None:
+                if time.monotonic() >= deadline:
+                    self.fail("generated launcher did not exec the fake core")
+                time.sleep(0.02)
+            if process.poll() is not None:
+                self.fail(
+                    "generated launcher exited before the fake core: "
+                    + process.stderr.read()
+                )
+            observed = json.loads(marker.read_text(encoding="utf-8"))
+            self.assertEqual(observed["pid"], process.pid)
+
+            runtime_path = home / ".local" / "share" / "fluorine" / "runtime.lock"
+            with runtime_path.open("a+b") as competitor:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(competitor.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+                process.send_signal(signal.SIGTERM)
+                self.assertEqual(process.wait(timeout=5), 128 + signal.SIGTERM)
+                self.assertEqual(
+                    Path(str(marker) + ".signal").read_text(encoding="ascii"),
+                    str(signal.SIGTERM),
+                )
+                fcntl.flock(competitor.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+            if process.stderr is not None:
+                process.stderr.close()
+
 
 if __name__ == "__main__":
     unittest.main()

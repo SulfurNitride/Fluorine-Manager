@@ -44,24 +44,6 @@
 
 using namespace MOBase;
 
-// Global mount point for signal-handler cleanup (async-signal-safe access).
-static char g_fuseMountPoint[4096] = {0};
-
-void setFuseMountPointForCrashCleanup(const char* path)
-{
-  if (path != nullptr) {
-    std::strncpy(g_fuseMountPoint, path, sizeof(g_fuseMountPoint) - 1);
-    g_fuseMountPoint[sizeof(g_fuseMountPoint) - 1] = '\0';
-  } else {
-    g_fuseMountPoint[0] = '\0';
-  }
-}
-
-const char* getFuseMountPointForCrashCleanup()
-{
-  return g_fuseMountPoint[0] != '\0' ? g_fuseMountPoint : nullptr;
-}
-
 namespace
 {
 namespace fs = std::filesystem;
@@ -817,7 +799,6 @@ bool FuseConnector::mount(
   });
 
   m_mounted = true;
-  setFuseMountPointForCrashCleanup(m_mountPoint.c_str());
   if (m_sleepInhibitor != nullptr) {
     const QString reason =
         QStringLiteral("Fluorine: mod filesystem active for %1")
@@ -990,7 +971,6 @@ void FuseConnector::unmount()
 
   m_context.reset();
   m_mounted = false;
-  setFuseMountPointForCrashCleanup(nullptr);
   if (m_sleepInhibitor != nullptr) {
     m_sleepInhibitor->setActive(false, {});
   }

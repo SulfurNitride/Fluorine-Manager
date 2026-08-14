@@ -198,10 +198,13 @@ Publication validates an immutable private stage, serializes publishers,
 preflights ownership conflicts, and writes exact leaves through a restartable
 forward transaction. The commit marker is published last. Removed v2-owned
 leaves are retired precisely; ambiguous legacy and user-added files are not
-recursively deleted. The launcher also holds a shared runtime lease and
-rechecks the committed manifest before starting the core, preventing an update
-from mixing two generations. Direct installed launches hash only the small
-manifest, not the full installed tree.
+recursively deleted. The launcher also opens a shared runtime lease, rechecks
+the committed manifest while holding it, and passes that descriptor through
+`exec` to the core. The core validates and retains the lease for its complete
+lifetime but marks it close-on-exec so games and helpers cannot inherit it.
+This preserves one signalable launcher/core PID and prevents an update from
+mixing two generations. Direct installed launches hash only the small manifest,
+not the full installed tree.
 
 For the first manual update from a legacy top-level-manifest release, close all
 running Fluorine Manager windows first because those old processes did not hold

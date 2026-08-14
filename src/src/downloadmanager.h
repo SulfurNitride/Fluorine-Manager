@@ -181,6 +181,7 @@ public:
   ~DownloadManager() override;
 
   void suppressAdmissionForFailedRollback() noexcept;
+  void suppressAdmissionForShutdown() noexcept;
 
   void setParentWidget(QWidget* w);
 
@@ -557,7 +558,7 @@ private slots:
 
   void downloadProgress(qint64 bytesReceived, qint64 bytesTotal);
   void downloadReadyRead();
-  void downloadFinished(int index = 0);
+  void downloadFinished(int index = -1);
   void downloadError(QNetworkReply::NetworkError error);
   void metaDataChanged();
   void directoryChanged(const QString& dirctory);

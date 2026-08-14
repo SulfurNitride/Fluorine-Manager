@@ -64,6 +64,12 @@ public:
   //
   int run(MOMultiProcess& multiProcess);
 
+  // Irreversibly close command and process-launch admission after an external
+  // termination request. Existing launches retain their normal lifetime and
+  // mandatory cleanup ownership.
+  void beginExternalShutdown();
+  bool mainEventLoopActive() const noexcept { return m_mainEventLoopActive; }
+
   // called from main() when MO "restarts", must clean up everything so setup()
   // starts fresh
   //
@@ -99,6 +105,8 @@ private:
   ExternalMessageQueue m_externalMessages;
   bool m_externalDrainScheduled = false;
   bool m_externalDispatching = false;
+  bool m_externalShutdownStarted = false;
+  bool m_mainEventLoopActive = false;
 
   bool enqueueExternalMessage(const QString& message);
   void scheduleExternalMessageDrain();

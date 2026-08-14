@@ -379,6 +379,8 @@ public:
   ProcessRunner::Results
   waitForAllUSVFSProcesses(UILocker::Reasons reason = UILocker::PreventExit) const;
 
+  void prepareForExternalShutdown();
+
   void refreshESPList(bool force = false);
   void refreshBSAList();
 

@@ -616,7 +616,9 @@ int MOApplication::run(MOMultiProcess& multiProcess)
             staleMessages);
       }
       scheduleExternalMessageDrain();
+      m_mainEventLoopActive = true;
       res = exec();
+      m_mainEventLoopActive = false;
       pauseExternalMessages();
       mainWindowStartupFailed = mainWindow.startupFailed();
       mainWindow.close();
@@ -645,6 +647,16 @@ int MOApplication::run(MOMultiProcess& multiProcess)
   }
 
   return res;
+}
+
+void MOApplication::beginExternalShutdown()
+{
+  m_externalMessages.stop();
+  m_externalDrainScheduled = false;
+  if (m_core != nullptr && !m_externalShutdownStarted) {
+    m_externalShutdownStarted = true;
+    m_core->prepareForExternalShutdown();
+  }
 }
 
 bool MOApplication::enqueueExternalMessage(const QString& message)

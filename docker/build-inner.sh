@@ -626,7 +626,6 @@ BIN_DST="${FLUORINE_DATA}/bin"
 PUBLISH_ONLY=0
 CLEAN_UPDATE=""
 PUBLISH_WAIT=0
-LOCKED_RUN=0
 while true; do
     case "${1:-}" in
         --fluorine-publish-only)
@@ -639,10 +638,6 @@ while true; do
             ;;
         --fluorine-wait-publish=*)
             PUBLISH_WAIT="${1#--fluorine-wait-publish=}"
-            shift
-            ;;
-        --fluorine-run-locked)
-            LOCKED_RUN=1
             shift
             ;;
         *) break ;;
@@ -665,58 +660,51 @@ run_publisher() {
         "${PYTHON}" "${PUBLISHER}" "$@"
 }
 
-if [ "${LOCKED_RUN}" -eq 0 ]; then
-    # Recover through the immutable staged runtime, never through Python or
-    # libraries in the installation being replaced.
-    RECOVERY_ROOT=""
-    RECOVERY_POINTER="${FLUORINE_DATA}/publish-recovery"
-    if [ -f "${RECOVERY_POINTER}" ] && [ ! -L "${RECOVERY_POINTER}" ]; then
-        IFS= read -r RECOVERY_ID < "${RECOVERY_POINTER}" || true
-        if [[ "${RECOVERY_ID:-}" =~ ^[0-9a-f]{64}$ ]]; then
-            CANDIDATE="${FLUORINE_DATA}/publish-stage/${RECOVERY_ID}"
-            if [ -d "${CANDIDATE}" ] && [ ! -L "${CANDIDATE}" ]; then
-                RECOVERY_ROOT="${CANDIDATE}"
-            fi
-        fi
-        if [ -z "${RECOVERY_ROOT}" ]; then
-            echo "ERROR: Fluorine's publication recovery pointer is invalid." >&2
-            echo "Keep the update files and repair ${FLUORINE_DATA} before launching." >&2
-            exit 1
+# Recover through the immutable staged runtime, never through Python or
+# libraries in the installation being replaced.
+RECOVERY_ROOT=""
+RECOVERY_POINTER="${FLUORINE_DATA}/publish-recovery"
+if [ -f "${RECOVERY_POINTER}" ] && [ ! -L "${RECOVERY_POINTER}" ]; then
+    IFS= read -r RECOVERY_ID < "${RECOVERY_POINTER}" || true
+    if [[ "${RECOVERY_ID:-}" =~ ^[0-9a-f]{64}$ ]]; then
+        CANDIDATE="${FLUORINE_DATA}/publish-stage/${RECOVERY_ID}"
+        if [ -d "${CANDIDATE}" ] && [ ! -L "${CANDIDATE}" ]; then
+            RECOVERY_ROOT="${CANDIDATE}"
         fi
     fi
+    if [ -z "${RECOVERY_ROOT}" ]; then
+        echo "ERROR: Fluorine's publication recovery pointer is invalid." >&2
+        echo "Keep the update files and repair ${FLUORINE_DATA} before launching." >&2
+        exit 1
+    fi
+fi
 
-    if [ -n "${RECOVERY_ROOT}" ]; then
-        run_publisher "${RECOVERY_ROOT}" publish \
-            "${RECOVERY_ROOT}" "${BIN_DST}" "${FLUORINE_DATA}" \
-            --wait-runtime "${PUBLISH_WAIT}"
-    fi
+if [ -n "${RECOVERY_ROOT}" ]; then
+    run_publisher "${RECOVERY_ROOT}" publish \
+        "${RECOVERY_ROOT}" "${BIN_DST}" "${FLUORINE_DATA}" \
+        --wait-runtime "${PUBLISH_WAIT}"
+fi
 
-    # A source bundle publishes exact, verified leaves through one serialized,
-    # restartable transaction. A launcher already in BIN_DST must prove that
-    # the prior transaction committed before starting the core.
-    HERE_REAL="$(readlink -f "${HERE}")"
-    DST_REAL="$(readlink -f "${BIN_DST}" 2>/dev/null || echo "")"
-    if [ "${HERE_REAL}" != "${DST_REAL}" ]; then
-        if [ ! -f "${HERE}/fluorine-manifest-v2.json" ] || \
-           [ ! -f "${HERE}/ModOrganizer-core" ]; then
-            echo "ERROR: Fluorine launcher can't find its bundle files in ${HERE}." >&2
-            echo "Extract the release archive into its own directory and run the" >&2
-            echo "launcher from there — not from a folder containing other files." >&2
-            exit 1
-        fi
-        echo "Publishing Fluorine to ${BIN_DST}..." >&2
-        run_publisher "${HERE}" publish \
-            "${HERE}" "${BIN_DST}" "${FLUORINE_DATA}" \
-            --wait-runtime "${PUBLISH_WAIT}"
-        echo "Publication complete." >&2
-    else
-        run_publisher "${HERE}" check-installed "${BIN_DST}" "${FLUORINE_DATA}"
+# A source bundle publishes exact, verified leaves through one serialized,
+# restartable transaction. A launcher already in BIN_DST must prove that the
+# prior transaction committed before starting the core.
+HERE_REAL="$(readlink -f "${HERE}")"
+DST_REAL="$(readlink -f "${BIN_DST}" 2>/dev/null || echo "")"
+if [ "${HERE_REAL}" != "${DST_REAL}" ]; then
+    if [ ! -f "${HERE}/fluorine-manifest-v2.json" ] || \
+       [ ! -f "${HERE}/ModOrganizer-core" ]; then
+        echo "ERROR: Fluorine launcher can't find its bundle files in ${HERE}." >&2
+        echo "Extract the release archive into its own directory and run the" >&2
+        echo "launcher from there — not from a folder containing other files." >&2
+        exit 1
     fi
+    echo "Publishing Fluorine to ${BIN_DST}..." >&2
+    run_publisher "${HERE}" publish \
+        "${HERE}" "${BIN_DST}" "${FLUORINE_DATA}" \
+        --wait-runtime "${PUBLISH_WAIT}"
+    echo "Publication complete." >&2
 else
-    # This read-only recheck occurs while the outer flock process holds the
-    # shared runtime lease. A publisher cannot begin after validation and race
-    # the core into a mixed generation.
-    run_publisher "${HERE}" verify-committed "${BIN_DST}" "${FLUORINE_DATA}"
+    run_publisher "${HERE}" check-installed "${BIN_DST}" "${FLUORINE_DATA}"
 fi
 
 if [ -n "${CLEAN_UPDATE}" ]; then
@@ -728,7 +716,7 @@ if [ -n "${CLEAN_UPDATE}" ]; then
     esac
 fi
 
-if [ "${PUBLISH_ONLY}" -eq 1 ] && [ "${LOCKED_RUN}" -eq 0 ]; then
+if [ "${PUBLISH_ONLY}" -eq 1 ]; then
     exit 0
 fi
 
@@ -793,14 +781,18 @@ if ! command -v flock >/dev/null 2>&1; then
     echo "ERROR: Fluorine requires the util-linux flock command." >&2
     exit 1
 fi
-if [ "${LOCKED_RUN}" -eq 0 ]; then
-    # Re-enter the installed launcher under the shared lease so it can verify
-    # the commit while publication is excluded, then exec the core. --close
-    # keeps games/helper children from inheriting the descriptor; flock's
-    # parent owns it for the complete launcher/core lifetime.
-    exec flock --shared --close "${FLUORINE_DATA}/runtime.lock" \
-        "${RUN}/fluorine-manager" --fluorine-run-locked "$@"
-fi
+# The shell opens and locks the descriptor itself, then execs the core with the
+# same PID. The core validates/owns this exact descriptor for its full lifetime
+# and marks it close-on-exec before launching games or helpers. This avoids a
+# flock supervisor that would swallow SIGTERM and release the lease early.
+exec {FLUORINE_RUNTIME_LOCK_FD}<>"${FLUORINE_DATA}/runtime.lock"
+flock --shared "${FLUORINE_RUNTIME_LOCK_FD}"
+export FLUORINE_RUNTIME_LOCK_FD
+
+# Recheck the committed generation while the shared lease is already held.
+# Publication cannot begin between this proof and the core's adoption of the
+# inherited open-file description.
+run_publisher "${RUN}" verify-committed "${BIN_DST}" "${FLUORINE_DATA}"
 exec "${RUN}/ModOrganizer-core" "$@"
 LAUNCH
 chmod +x "${OUT_DIR}/fluorine-manager"
