@@ -517,7 +517,7 @@ MainWindow::MainWindow(Settings& settings, OrganizerCore& organizerCore,
                 return;
               }
 
-              m_FluorineUpdatePending = true;
+              m_FluorineUpdate = info;
               updateAvailable();
 
               const QString releaseId =
@@ -529,11 +529,42 @@ MainWindow::MainWindow(Settings& settings, OrganizerCore& organizerCore,
               Settings& settings = m_OrganizerCore.settings();
               if (!releaseId.endsWith(QLatin1Char(':')) &&
                   settings.fluorineLastPromptedUpdate() != releaseId) {
-                settings.setFluorineLastPromptedUpdate(releaseId);
                 QTimer::singleShot(
-                    0, this,
-                    [this, info]() { showFluorineUpdatePrompt(info); });
+                    0, this, [this, releaseId]() {
+                      Settings& currentSettings = m_OrganizerCore.settings();
+                      if (!m_FluorineUpdate ||
+                          !currentSettings.checkForUpdates() ||
+                          currentSettings.network().offlineMode()) {
+                        return;
+                      }
+
+                      const FluorineUpdater::ReleaseInfo current =
+                          *m_FluorineUpdate;
+                      const QString currentId =
+                          FluorineUpdater::channelToString(current.channel) +
+                          QStringLiteral(":") +
+                          (current.channel == FluorineUpdater::Channel::Nightly
+                               ? current.buildNumber
+                               : current.tagName);
+                      const auto configuredChannel =
+                          FluorineUpdater::channelFromString(
+                              currentSettings.fluorineUpdateChannel(),
+                              FluorineUpdater::buildChannel());
+                      if (currentId != releaseId ||
+                          current.channel != configuredChannel ||
+                          currentSettings.fluorineLastPromptedUpdate() ==
+                              releaseId) {
+                        return;
+                      }
+
+                      currentSettings.setFluorineLastPromptedUpdate(releaseId);
+                      showFluorineUpdatePrompt(current);
+                    });
               }
+            });
+    connect(fu, &FluorineUpdater::upToDate, this,
+            [this](const FluorineUpdater::ReleaseInfo&) {
+              clearFluorineUpdateAvailable();
             });
   }
 
@@ -3288,6 +3319,8 @@ void MainWindow::on_actionSettings_triggered()
   bool const proxy                    = settings.network().useProxy();
   DownloadManager* dlManager    = m_OrganizerCore.downloadManager();
   const bool oldCheckForUpdates = settings.checkForUpdates();
+  const bool oldOfflineMode     = settings.network().offlineMode();
+  const QString oldUpdateChannel = settings.fluorineUpdateChannel();
   const int oldMaxDumps         = settings.diagnostics().maxCoreDumps();
 
   const auto rollbackSettingsEdit = [&](const QString& context) {
@@ -3559,12 +3592,26 @@ void MainWindow::on_actionSettings_triggered()
 
   toggleMO2EndorseState();
 
-  if (oldCheckForUpdates != settings.checkForUpdates()) {
+  const bool updatePreferenceChanged =
+      oldCheckForUpdates != settings.checkForUpdates();
+  const bool offlineModeChanged =
+      oldOfflineMode != settings.network().offlineMode();
+  const bool updateChannelChanged =
+      oldUpdateChannel != settings.fluorineUpdateChannel();
+  if (updatePreferenceChanged) {
     toggleUpdateAction();
+  }
 
-    if (settings.checkForUpdates()) {
-      m_OrganizerCore.checkForUpdates();
-    }
+  if (!settings.checkForUpdates() || settings.network().offlineMode() ||
+      updateChannelChanged) {
+    clearFluorineUpdateAvailable();
+  }
+
+  if (updatePreferenceChanged || offlineModeChanged || updateChannelChanged) {
+    // Reconcile both enable and disable transitions. The latter cancels any
+    // check that was already in flight before the Settings dialog opened;
+    // changing channel also invalidates an actionable result from the old one.
+    m_OrganizerCore.checkForUpdates();
   }
 }
 
@@ -3693,6 +3740,14 @@ void MainWindow::updateAvailable()
   ui->statusBar->setUpdateAvailable(true);
 }
 
+void MainWindow::clearFluorineUpdateAvailable()
+{
+  m_FluorineUpdate.reset();
+  ui->actionUpdate->setEnabled(false);
+  ui->actionUpdate->setToolTip(QString());
+  ui->statusBar->setUpdateAvailable(false);
+}
+
 void MainWindow::showFluorineUpdatePrompt(
     const FluorineUpdater::ReleaseInfo& info)
 {
@@ -3801,14 +3856,12 @@ void MainWindow::on_actionUpdate_triggered()
     return;
   }
 
-  // Fluorine has its own updater (Settings → Updates). The MO2 self-updater
-  // is no-op'd (see SelfUpdater::testForUpdate). Open the Updates tab so
-  // the user can see the release info and trigger Install & restart.
-  if (m_FluorineUpdatePending) {
-    Settings& settings = m_OrganizerCore.settings();
-    SettingsDialog dialog(&m_PluginContainer, settings, this);
-    dialog.selectTabByLabel(tr("Updates"));
-    dialog.exec();
+  // Fluorine has its own updater and the MO2 self-updater is no-op'd (see
+  // SelfUpdater::testForUpdate). Reopen the already-detected release directly;
+  // starting a fresh Settings dialog here would bypass its transaction owner.
+  if (m_FluorineUpdate) {
+    const FluorineUpdater::ReleaseInfo info = *m_FluorineUpdate;
+    showFluorineUpdatePrompt(info);
     return;
   }
   m_OrganizerCore.startMOUpdate();

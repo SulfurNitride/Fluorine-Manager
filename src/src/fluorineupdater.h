@@ -3,10 +3,12 @@
 
 #include <QJsonObject>
 #include <QObject>
+#include <QPointer>
 #include <QString>
 
 class QNetworkAccessManager;
 class QNetworkReply;
+class QNetworkRequest;
 
 // Lightweight self-update checker. Queries the GitHub Releases API for
 // Fluorine Manager and notifies when a newer build is available. Installation
@@ -45,9 +47,10 @@ public:
   explicit FluorineUpdater(QObject* parent = nullptr);
   ~FluorineUpdater() override;
 
-  // Kick off an async check. Emits updateAvailable()/upToDate()/checkFailed()
-  // exactly once per call.
+  // Kick off an async check. A newer check silently supersedes an in-flight
+  // one; the latest non-superseded check emits exactly one terminal signal.
   void checkForUpdates(Channel channel);
+  void cancel();
 
   // Build channel that was baked into this binary at compile time. The
   // Settings toggle defaults to this value.
@@ -61,16 +64,18 @@ signals:
   void upToDate(const FluorineUpdater::ReleaseInfo& info);
   void checkFailed(const QString& reason);
 
-private slots:
-  void onReplyFinished();
+protected:
+  // Narrow request seam for deterministic reply-lifecycle tests. Production
+  // requests always use the updater-owned network access manager.
+  virtual QNetworkReply* createRequest(const QNetworkRequest& request);
 
 private:
+  void onReplyFinished(QNetworkReply* reply, Channel channel);
   static bool parseNightlyRelease(const QJsonObject& obj, ReleaseInfo& out);
   static bool parseStableRelease(const QJsonObject& obj, ReleaseInfo& out);
 
   QNetworkAccessManager* m_net;
-  QNetworkReply* m_reply = nullptr;
-  Channel m_pendingChannel = Channel::Stable;
+  QPointer<QNetworkReply> m_reply;
 };
 
 #endif  // FLUORINE_UPDATER_H

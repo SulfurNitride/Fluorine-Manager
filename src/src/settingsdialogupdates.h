@@ -29,6 +29,9 @@ public:
 private:
   void onCheckNow();
   void onInstall();
+  void clearPendingUpdate();
+  void setCheckInProgress(bool checking);
+  FluorineUpdater::Channel selectedChannel() const;
 
   QCheckBox* m_checkForUpdates   = nullptr;
   QComboBox* m_channelBox        = nullptr;
@@ -42,6 +45,7 @@ private:
   FluorineUpdateInstaller* m_installer = nullptr;
   FluorineUpdater::ReleaseInfo m_pendingUpdate{};
   bool m_updatePending           = false;
+  bool m_checkInProgress         = false;
 };
 
 #endif  // SETTINGSDIALOGUPDATES_H

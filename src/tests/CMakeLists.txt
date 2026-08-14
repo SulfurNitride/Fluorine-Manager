@@ -842,6 +842,31 @@ add_test(NAME test_nxmrequest COMMAND test_nxmrequest)
 set_tests_properties(test_nxmrequest PROPERTIES TIMEOUT 10)
 
 # ---------------------------------------------------------------------------
+# Fluorine update-check reply identity and cancellation
+# ---------------------------------------------------------------------------
+add_executable(test_fluorineupdater EXCLUDE_FROM_ALL
+    test_fluorineupdater.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/fluorineupdater.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/fluorineupdater.h
+)
+set_target_properties(test_fluorineupdater PROPERTIES
+    AUTOMOC ON
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_fluorineupdater PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_fluorineupdater PRIVATE
+    Qt6::Core
+    Qt6::Network
+    mo2::uibase
+    GTest::gtest
+)
+add_test(NAME test_fluorineupdater COMMAND test_fluorineupdater)
+set_tests_properties(test_fluorineupdater PROPERTIES TIMEOUT 10)
+
+# ---------------------------------------------------------------------------
 # Serialized, recoverable bundle publication tests
 # ---------------------------------------------------------------------------
 add_test(NAME test_fluorine_publisher
@@ -873,4 +898,4 @@ add_custom_target(fluorine-tests
             test_staging_promotion test_python_module_switch
             test_stylesheetpath test_applicationappearance test_plugindatapath
             test_instancepathidentity test_commandlinearguments
-            test_nxmrequest)
+            test_nxmrequest test_fluorineupdater)

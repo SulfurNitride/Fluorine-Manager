@@ -83,10 +83,6 @@ public:
   bool updatesSucceeded() const;
   QString updateFailureDetail() const;
 
-  // Pre-select a tab by its visible label (e.g. "Updates"). Must be called
-  // before exec(); any saved tab index is overridden.
-  void selectTabByLabel(const QString& label);
-
   int exec() override;
 
 public slots:
@@ -98,7 +94,6 @@ private:
   std::vector<std::unique_ptr<SettingsTab>> m_tabs;
   ExitFlags m_exit;
   PluginContainer* m_pluginContainer;
-  int m_pendingTabOverride = -1;
   QString m_updateFailureDetail;
 };
 

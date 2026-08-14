@@ -96,25 +96,11 @@ QString SettingsDialog::updateFailureDetail() const
   return m_updateFailureDetail;
 }
 
-void SettingsDialog::selectTabByLabel(const QString& label)
-{
-  for (int i = 0; i < ui->tabWidget->count(); ++i) {
-    if (ui->tabWidget->tabText(i) == label) {
-      ui->tabWidget->setCurrentIndex(i);
-      m_pendingTabOverride = i;
-      return;
-    }
-  }
-}
-
 int SettingsDialog::exec()
 {
   GeometrySaver gs(m_settings, this);
 
   m_settings.widgets().restoreIndex(ui->tabWidget);
-  if (m_pendingTabOverride >= 0) {
-    ui->tabWidget->setCurrentIndex(m_pendingTabOverride);
-  }
 
   auto ret = TutorableDialog::exec();
 

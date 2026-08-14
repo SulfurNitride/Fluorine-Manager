@@ -128,8 +128,26 @@ UpdatesSettingsTab::UpdatesSettingsTab(Settings& s, SettingsDialog& d)
   QObject::connect(m_installButton, &QPushButton::clicked, &d,
                    [this]() { onInstall(); });
 
+  QObject::connect(
+      m_channelBox, qOverload<int>(&QComboBox::currentIndexChanged), &d,
+      [this]() {
+        if (m_checkInProgress || m_installer->isBusy()) {
+          return;
+        }
+        clearPendingUpdate();
+        m_statusLabel->setText(
+            tr("The update channel changed. Check again for this channel."));
+      });
+
   QObject::connect(m_updater, &FluorineUpdater::updateAvailable, &d,
           [this](const FluorineUpdater::ReleaseInfo& info) {
+            setCheckInProgress(false);
+            if (info.channel != selectedChannel()) {
+              clearPendingUpdate();
+              m_statusLabel->setText(
+                  tr("The update channel changed. Check again for this channel."));
+              return;
+            }
             m_pendingUpdate = info;
             m_updatePending = true;
             const QString url = info.htmlUrl.isEmpty() ? QString() : info.htmlUrl;
@@ -142,28 +160,27 @@ UpdatesSettingsTab::UpdatesSettingsTab(Settings& s, SettingsDialog& d)
                           .arg(url);
             }
             m_statusLabel->setText(line);
-            m_checkNowButton->setEnabled(true);
             m_installButton->setEnabled(!info.downloadUrl.isEmpty());
             if (info.downloadUrl.isEmpty()) {
               m_installButton->setToolTip(
-                  tr("This release has no .tar.gz asset attached."));
+                  tr("This release has no installable archive attached."));
             } else {
               m_installButton->setToolTip(QString());
             }
           });
   QObject::connect(m_updater, &FluorineUpdater::upToDate, &d,
           [this](const FluorineUpdater::ReleaseInfo&) {
-            m_updatePending = false;
-            m_installButton->setEnabled(false);
+            setCheckInProgress(false);
+            clearPendingUpdate();
             m_statusLabel->setText(
                 tr("You're on the latest build for this channel."));
-            m_checkNowButton->setEnabled(true);
           });
   QObject::connect(m_updater, &FluorineUpdater::checkFailed, &d,
           [this](const QString& reason) {
+            setCheckInProgress(false);
+            clearPendingUpdate();
             m_statusLabel->setText(
                 tr("<i>Update check failed:</i> %1").arg(reason));
-            m_checkNowButton->setEnabled(true);
           });
   QObject::connect(m_installer, &FluorineUpdateInstaller::statusChanged, &d,
                    [this](const QString& status) {
@@ -186,8 +203,11 @@ UpdatesSettingsTab::UpdatesSettingsTab(Settings& s, SettingsDialog& d)
                      m_statusLabel->setText(
                          tr("<i>Install failed:</i> %1").arg(reason));
                      m_progressBar->setVisible(false);
-                     m_installButton->setEnabled(m_updatePending);
+                     m_channelBox->setEnabled(true);
                      m_checkNowButton->setEnabled(true);
+                     m_installButton->setEnabled(
+                         m_updatePending && !m_pendingUpdate.downloadUrl.isEmpty() &&
+                         m_pendingUpdate.channel == selectedChannel());
                    });
 }
 
@@ -201,26 +221,57 @@ void UpdatesSettingsTab::update()
 
 void UpdatesSettingsTab::onCheckNow()
 {
-  m_statusLabel->setText(tr("Checking…"));
-  m_checkNowButton->setEnabled(false);
-  m_installButton->setEnabled(false);
+  if (settings().network().offlineMode()) {
+    clearPendingUpdate();
+    m_statusLabel->setText(
+        tr("Cannot check for updates while Offline Mode is enabled."));
+    return;
+  }
 
-  const QString channel = m_channelBox->currentData().toString();
-  const FluorineUpdater::Channel c = FluorineUpdater::channelFromString(
-      channel, FluorineUpdater::buildChannel());
-  m_updater->checkForUpdates(c);
+  clearPendingUpdate();
+  m_statusLabel->setText(tr("Checking…"));
+  setCheckInProgress(true);
+
+  m_updater->checkForUpdates(selectedChannel());
 }
 
 void UpdatesSettingsTab::onInstall()
 {
-  if (!m_updatePending || m_pendingUpdate.downloadUrl.isEmpty()) {
+  if (!m_updatePending || m_pendingUpdate.downloadUrl.isEmpty() ||
+      m_pendingUpdate.channel != selectedChannel() || m_installer->isBusy()) {
     return;
   }
 
   m_installButton->setEnabled(false);
   m_checkNowButton->setEnabled(false);
+  m_channelBox->setEnabled(false);
   m_progressBar->setVisible(true);
   m_progressBar->setRange(0, 100);
   m_progressBar->setValue(0);
   m_installer->install(m_pendingUpdate);
+}
+
+void UpdatesSettingsTab::clearPendingUpdate()
+{
+  m_pendingUpdate = {};
+  m_updatePending = false;
+  m_installButton->setEnabled(false);
+  m_installButton->setToolTip(QString());
+}
+
+void UpdatesSettingsTab::setCheckInProgress(bool checking)
+{
+  m_checkInProgress = checking;
+  const bool controlsEnabled = !checking && !m_installer->isBusy();
+  m_checkNowButton->setEnabled(controlsEnabled);
+  m_channelBox->setEnabled(controlsEnabled);
+  if (checking) {
+    m_installButton->setEnabled(false);
+  }
+}
+
+FluorineUpdater::Channel UpdatesSettingsTab::selectedChannel() const
+{
+  return FluorineUpdater::channelFromString(
+      m_channelBox->currentData().toString(), FluorineUpdater::buildChannel());
 }

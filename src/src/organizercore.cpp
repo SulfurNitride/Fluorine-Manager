@@ -831,6 +831,17 @@ void OrganizerCore::checkForFluorineUpdates()
             });
   }
 
+  if (!m_Settings.checkForUpdates()) {
+    m_FluorineUpdater->cancel();
+    MOBase::log::debug("not checking for Fluorine updates, disabled");
+    return;
+  }
+  if (m_Settings.network().offlineMode()) {
+    m_FluorineUpdater->cancel();
+    MOBase::log::debug("not checking for Fluorine updates, in offline mode");
+    return;
+  }
+
   const FluorineUpdater::Channel channel = FluorineUpdater::channelFromString(
       m_Settings.fluorineUpdateChannel(), FluorineUpdater::buildChannel());
   m_FluorineUpdater->checkForUpdates(channel);
