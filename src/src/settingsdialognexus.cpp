@@ -5,6 +5,7 @@
 #include "serverinfo.h"
 #include "ui_nexusmanualkey.h"
 #include "ui_settingsdialog.h"
+#include <QMessageBox>
 #include <utility.h>
 
 using namespace MOBase;
@@ -462,12 +463,19 @@ void NexusSettingsTab::clearCache()
 
 void NexusSettingsTab::associate()
 {
-  Settings::instance().nexus().registerAsNXMHandler(true);
+  const QString error =
+      Settings::instance().nexus().registerAsNXMHandler(true);
+  if (!error.isEmpty()) {
+    QMessageBox::warning(parentWidget(), QObject::tr("NXM Association"), error);
+  }
 }
 
 void NexusSettingsTab::removeAssociation()
 {
-  Settings::instance().nexus().unregisterAsNXMHandler();
+  const QString error = Settings::instance().nexus().unregisterAsNXMHandler();
+  if (!error.isEmpty()) {
+    QMessageBox::warning(parentWidget(), QObject::tr("NXM Association"), error);
+  }
 }
 
 void NexusSettingsTab::updateNexusData()

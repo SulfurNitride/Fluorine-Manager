@@ -86,16 +86,24 @@ locations until every retained item has been reviewed.
 There is no recursive uninstaller because `~/.local/share/fluorine` contains
 user instances and prefixes as well as the application runtime.
 
-1. In Fluorine settings, disable **Associate NXM Links** if it is enabled.
+1. In Fluorine settings, click **Remove NXM Association**. This stores a
+   global opt-out, so a later launch will not reclaim the association.
 2. Close Fluorine and every launched game or tool.
 3. Rename `~/.local/share/fluorine/bin` to a backup name rather than deleting it
    immediately. Older installations may contain user-added files there.
 4. Remove the Fluorine-owned desktop entry and icon if present:
    `~/.local/share/applications/com.fluorine.manager.desktop` and
    `~/.local/share/icons/hicolor/256x256/apps/com.fluorine.manager.png`.
-5. Older releases may leave `~/.local/bin/mo2-nxm-handler`. Inspect it first;
-   remove it only if it is the shell wrapper that invokes Fluorine's managed
-   launcher.
+5. The association uses
+   `$XDG_DATA_HOME/applications/com.fluorine.manager.nxm-handler.desktop`
+   (normally `~/.local/share/applications`) and entries in
+   `$XDG_CONFIG_HOME/mimeapps.list` (normally `~/.config`). The Remove button
+   deletes only the marker-owned current desktop entry or a strictly
+   recognized Fluorine historical desktop/wrapper pair, and surgically removes
+   Fluorine's MIME entries. Older releases may leave
+   `~/.local/bin/mo2-nxm-handler` or
+   `~/.local/share/applications/mo2-nxm-handler.desktop`; inspect ambiguous or
+   modified files before removing them manually.
 6. If account and application preferences should also be removed, back up and
    then explicitly remove the Qt settings file and Nexus credentials listed
    above. Leave them in place when preserving login or instance-selection

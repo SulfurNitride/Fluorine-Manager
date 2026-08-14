@@ -956,6 +956,26 @@ target_link_libraries(test_recenterrorlog PRIVATE
 add_test(NAME test_recenterrorlog COMMAND test_recenterrorlog)
 set_tests_properties(test_recenterrorlog PROPERTIES TIMEOUT 10)
 
+add_executable(test_nxmhandlerintegration EXCLUDE_FROM_ALL
+    test_nxmhandlerintegration.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/nxmhandlerintegration.cpp
+)
+set_target_properties(test_nxmhandlerintegration PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_nxmhandlerintegration PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_nxmhandlerintegration PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_nxmhandlerintegration COMMAND test_nxmhandlerintegration)
+set_tests_properties(test_nxmhandlerintegration PROPERTIES TIMEOUT 20)
+
 # ---------------------------------------------------------------------------
 # Serialized, recoverable bundle publication tests
 # ---------------------------------------------------------------------------
@@ -990,4 +1010,4 @@ add_custom_target(fluorine-tests
             test_instancepathidentity test_legacyflatpakmigration
             test_commandlinearguments
             test_nxmrequest test_fluorineupdater
-            test_logredaction test_recenterrorlog)
+            test_logredaction test_recenterrorlog test_nxmhandlerintegration)

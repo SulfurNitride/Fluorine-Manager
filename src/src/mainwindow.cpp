@@ -1489,7 +1489,11 @@ void MainWindow::showEvent(QShowEvent* event)
 
     m_OrganizerCore.settings().widgets().restoreIndex(ui->groupCombo);
 
-    m_OrganizerCore.settings().nexus().registerAsNXMHandler(false);
+    if (const QString error =
+            m_OrganizerCore.settings().nexus().registerAsNXMHandler(false);
+        !error.isEmpty()) {
+      log::warn("NXM desktop integration needs attention: {}", error);
+    }
     m_WasVisible = true;
     updateProblemsButton();
 

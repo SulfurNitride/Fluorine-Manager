@@ -539,11 +539,12 @@ public:
 
   // registers MO as the handler for nxm links
   //
-  // if 'force' is true, the registration dialog will be shown even if the user
-  // said earlier not to
-  //
-  static void registerAsNXMHandler(bool force);
-  static void unregisterAsNXMHandler();
+  // Returns an empty string on success and an actionable error otherwise.
+  // force=true is an explicit request to become the preferred handler.
+  // Explicit association persists process-global intent before changing
+  // files; passive startup never recreates an association the user removed.
+  static QString registerAsNXMHandler(bool force);
+  static QString unregisterAsNXMHandler();
 
   std::vector<std::chrono::seconds> validationTimeouts() const;
 
@@ -1014,6 +1015,11 @@ public:
 
   static bool hideAssignCategoriesQuestion();
   static void setHideAssignCategoriesQuestion(bool b);
+
+  // Process-global NXM association intent. A missing value is migrated once
+  // from a complete, strictly recognized historical registration.
+  static std::optional<bool> nxmHandlerAssociationEnabled();
+  static bool setNxmHandlerAssociationEnabled(bool enabled);
 
   // if the key exists from the credentials store, puts it in `apiKey` and
   // returns true; otherwise, returns false and leaves `apiKey` untouched

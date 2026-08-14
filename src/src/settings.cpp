@@ -2349,15 +2349,57 @@ void NexusSettings::setCategoryMappings(bool b) const
   set(m_Settings, "Settings", "category_mappings", b);
 }
 
-void NexusSettings::registerAsNXMHandler(bool force)
+namespace
 {
-  Q_UNUSED(force);
-  NxmHandlerLinux::registerHandler();
+QString nxmIntegrationError(const nxm_handler_integration::Result& result)
+{
+  if (result.succeeded()) {
+    return {};
+  }
+  QString message = result.message.isEmpty()
+                        ? QStringLiteral("desktop integration update failed")
+                        : result.message;
+  if (!result.path.isEmpty()) {
+    message += QStringLiteral("\n\nPath: %1").arg(result.path);
+  }
+  return message;
+}
+}  // namespace
+
+QString NexusSettings::registerAsNXMHandler(bool force)
+{
+  auto enabled = GlobalSettings::nxmHandlerAssociationEnabled();
+  if (!enabled) {
+    enabled = NxmHandlerLinux::recognizesCompleteRegistration();
+    if (!GlobalSettings::setNxmHandlerAssociationEnabled(*enabled)) {
+      return QStringLiteral("Could not save the global NXM association preference.");
+    }
+  }
+
+  if (force) {
+    if (!GlobalSettings::setNxmHandlerAssociationEnabled(true)) {
+      return QStringLiteral("Could not save the global NXM association preference.");
+    }
+    enabled = true;
+  }
+  if (!*enabled) {
+    return {};
+  }
+  // Keep explicit enabled intent on every operation failure. Although the
+  // helper preflights predictable collisions, an external writer can still
+  // make a later atomic leaf update fail after an earlier leaf committed.
+  // Retaining intent makes that safe partial state converge on a later launch.
+  return nxmIntegrationError(NxmHandlerLinux::registerHandler(force));
 }
 
-void NexusSettings::unregisterAsNXMHandler()
+QString NexusSettings::unregisterAsNXMHandler()
 {
-  NxmHandlerLinux::unregisterHandler();
+  // Persist the opt-out first. If cleanup is incomplete, passive startup must
+  // not reclaim the association before the user can resolve the reported path.
+  if (!GlobalSettings::setNxmHandlerAssociationEnabled(false)) {
+    return QStringLiteral("Could not save the global NXM association preference.");
+  }
+  return nxmIntegrationError(NxmHandlerLinux::unregisterHandler());
 }
 
 std::vector<std::chrono::seconds> NexusSettings::validationTimeouts() const
@@ -2847,6 +2889,30 @@ void GlobalSettings::setHideAssignCategoriesQuestion(bool b)
 {
   g_GlobalSettingsWriteBarrier.runIfAllowed(
       [&] { settings().setValue("HideAssignCategoriesQuestion", b); });
+}
+
+std::optional<bool> GlobalSettings::nxmHandlerAssociationEnabled()
+{
+  auto backend = settings();
+  constexpr auto key = "Fluorine/NxmHandlerEnabled";
+  if (!backend.contains(key)) {
+    return std::nullopt;
+  }
+  return backend.value(key).toBool();
+}
+
+bool GlobalSettings::setNxmHandlerAssociationEnabled(bool enabled)
+{
+  bool saved = false;
+  const bool admitted = g_GlobalSettingsWriteBarrier.runIfAllowed([&] {
+    auto backend = settings();
+    constexpr auto key = "Fluorine/NxmHandlerEnabled";
+    backend.setValue(key, enabled);
+    backend.sync();
+    saved = backend.status() == QSettings::NoError &&
+            backend.contains(key) && backend.value(key).toBool() == enabled;
+  });
+  return admitted && saved;
 }
 
 namespace
