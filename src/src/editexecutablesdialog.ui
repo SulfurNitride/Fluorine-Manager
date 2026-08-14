@@ -432,13 +432,6 @@ Right now the only case I know of where this needs to be overwritten is for the 
               </layout>
              </item>
              <item>
-              <widget class="QCheckBox" name="useApplicationIcon">
-               <property name="text">
-                <string>Use application's icon for desktop shortcuts</string>
-               </property>
-              </widget>
-             </item>
-			       <item>
               <widget class="QCheckBox" name="minimizeToSystemTray">
                <property name="toolTip">
                 <string>Mod Organizer will minimize to the system tray while this executable is running. It will reappear after it finishes.</string>
@@ -548,7 +541,6 @@ Right now the only case I know of where this needs to be overwritten is for the 
   <tabstop>mods</tabstop>
   <tabstop>forceLoadLibraries</tabstop>
   <tabstop>configureLibraries</tabstop>
-  <tabstop>useApplicationIcon</tabstop>
  </tabstops>
  <resources>
   <include location="resources.qrc"/>

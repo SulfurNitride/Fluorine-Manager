@@ -1757,11 +1757,6 @@ Right now the only case I know of where this needs to be overwritten is for the 
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="editexecutablesdialog.ui" line="437"/>
-        <source>Use application&apos;s icon for desktop shortcuts</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
         <location filename="editexecutablesdialog.ui" line="444"/>
         <location filename="editexecutablesdialog.ui" line="447"/>
         <source>Mod Organizer will minimize to the system tray while this executable is running. It will reappear after it finishes.</source>
@@ -3037,14 +3032,7 @@ This is likely due to a corrupted or incompatible download or unrecognized archi
     </message>
     <message>
         <location filename="mainwindow.ui" line="628"/>
-        <source>
-                                &lt;!DOCTYPE HTML PUBLIC &quot;-//W3C//DTD HTML 4.0//EN&quot; &quot;http://www.w3.org/TR/REC-html40/strict.dtd&quot;&gt;
-                                &lt;html&gt;&lt;head&gt;&lt;meta name=&quot;qrichtext&quot; content=&quot;1&quot; /&gt;&lt;style type=&quot;text/css&quot;&gt;
-                                p, li { white-space: pre-wrap; }
-                                &lt;/style&gt;&lt;/head&gt;&lt;body style=&quot; font-family:&apos;MS Shell Dlg 2&apos;; font-size:8.25pt; font-weight:400; font-style:normal;&quot;&gt;
-                                &lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:8pt;&quot;&gt;Choose the program to run. Once you start using ModOrganizer, you should always run your game and tools from here or through shortcuts created here, otherwise mods installed through MO will not be visible.&lt;/span&gt;&lt;/p&gt;
-                                &lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:8pt;&quot;&gt;You can add new Tools to this list, but I can&apos;t promise tools I haven&apos;t tested will work.&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;
-                              </source>
+        <source>Choose the program to run. Run games and tools from Fluorine or from the pinned toolbar and Run menu so the configured mods are active. You can add tools to this list, but untested tools may not work.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -3070,23 +3058,23 @@ This is likely due to a corrupted or incompatible download or unrecognized archi
     </message>
     <message>
         <location filename="mainwindow.ui" line="733"/>
-        <source>Create a shortcut in your start menu or on the desktop to the specified program</source>
+        <source>Show or hide the selected program on the toolbar and Run menu</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location filename="mainwindow.ui" line="736"/>
-        <source>
-                                    &lt;!DOCTYPE HTML PUBLIC &quot;-//W3C//DTD HTML 4.0//EN&quot; &quot;http://www.w3.org/TR/REC-html40/strict.dtd&quot;&gt;
-                                    &lt;html&gt;&lt;head&gt;&lt;meta name=&quot;qrichtext&quot; content=&quot;1&quot; /&gt;&lt;style type=&quot;text/css&quot;&gt;
-                                    p, li { white-space: pre-wrap; }
-                                    &lt;/style&gt;&lt;/head&gt;&lt;body style=&quot; font-family:&apos;MS Shell Dlg 2&apos;; font-size:8.25pt; font-weight:400; font-style:normal;&quot;&gt;
-                                    &lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:8pt;&quot;&gt;This creates a start menu shortcut that directly starts the selected program with the MO active.&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;
-                                  </source>
+        <source>Pin or unpin the selected program inside Fluorine.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
+        <location filename="mainwindow.cpp" line="3203"/>
         <location filename="mainwindow.ui" line="745"/>
-        <source>Shortcut</source>
+        <source>Pin</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="mainwindow.cpp" line="3203"/>
+        <source>Unpin</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -3582,21 +3570,6 @@ This is likely due to a corrupted or incompatible download or unrecognized archi
     <message>
         <location filename="mainwindow.ui" line="1998"/>
         <source>F5</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="mainwindow.cpp" line="360"/>
-        <source>Toolbar and Menu</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="mainwindow.cpp" line="362"/>
-        <source>Desktop</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="mainwindow.cpp" line="364"/>
-        <source>Start Menu</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -10129,7 +10102,7 @@ Please open the &quot;Nexus&quot; tab.</source>
     </message>
     <message>
         <location filename="tutorials/tutorial_primer_main.js" line="86"/>
-        <source>Will create a shortcut for quick access. The shortcut can be placed in the toolbar at the top, in the Start Menu or on the Windows Desktop.</source>
+        <source>Pin or unpin the selected program on the toolbar and in the Run menu.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>

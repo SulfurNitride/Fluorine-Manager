@@ -42,7 +42,7 @@ set(BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS_SAVED} CACHE BOOL "" FORCE)
 qt_standard_project_setup()
 
 # Collect all source files
-file(GLOB ORGANIZER_SOURCES
+file(GLOB ORGANIZER_SOURCES CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/shared/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/vfs/*.cpp)

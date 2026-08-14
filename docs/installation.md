@@ -104,11 +104,20 @@ user instances and prefixes as well as the application runtime.
    `~/.local/bin/mo2-nxm-handler` or
    `~/.local/share/applications/mo2-nxm-handler.desktop`; inspect ambiguous or
    modified files before removing them manually.
-6. If account and application preferences should also be removed, back up and
+6. Releases before the external-shortcut publisher was retired may also have
+   created per-executable `.desktop` files and paired `.sh` scripts on the
+   desktop or in `~/.local/share/applications`, plus cached icons below
+   `~/.local/share/icons/fluorine`. These markerless names can collide with
+   unrelated files, so current releases deliberately do not scan or delete
+   them. Remove only artifacts you recognize. If the Desktop directory was
+   redirected through XDG user-directory settings, inspect that configured
+   desktop location too. Existing shortcut pairs remain launch-compatible,
+   but current releases no longer create or manage them.
+7. If account and application preferences should also be removed, back up and
    then explicitly remove the Qt settings file and Nexus credentials listed
    above. Leave them in place when preserving login or instance-selection
    state.
-7. After confirming that instances and tools no longer need anything in the
+8. After confirming that instances and tools no longer need anything in the
    backup, remove that backup explicitly.
 
 Do not recursively delete `~/.local/share/fluorine` unless you intentionally

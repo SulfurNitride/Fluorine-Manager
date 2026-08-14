@@ -2,7 +2,6 @@
 #include "envmetrics.h"
 #include "envmodule.h"
 #include "envsecurity.h"
-#include "envshortcut.h"
 #include "envwindows.h"
 #include "settings.h"
 #include "shared/util.h"

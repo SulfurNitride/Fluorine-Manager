@@ -205,6 +205,7 @@ private:
   void createEndorseMenu();
 
   void updatePinnedExecutables();
+  void updateLinkButtonState();
   void setToolbarSize(const QSize& s);
   void setToolbarButtonStyle(Qt::ToolButtonStyle s);
 
@@ -315,10 +316,6 @@ private:
 
   MOBase::DelayedFileWriter m_ArchiveListWriter;
 
-  QAction* m_LinkToolbar{nullptr};
-  QAction* m_LinkDesktop{nullptr};
-  QAction* m_LinkStartMenu{nullptr};
-
   SystemTrayManager* m_SystemTrayManager{nullptr};
 
   // icon set by the stylesheet, used to remember its original appearance
@@ -363,8 +360,6 @@ private slots:
   void refreshProfile_activated();
 
   void linkToolbar();
-  void linkDesktop();
-  void linkMenu();
 
   void languageChange(const QString& newLanguage);
 
@@ -492,7 +487,6 @@ private slots:  // ui slots
   void on_tabWidget_currentChanged(int index);
 
   void on_displayCategoriesBtn_toggled(bool checked);
-  void on_linkButton_pressed();
   void on_showHiddenBox_toggled(bool checked);
   void on_bsaList_itemChanged(QTreeWidgetItem* item, int column);
 

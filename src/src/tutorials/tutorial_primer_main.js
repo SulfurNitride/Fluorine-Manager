@@ -83,7 +83,7 @@ function setupTooptips() {
   tooltipWidget("categoriesGroup", qsTr("This shows mod categories and some meta categories (in angle-brackets). Select some to filter the mod list. For example select \"<Checked>\" to show only active mods."))
   tooltipWidget("executablesListBox", qsTr("Customizable list for choosing the program to run."))
   tooltipWidget("startButton", qsTr("When this button is clicked, Mod Organizer creates a virtual directory structure then runs the program selected to the left."))
-  tooltipWidget("linkButton", qsTr("Will create a shortcut for quick access. The shortcut can be placed in the toolbar at the top, in the Start Menu or on the Windows Desktop."))
+  tooltipWidget("linkButton", qsTr("Pin or unpin the selected program on the toolbar and in the Run menu."))
   tooltipWidget("logList", qsTr("Log messages produced by MO. Please note that messages with a light bulb usually don't require your attention."))
   tooltipWidget("apistats", qsTr("Indicator of your current NexusMods API request limits."))
 
