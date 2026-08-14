@@ -999,6 +999,31 @@ add_test(NAME test_problemcheckrunner COMMAND test_problemcheckrunner)
 set_tests_properties(test_problemcheckrunner PROPERTIES TIMEOUT 10)
 
 # ---------------------------------------------------------------------------
+# Atomic, bounded persistent-cookie storage
+# ---------------------------------------------------------------------------
+add_executable(test_persistentcookiejar EXCLUDE_FROM_ALL
+    test_persistentcookiejar.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/persistentcookiejar.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/persistentcookiejar.h
+)
+set_target_properties(test_persistentcookiejar PROPERTIES
+    AUTOMOC ON
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_persistentcookiejar PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_persistentcookiejar PRIVATE
+    Qt6::Core
+    Qt6::Network
+    mo2::uibase
+    GTest::gtest
+)
+add_test(NAME test_persistentcookiejar COMMAND test_persistentcookiejar)
+set_tests_properties(test_persistentcookiejar PROPERTIES TIMEOUT 10)
+
+# ---------------------------------------------------------------------------
 # Serialized, recoverable bundle publication tests
 # ---------------------------------------------------------------------------
 add_test(NAME test_fluorine_publisher
@@ -1033,4 +1058,4 @@ add_custom_target(fluorine-tests
             test_commandlinearguments
             test_nxmrequest test_fluorineupdater
             test_logredaction test_recenterrorlog test_nxmhandlerintegration
-            test_problemcheckrunner)
+            test_problemcheckrunner test_persistentcookiejar)

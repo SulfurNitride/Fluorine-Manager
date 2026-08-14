@@ -15,7 +15,7 @@ public:
   void clear();
 
 private:
-  void save();
+  bool save();
 
   void restore();
 
