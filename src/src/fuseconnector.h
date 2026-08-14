@@ -87,6 +87,10 @@ public:
   void clearRootFiles();
 
 private:
+  void stopFuseRuntime();
+  void resetPartialMountRuntime();
+  void cleanupMountDeployments();
+  void rollbackMountStartup() noexcept;
   StagingPromotionResult flushStaging();
   VfsIndexPublicationResult publishIndex(
       VfsTree& tree, const VfsCatalogResult& catalog_result);
@@ -128,6 +132,7 @@ private:
   std::thread m_fuseThread;
   std::thread m_invalidationThread;
   bool m_mounted        = false;
+  bool m_sessionMounted = false;
   bool m_discardStaging = false;
   bool m_disableVfsCache = false;
   bool m_autoCreateDirs = false;

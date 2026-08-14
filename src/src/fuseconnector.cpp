@@ -15,6 +15,7 @@
 #include <QProcess>
 #include <QProgressDialog>
 #include <QSaveFile>
+#include <QScopeGuard>
 #include <QStandardPaths>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -441,7 +442,16 @@ FuseConnector::FuseConnector(QObject* parent) : QObject(parent)
 
 FuseConnector::~FuseConnector()
 {
-  unmount();
+  try {
+    unmount();
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "[VFS] unmount during destruction failed: %s\n",
+                 error.what());
+    rollbackMountStartup();
+  } catch (...) {
+    std::fprintf(stderr, "[VFS] unmount during destruction failed\n");
+    rollbackMountStartup();
+  }
 }
 
 bool FuseConnector::mount(
@@ -452,6 +462,11 @@ bool FuseConnector::mount(
   if (m_mounted) {
     unmount();
   }
+
+  // updateMapping() may already have deployed external/root mappings. Roll
+  // back every partial resource acquired below unless the complete runtime is
+  // committed at the end of this function.
+  auto startupRollback = qScopeGuard([this] { rollbackMountStartup(); });
 
   m_overwriteDir = overwrite_dir.toStdString();
   m_gameDir      = game_dir.toStdString();
@@ -765,21 +780,28 @@ bool FuseConnector::mount(
 
   m_session = fuse_session_new(&args, &ops, sizeof(ops), m_context.get());
   if (m_session == nullptr) {
-    close(m_backingFd);
-    m_backingFd = -1;
     throw FuseConnectorException(QObject::tr("Failed to create FUSE session"));
   }
   m_context->session = m_session;
 
+  using FuseLoopConfigPtr =
+      std::unique_ptr<struct fuse_loop_config,
+                      decltype(&fuse_loop_cfg_destroy)>;
+  FuseLoopConfigPtr loopConfig(fuse_loop_cfg_create(),
+                               &fuse_loop_cfg_destroy);
+  if (loopConfig == nullptr) {
+    throw FuseConnectorException(
+        QObject::tr("Failed to create FUSE loop configuration"));
+  }
+  fuse_loop_cfg_set_clone_fd(loopConfig.get(), 1);
+  fuse_loop_cfg_set_max_threads(loopConfig.get(), 16);
+
   if (fuse_session_mount(m_session, m_mountPoint.c_str()) != 0) {
-    fuse_session_destroy(m_session);
-    m_session = nullptr;
-    close(m_backingFd);
-    m_backingFd = -1;
     throw FuseConnectorException(
         QObject::tr("Failed to mount FUSE at %1")
             .arg(QString::fromStdString(m_mountPoint)));
   }
+  m_sessionMounted = true;
 
   // Reverse inode invalidation may wait for a kernel folio currently owned by
   // an in-flight FUSE write. Keep it off the finite request-worker pool so the
@@ -788,22 +810,30 @@ bool FuseConnector::mount(
     mo2RunKernelInvalidations(context.get());
   });
 
-  m_fuseThread = std::thread([this]() {
-    // Enable clone_fd: each worker thread gets its own /dev/fuse fd,
-    // eliminating contention on a single fd lock under heavy parallel I/O.
-    struct fuse_loop_config* cfg = fuse_loop_cfg_create();
-    fuse_loop_cfg_set_clone_fd(cfg, 1);
-    fuse_loop_cfg_set_max_threads(cfg, 16);
-    fuse_session_loop_mt(m_session, cfg);
-    fuse_loop_cfg_destroy(cfg);
+  m_fuseThread = std::thread([this, config = std::move(loopConfig)]() {
+    // clone_fd gives each worker its own /dev/fuse fd, eliminating contention
+    // on a single fd lock under heavy parallel I/O.
+    const int result = fuse_session_loop_mt(m_session, config.get());
+    if (result != 0) {
+      std::fprintf(stderr, "[VFS] FUSE request loop exited with error %d\n",
+                   result);
+    }
   });
 
   m_mounted = true;
+  startupRollback.dismiss();
   if (m_sleepInhibitor != nullptr) {
-    const QString reason =
-        QStringLiteral("Fluorine: mod filesystem active for %1")
-            .arg(QFileInfo(QString::fromStdString(m_gameDir)).fileName());
-    m_sleepInhibitor->setActive(true, reason);
+    try {
+      const QString reason =
+          QStringLiteral("Fluorine: mod filesystem active for %1")
+              .arg(QFileInfo(QString::fromStdString(m_gameDir)).fileName());
+      m_sleepInhibitor->setActive(true, reason);
+    } catch (const std::exception& error) {
+      std::fprintf(stderr, "[VFS] unable to activate sleep inhibitor: %s\n",
+                   error.what());
+    } catch (...) {
+      std::fprintf(stderr, "[VFS] unable to activate sleep inhibitor\n");
+    }
   }
   {
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -814,22 +844,15 @@ bool FuseConnector::mount(
   return true;
 }
 
-void FuseConnector::unmount()
+void FuseConnector::stopFuseRuntime()
 {
-  if (!m_mounted) {
-    cleanupExternalMappings();
-    clearIndexRootLocator();
-    if (m_rootBuilderEnabled) {
-      clearRootFiles();
-    }
-    return;
-  }
-
-  const auto unmountStart = std::chrono::steady_clock::now();
-
-  if (m_session != nullptr) {
+  if (m_session != nullptr &&
+      (m_sessionMounted || m_fuseThread.joinable())) {
     fuse_session_exit(m_session);
+  }
+  if (m_session != nullptr && m_sessionMounted) {
     fuse_session_unmount(m_session);
+    m_sessionMounted = false;
   }
 
   if (m_fuseThread.joinable()) {
@@ -850,6 +873,106 @@ void FuseConnector::unmount()
     fuse_session_destroy(m_session);
     m_session = nullptr;
   }
+}
+
+void FuseConnector::resetPartialMountRuntime()
+{
+  stopFuseRuntime();
+
+  if (m_context != nullptr) {
+    (void)mo2CloseOpenFiles(m_context.get());
+  }
+  if (m_backingFd >= 0) {
+    close(m_backingFd);
+    m_backingFd = -1;
+  }
+  m_context.reset();
+  m_trackedWrites.reset();
+  m_baseFileCache.clear();
+  m_cachedDataDirPath.clear();
+  m_mounted = false;
+  m_sessionMounted = false;
+}
+
+void FuseConnector::cleanupMountDeployments()
+{
+  cleanupExternalMappings();
+  m_extraVfsFiles.clear();
+  clearIndexRootLocator();
+  if (m_rootBuilderEnabled) {
+    clearRootFiles();
+  }
+}
+
+void FuseConnector::rollbackMountStartup() noexcept
+{
+  try {
+    resetPartialMountRuntime();
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "[VFS] failed to reset partial mount runtime: %s\n",
+                 error.what());
+    return;
+  } catch (...) {
+    std::fprintf(stderr, "[VFS] failed to reset partial mount runtime\n");
+    return;
+  }
+
+  try {
+    if (m_sleepInhibitor != nullptr) {
+      m_sleepInhibitor->setActive(false, {});
+    }
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "[VFS] failed to release sleep inhibitor: %s\n",
+                 error.what());
+  } catch (...) {
+    std::fprintf(stderr, "[VFS] failed to release sleep inhibitor\n");
+  }
+
+  // A failed start had no declared VFS consumer. Retire only temporary
+  // deployment state; never promote, delete, or reinterpret raw staging here.
+  try {
+    cleanupExternalMappings();
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "[VFS] external mapping cleanup failed: %s\n",
+                 error.what());
+  } catch (...) {
+    std::fprintf(stderr, "[VFS] external mapping cleanup failed\n");
+  }
+  m_extraVfsFiles.clear();
+  try {
+    clearIndexRootLocator();
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "[VFS] index locator cleanup failed: %s\n",
+                 error.what());
+  } catch (...) {
+    std::fprintf(stderr, "[VFS] index locator cleanup failed\n");
+  }
+  try {
+    if (m_rootBuilderEnabled) {
+      clearRootFiles();
+    }
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "[VFS] root deployment cleanup failed: %s\n",
+                 error.what());
+  } catch (...) {
+    std::fprintf(stderr, "[VFS] root deployment cleanup failed\n");
+  }
+}
+
+void FuseConnector::unmount()
+{
+  if (!m_mounted) {
+    resetPartialMountRuntime();
+    if (m_sleepInhibitor != nullptr) {
+      m_sleepInhibitor->setActive(false, {});
+    }
+    cleanupMountDeployments();
+    return;
+  }
+
+  const auto unmountStart = std::chrono::steady_clock::now();
+
+  stopFuseRuntime();
 
   // A forced/session-driven unmount is not guaranteed to deliver release()
   // for every kernel-visible file handle. All request and invalidation workers
@@ -884,6 +1007,18 @@ void FuseConnector::unmount()
       log::info("Discarding staging directory (discard flag set)");
       std::error_code ec;
       fs::remove_all(m_stagingDir, ec);
+      std::error_code existsError;
+      const bool stillExists = fs::exists(m_stagingDir, existsError);
+      if (ec || existsError || stillExists) {
+        const std::string detail =
+            ec ? ec.message()
+               : (existsError ? existsError.message()
+                              : "staging directory still exists");
+        throw FuseConnectorException(
+            QObject::tr("Unable to discard VFS staging directory '%1': %2")
+                .arg(QString::fromStdString(m_stagingDir),
+                     QString::fromStdString(detail)));
+      }
       m_discardStaging = false;
     } else {
       try {
