@@ -4,6 +4,7 @@
 #include <QPushButton>
 #include <iplugin.h>
 #include <iplugindiagnose.h>
+#include <log.h>
 #include <utility.h>
 
 #include "plugincontainer.h"
@@ -42,29 +43,40 @@ void ProblemsDialog::runDiagnosis()
   ui->problemsWidget->clear();
 
   for (IPluginDiagnose* diagnose : m_PluginContainer.plugins<IPluginDiagnose>()) {
-    if (!m_PluginContainer.isEnabled(diagnose)) {
-      continue;
-    }
-
-    std::vector<unsigned int> activeProblems = diagnose->activeProblems();
-    foreach (unsigned int key, activeProblems) {
-      QTreeWidgetItem* newItem = new QTreeWidgetItem();
-      newItem->setText(0, diagnose->shortDescription(key));
-      newItem->setData(0, Qt::UserRole, diagnose->fullDescription(key));
-
-      ui->problemsWidget->addTopLevelItem(newItem);
-      m_hasProblems = true;
-
-      if (diagnose->hasGuidedFix(key)) {
-        QPushButton* fixButton = new QPushButton(tr("Fix"));
-        fixButton->setProperty("fix",
-                               QVariant::fromValue(reinterpret_cast<void*>(diagnose)));
-        fixButton->setProperty("key", key);
-        connect(fixButton, SIGNAL(clicked()), this, SLOT(startFix()));
-        ui->problemsWidget->setItemWidget(newItem, 1, fixButton);
-      } else {
-        newItem->setText(1, tr("No guided fix"));
+    try {
+      if (!m_PluginContainer.isEnabled(diagnose)) {
+        continue;
       }
+
+      std::vector<unsigned int> activeProblems = diagnose->activeProblems();
+      foreach (unsigned int key, activeProblems) {
+        const QString shortDescription = diagnose->shortDescription(key);
+        const QString fullDescription  = diagnose->fullDescription(key);
+        const bool hasGuidedFix        = diagnose->hasGuidedFix(key);
+
+        QTreeWidgetItem* newItem = new QTreeWidgetItem();
+        newItem->setText(0, shortDescription);
+        newItem->setData(0, Qt::UserRole, fullDescription);
+
+        ui->problemsWidget->addTopLevelItem(newItem);
+        m_hasProblems = true;
+
+        if (hasGuidedFix) {
+          QPushButton* fixButton = new QPushButton(tr("Fix"));
+          fixButton->setProperty(
+              "fix", QVariant::fromValue(reinterpret_cast<void*>(diagnose)));
+          fixButton->setProperty("key", key);
+          connect(fixButton, SIGNAL(clicked()), this, SLOT(startFix()));
+          ui->problemsWidget->setItemWidget(newItem, 1, fixButton);
+        } else {
+          newItem->setText(1, tr("No guided fix"));
+        }
+      }
+    } catch (const std::exception&) {
+      log::error("A problem diagnosis plugin failed while building notifications");
+    } catch (...) {
+      log::error("A problem diagnosis plugin failed with an unknown error while "
+                 "building notifications");
     }
   }
 
@@ -105,7 +117,14 @@ void ProblemsDialog::startFix()
   }
   IPluginDiagnose* plugin =
       reinterpret_cast<IPluginDiagnose*>(fixButton->property("fix").value<void*>());
-  plugin->startGuidedFix(fixButton->property("key").toUInt());
+  try {
+    plugin->startGuidedFix(fixButton->property("key").toUInt());
+  } catch (const std::exception&) {
+    log::error("A problem diagnosis plugin failed while applying a guided fix");
+  } catch (...) {
+    log::error("A problem diagnosis plugin failed with an unknown error while "
+               "applying a guided fix");
+  }
   runDiagnosis();
 }
 

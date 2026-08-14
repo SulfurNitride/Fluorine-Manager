@@ -157,6 +157,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <QSize>
 #include <QSizePolicy>
 #include <QTime>
+#include <QThread>
 #include <QTimeZone>
 #include <QTimer>
 #include <QToolButton>
@@ -184,6 +185,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <boost/thread.hpp>
 #endif
 
+#include <algorithm>
 #include <exception>
 #include <functional>
 #include <climits>
@@ -253,8 +255,7 @@ MainWindow::MainWindow(Settings& settings, OrganizerCore& organizerCore,
       m_CategoryFactory(CategoryFactory::instance()), m_OrganizerCore(organizerCore),
       m_PluginContainer(pluginContainer),
       m_ArchiveListWriter(std::bind(&MainWindow::saveArchiveList, this)),
-       m_NumberOfProblems(0),
-      m_ProblemsCheckRequired(false)
+      m_NumberOfProblems(0)
 {
   // disables incredibly slow menu fade in effect that looks and feels like crap.
   // this was only happening to users with the windows
@@ -486,9 +487,9 @@ MainWindow::MainWindow(Settings& settings, OrganizerCore& organizerCore,
 
   m_UpdateProblemsTimer.setSingleShot(true);
   connect(&m_UpdateProblemsTimer, &QTimer::timeout, this,
-          &MainWindow::checkForProblemsAsync);
+          &MainWindow::startProblemCheck);
   connect(this, &MainWindow::checkForProblemsDone, this,
-          &MainWindow::updateProblemsButton, Qt::ConnectionType::QueuedConnection);
+          &MainWindow::updateProblemsButton);
 
   m_SaveMetaTimer.setSingleShot(false);
   connect(&m_SaveMetaTimer, SIGNAL(timeout()), this, SLOT(saveModMetas()));
@@ -733,6 +734,12 @@ void MainWindow::resetButtonIcons()
 MainWindow::~MainWindow()
 {
   try {
+    // Stop admission and invalidate queued slices before plugin or UI teardown.
+    // No diagnosis work runs outside this object's owning thread.
+    m_ProblemChecksAccepting = false;
+    m_UpdateProblemsTimer.stop();
+    m_ProblemCheckRunner.cancel();
+
     if (!m_StartupFailed) {
       m_ArchiveListWriter.writeImmediately(true);
       m_OrganizerCore.pluginsWriter().writeImmediately(true);
@@ -1054,6 +1061,14 @@ void MainWindow::on_centralWidget_customContextMenuRequested(const QPoint& pos)
 
 void MainWindow::scheduleCheckForProblems()
 {
+  if (!m_ProblemChecksAccepting) {
+    return;
+  }
+  if (m_ProblemsDialogActive || m_ProblemCheckRunner.running()) {
+    m_ProblemsCheckDirty = true;
+    return;
+  }
+
   if (!m_UpdateProblemsTimer.isActive()) {
     m_UpdateProblemsTimer.start(500);
   }
@@ -1119,35 +1134,57 @@ void MainWindow::updateProblemsButton()
   }
 }
 
-QFuture<void> MainWindow::checkForProblemsAsync()
+void MainWindow::startProblemCheck()
 {
-  return QtConcurrent::run([this]() {
-    checkForProblemsImpl();
-  });
-}
-
-void MainWindow::checkForProblemsImpl()
-{
-  m_ProblemsCheckRequired = true;
-
-  std::scoped_lock const lk(m_CheckForProblemsMutex);
-
-  // another thread might already have checked while this one was waiting on the lock
-  if (m_ProblemsCheckRequired) {
-    m_ProblemsCheckRequired = false;
-    TimeThis const tt("MainWindow::checkForProblemsImpl()");
-    size_t numProblems = 0;
-    for (QObject* pluginObj : m_PluginContainer.plugins<QObject>()) {
-      IPlugin* plugin = qobject_cast<IPlugin*>(pluginObj);
-      if (plugin == nullptr || m_PluginContainer.isEnabled(plugin)) {
-        IPluginDiagnose* diagnose = qobject_cast<IPluginDiagnose*>(pluginObj);
-        if (diagnose != nullptr)
-          numProblems += diagnose->activeProblems().size();
-      }
-    }
-    m_NumberOfProblems = numProblems;
-    emit checkForProblemsDone();
+  Q_ASSERT(QThread::currentThread() == thread());
+  if (!m_ProblemChecksAccepting || m_ProblemsDialogActive) {
+    return;
   }
+  if (m_ProblemCheckRunner.running()) {
+    m_ProblemsCheckDirty = true;
+    return;
+  }
+
+  m_ProblemsCheckDirty = false;
+  std::vector<ProblemCheckRunner::Task> tasks;
+  for (QObject* pluginObject : m_PluginContainer.plugins<QObject>()) {
+    const QPointer<QObject> plugin(pluginObject);
+    tasks.emplace_back([this, plugin]() -> std::size_t {
+      Q_ASSERT(QThread::currentThread() == thread());
+      if (plugin.isNull()) {
+        return 0;
+      }
+
+      const auto currentPlugins = m_PluginContainer.plugins<QObject>();
+      if (std::find(currentPlugins.begin(), currentPlugins.end(), plugin.data()) ==
+          currentPlugins.end()) {
+        return 0;
+      }
+
+      IPlugin* base = qobject_cast<IPlugin*>(plugin.data());
+      if (base != nullptr && !m_PluginContainer.isEnabled(base)) {
+        return 0;
+      }
+
+      IPluginDiagnose* diagnose = qobject_cast<IPluginDiagnose*>(plugin.data());
+      return diagnose == nullptr ? 0 : diagnose->activeProblems().size();
+    });
+  }
+
+  m_ProblemCheckRunner.start(
+      std::move(tasks),
+      [this](std::size_t numProblems) {
+        if (!m_ProblemChecksAccepting) {
+          return;
+        }
+        m_NumberOfProblems = numProblems;
+        emit checkForProblemsDone();
+
+        if (std::exchange(m_ProblemsCheckDirty, false)) {
+          scheduleCheckForProblems();
+        }
+      },
+      []() { log::error("A problem diagnosis plugin failed"); });
 }
 
 void MainWindow::about()
@@ -4652,14 +4689,32 @@ void MainWindow::on_bsaList_itemChanged(QTreeWidgetItem*, int)
 
 void MainWindow::on_actionNotifications_triggered()
 {
-  auto future = checkForProblemsAsync();
+  if (!m_ProblemChecksAccepting || m_ProblemsDialogActive) {
+    return;
+  }
 
-  future.waitForFinished();
+  m_UpdateProblemsTimer.stop();
+  if (m_ProblemCheckRunner.running()) {
+    m_ProblemCheckRunner.cancel([this]() { showProblemsDialog(); });
+  } else {
+    showProblemsDialog();
+  }
+}
+
+void MainWindow::showProblemsDialog()
+{
+  if (!m_ProblemChecksAccepting || m_ProblemsDialogActive) {
+    return;
+  }
+
+  m_ProblemsDialogActive = true;
+  const auto resumeProblemChecks = MakeGuard([this]() {
+    m_ProblemsDialogActive = false;
+    scheduleCheckForProblems();
+  });
 
   ProblemsDialog problems(m_PluginContainer, this);
   problems.exec();
-
-  scheduleCheckForProblems();
 }
 
 void MainWindow::on_actionChange_Game_triggered()

@@ -977,6 +977,28 @@ add_test(NAME test_nxmhandlerintegration COMMAND test_nxmhandlerintegration)
 set_tests_properties(test_nxmhandlerintegration PROPERTIES TIMEOUT 20)
 
 # ---------------------------------------------------------------------------
+# Incremental owning-thread diagnosis tests
+# ---------------------------------------------------------------------------
+add_executable(test_problemcheckrunner EXCLUDE_FROM_ALL
+    test_problemcheckrunner.cpp
+)
+set_target_properties(test_problemcheckrunner PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_problemcheckrunner PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_problemcheckrunner PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_problemcheckrunner COMMAND test_problemcheckrunner)
+set_tests_properties(test_problemcheckrunner PROPERTIES TIMEOUT 10)
+
+# ---------------------------------------------------------------------------
 # Serialized, recoverable bundle publication tests
 # ---------------------------------------------------------------------------
 add_test(NAME test_fluorine_publisher
@@ -1010,4 +1032,5 @@ add_custom_target(fluorine-tests
             test_instancepathidentity test_legacyflatpakmigration
             test_commandlinearguments
             test_nxmrequest test_fluorineupdater
-            test_logredaction test_recenterrorlog test_nxmhandlerintegration)
+            test_logredaction test_recenterrorlog test_nxmhandlerintegration
+            test_problemcheckrunner)

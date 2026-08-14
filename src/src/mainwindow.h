@@ -34,6 +34,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "modlistbypriorityproxy.h"
 #include "modlistsortproxy.h"
 #include "plugincontainer.h"
+#include "problemcheckrunner.h"
 #include "shared/fileregisterfwd.h"
 #include "systemtraymanager.h"
 
@@ -231,9 +232,6 @@ private:
   bool extractProgress(QProgressDialog& extractProgress, int percentage,
                        std::string fileName);
 
-  // Performs checks, sets the m_NumberOfProblems and signals checkForProblemsDone().
-  void checkForProblemsImpl();
-
   void setCategoryListVisible(bool visible);
 
   static void setupNetworkProxy(bool activate);
@@ -327,9 +325,11 @@ private:
   // when painting the count
   QIcon m_originalNotificationIcon;
 
-  std::atomic<std::size_t> m_NumberOfProblems;
-  std::atomic<bool> m_ProblemsCheckRequired;
-  std::mutex m_CheckForProblemsMutex;
+  std::size_t m_NumberOfProblems;
+  ProblemCheckRunner m_ProblemCheckRunner;
+  bool m_ProblemChecksAccepting{true};
+  bool m_ProblemsDialogActive{false};
+  bool m_ProblemsCheckDirty{false};
 
   int m_PreviousSettingsSchemaVersion{0};
   QVersionNumber m_CurrentProductVersion;
@@ -436,8 +436,9 @@ private slots:
   // time.
   void scheduleCheckForProblems();
 
-  // Perform the actual problem check in another thread.
-  QFuture<void> checkForProblemsAsync();
+  // Starts an incremental owning-thread scan, one diagnosis plugin per event turn.
+  void startProblemCheck();
+  void showProblemsDialog();
 
   void saveModMetas();
 
