@@ -1079,6 +1079,28 @@ add_test(NAME test_downloadmetadatapolicy COMMAND test_downloadmetadatapolicy)
 set_tests_properties(test_downloadmetadatapolicy PROPERTIES TIMEOUT 10)
 
 # ---------------------------------------------------------------------------
+# Download write failure and reply identity lifecycle
+# ---------------------------------------------------------------------------
+add_executable(test_downloadwritelifecycle EXCLUDE_FROM_ALL
+    test_downloadwritelifecycle.cpp
+)
+set_target_properties(test_downloadwritelifecycle PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_downloadwritelifecycle PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_downloadwritelifecycle PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_downloadwritelifecycle COMMAND test_downloadwritelifecycle)
+set_tests_properties(test_downloadwritelifecycle PROPERTIES TIMEOUT 10)
+
+# ---------------------------------------------------------------------------
 # Serialized, recoverable bundle publication tests
 # ---------------------------------------------------------------------------
 add_test(NAME test_fluorine_publisher
@@ -1114,4 +1136,5 @@ add_custom_target(fluorine-tests
             test_nxmrequest test_fluorineupdater
             test_logredaction test_recenterrorlog test_nxmhandlerintegration
             test_problemcheckrunner test_persistentcookiejar
-            test_instancegeneralsettings test_downloadmetadatapolicy)
+            test_instancegeneralsettings test_downloadmetadatapolicy
+            test_downloadwritelifecycle)

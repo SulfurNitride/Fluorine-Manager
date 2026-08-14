@@ -1640,6 +1640,10 @@ bool MainWindow::canExit(bool force, bool silentActiveLaunch)
             QMessageBox::Yes | QMessageBox::Cancel) == QMessageBox::Cancel) {
       return false;
     } else {
+      // pauseAll() processes events while waiting for network callbacks. Close
+      // timeout/retry admission first so an automatic resume cannot race the
+      // shutdown the user just approved.
+      m_OrganizerCore.downloadManager()->suppressAdmissionForShutdown();
       m_OrganizerCore.downloadManager()->pauseAll();
     }
   }

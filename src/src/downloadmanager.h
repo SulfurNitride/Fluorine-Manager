@@ -21,6 +21,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #define DOWNLOADMANAGER_H
 
 #include "downloadreplylifetime.h"
+#include "downloadwritelifecycle.h"
 #include "serverinfo.h"
 #include <QElapsedTimer>
 #include <QFile>
@@ -627,7 +628,14 @@ private:
 
   static QString getFileTypeString(int fileType);
 
-  void writeData(DownloadInfo* info);
+  [[nodiscard]] download_write::Result writeData(DownloadInfo* info);
+
+  DownloadInfo* reacquireDownload(
+      const download_write::Identity<QNetworkReply>& identity,
+      int* index = nullptr);
+  DownloadInfo* reacquireDownloadSameOrRetired(
+      const download_write::Identity<QNetworkReply>& identity,
+      int* index = nullptr);
 
 private:
   struct PendingDownload
