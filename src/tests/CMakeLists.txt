@@ -796,6 +796,29 @@ target_link_libraries(test_instancepathidentity PRIVATE
 add_test(NAME test_instancepathidentity COMMAND test_instancepathidentity)
 
 # ---------------------------------------------------------------------------
+# Lossless Unix argv decoding and structured command forwarding
+# ---------------------------------------------------------------------------
+add_executable(test_commandlinearguments EXCLUDE_FROM_ALL
+    test_commandlinearguments.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/commandlinearguments.cpp
+)
+set_target_properties(test_commandlinearguments PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_commandlinearguments PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_commandlinearguments PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_commandlinearguments COMMAND test_commandlinearguments)
+set_tests_properties(test_commandlinearguments PROPERTIES TIMEOUT 10)
+
+# ---------------------------------------------------------------------------
 # Serialized, recoverable bundle publication tests
 # ---------------------------------------------------------------------------
 add_test(NAME test_fluorine_publisher
@@ -826,4 +849,4 @@ add_custom_target(fluorine-tests
             test_vfs_catalog test_vfs_index
             test_staging_promotion test_python_module_switch
             test_stylesheetpath test_applicationappearance test_plugindatapath
-            test_instancepathidentity)
+            test_instancepathidentity test_commandlinearguments)

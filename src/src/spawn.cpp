@@ -399,11 +399,6 @@ int spawn(const SpawnParameters& sp,
   const QString bin = MOBase::normalizePathForHost(sp.binary.absoluteFilePath());
   QString cwd       = MOBase::normalizePathForHost(sp.currentDirectory.absolutePath());
 
-  QStringList argList;
-  if (!sp.arguments.isEmpty()) {
-    argList = QProcess::splitCommand(sp.arguments);
-  }
-
   if (cwd.isEmpty()) {
     cwd = QFileInfo(bin).absolutePath();
   }
@@ -413,7 +408,7 @@ int spawn(const SpawnParameters& sp,
   uint32_t steamAppId = parseSteamAppId(sp.steamAppID);
   ProtonLauncher launcher;
   launcher.setBinary(bin)
-      .setArguments(argList)
+      .setArguments(sp.argumentList)
       .setWorkingDir(cwd)
       .setGameDirectory(MOBase::normalizePathForHost(sp.gameDirectory.absolutePath()))
       .setSteamAppId(steamAppId);

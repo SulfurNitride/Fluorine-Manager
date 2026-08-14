@@ -90,6 +90,7 @@ public:
 
   ProcessRunner& setBinary(const QFileInfo& binary);
   ProcessRunner& setArguments(const QString& arguments);
+  ProcessRunner& setArguments(const QStringList& arguments);
   ProcessRunner& setCurrentDirectory(const QDir& directory);
   ProcessRunner& setSteamID(const QString& steamID);
   ProcessRunner& setCustomOverwrite(const QString& customOverwrite);

@@ -22,6 +22,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <QDir>
 #include <QFileInfo>
+#include <QStringList>
 
 #include <sys/types.h>
 #include <unistd.h>
@@ -54,7 +55,12 @@ namespace spawn
 struct SpawnParameters
 {
   QFileInfo binary;
+  // Compatibility/raw representation used by diagnostics and the existing
+  // about-to-run plugin callback.
   QString arguments;
+  // Resolved execution arguments. This is authoritative at every spawn,
+  // lifetime-policy and USVFS boundary.
+  QStringList argumentList;
   QDir currentDirectory;
   QDir gameDirectory;
   QString steamAppID;

@@ -3165,6 +3165,7 @@ bool OrganizerCore::checkGameRegistryKey()
 
 bool OrganizerCore::beforeRun(
     const QFileInfo& binary, const QDir& cwd, const QString& arguments,
+    const QStringList& argumentList,
     const QString& profileName, const QString& customOverwrite,
     const QList<MOBase::ExecutableForcedLoadSetting>& forcedLibraries,
     bool useProton, const QString& launchToken, bool ownsVfs,
@@ -3390,7 +3391,7 @@ bool OrganizerCore::beforeRun(
       UsvfsRequestOptions requestOptions{
           .binary = binary,
           .workingDirectory = cwd,
-          .arguments = QProcess::splitCommand(arguments),
+          .arguments = argumentList,
           .mappings = mappings,
           .useResolvedSnapshot = useResolvedSnapshot,
           .dataDirectory = snapshotDataDirectory,

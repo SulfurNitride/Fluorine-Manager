@@ -769,6 +769,16 @@ ProcessRunner& ProcessRunner::setBinary(const QFileInfo& binary)
 ProcessRunner& ProcessRunner::setArguments(const QString& arguments)
 {
   m_sp.arguments = arguments;
+  m_sp.argumentList = QProcess::splitCommand(arguments);
+  return *this;
+}
+
+ProcessRunner& ProcessRunner::setArguments(const QStringList& arguments)
+{
+  // Preserve the historical string passed to plugin callbacks and logs while
+  // keeping the exact list authoritative for execution.
+  m_sp.arguments = arguments.join(QLatin1Char(' '));
+  m_sp.argumentList = arguments;
   return *this;
 }
 
@@ -929,7 +939,7 @@ ProcessRunner& ProcessRunner::setFromFileOrExecutable(
   }
 
   setBinary(QFileInfo(executable));
-  setArguments(args.join(" "));
+  setArguments(args);
   setCurrentDirectory(cwd);
   setProfileName(profileOverride);
 
@@ -1269,9 +1279,9 @@ std::optional<ProcessRunner::Results> ProcessRunner::runBinary()
   // saves profile, sets up the VFS, notifies plugins, etc.; can return false
   // if a plugin doesn't want the program to run.
   if (!m_core.beforeRun(m_sp.binary, m_sp.currentDirectory, m_sp.arguments,
-                        m_profileName, m_customOverwrite, m_forcedLibraries,
-                        m_sp.useProton, m_sp.lifetimeToken, ownsVfs,
-                        &m_sp.usvfsRequestPath,
+                        m_sp.argumentList, m_profileName, m_customOverwrite,
+                        m_forcedLibraries, m_sp.useProton, m_sp.lifetimeToken,
+                        ownsVfs, &m_sp.usvfsRequestPath,
                         &m_sp.saveBindMountSource, &m_sp.saveBindMountTarget)) {
     return Error;
   }
@@ -1308,16 +1318,15 @@ std::optional<ProcessRunner::Results> ProcessRunner::runBinary()
   // throw here; rollbackPreparedLaunch removes any VFS preparation while
   // retaining ownership if cleanup itself needs a retry.
   try {
-    const QStringList arguments = QProcess::splitCommand(m_sp.arguments);
     const QStringList requestedCompanions =
         game != nullptr
             ? game->executableProcessNames(m_sp.binary.absoluteFilePath(),
-                                           arguments)
+                                           m_sp.argumentList)
             : QStringList{};
     m_companionProcessNames = process_lifetime::buildExpectedExecutables(
-        QFileInfo{}, QString{}, requestedCompanions);
+        QFileInfo{}, QStringList{}, requestedCompanions);
     m_expectedExecutables = process_lifetime::buildExpectedExecutables(
-        m_sp.binary, m_sp.arguments, m_companionProcessNames);
+        m_sp.binary, m_sp.argumentList, m_companionProcessNames);
     m_expectedExecutables = processTrackingExecutables(
         m_expectedExecutables, !m_sp.usvfsRequestPath.isEmpty());
     m_lifetimeTrackingPrepared = true;
@@ -1393,7 +1402,7 @@ ProcessRunner::Results ProcessRunner::postRun()
   if (!m_lifetimeTrackingPrepared) {
     fallbackExpectedExecutables = processTrackingExecutables(
         process_lifetime::buildExpectedExecutables(
-            m_sp.binary, m_sp.arguments, {}),
+            m_sp.binary, m_sp.argumentList, {}),
         usingUsvfsHelper);
   }
   const QStringList& expectedExecutables =
@@ -1546,7 +1555,7 @@ ProcessRunner::Results ProcessRunner::attachToProcess(pid_t pid)
   if (!m_preparedObserver) {
     m_expectedExecutables =
         processTrackingExecutables(process_lifetime::buildExpectedExecutables(
-                                       m_sp.binary, m_sp.arguments, {}),
+                                       m_sp.binary, m_sp.argumentList, {}),
                                    !m_sp.usvfsRequestPath.isEmpty());
     m_lifetimeTrackingPrepared = true;
     if (!prepareLaunchObserver(/*ownsVfs=*/false)) {

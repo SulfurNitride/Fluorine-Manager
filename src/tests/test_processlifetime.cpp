@@ -1381,11 +1381,24 @@ TEST_F(ProcessLifetimeTest, NotifiesOnceOnlyAfterDifferentlyNamedChildExits)
 TEST_F(ProcessLifetimeTest, AddsNormalizedCompanionNamesToExpectedExecutables)
 {
   const QStringList expected = process_lifetime::buildExpectedExecutables(
-      QFileInfo(QStringLiteral("/usr/bin/openmw-launcher")), QString{},
+      QFileInfo(QStringLiteral("/usr/bin/openmw-launcher")), QStringList{},
       {QStringLiteral("OPENMW"), QStringLiteral("/app/bin/openmw")});
 
   EXPECT_EQ(expected,
             QStringList({QStringLiteral("openmw-launcher"), QStringLiteral("openmw")}));
+}
+
+TEST_F(ProcessLifetimeTest, ReadsExecutableNamesFromExactArguments)
+{
+  const QStringList expected = process_lifetime::buildExpectedExecutables(
+      QFileInfo(QStringLiteral("/usr/bin/launcher")),
+      {QString{}, QStringLiteral("/tools/Companion App.EXE"),
+       QStringLiteral("literal \\\" decoy.exe")});
+
+  EXPECT_EQ(expected,
+            QStringList({QStringLiteral("launcher"),
+                         QStringLiteral("companion app.exe"),
+                         QStringLiteral("literal \\\" decoy.exe")}));
 }
 
 TEST_F(ProcessLifetimeTest, TracksARealDetachedCompanionByLaunchToken)

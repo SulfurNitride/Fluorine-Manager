@@ -90,7 +90,9 @@ TEST(UsvfsRequest, WritesVersionedLengthPrefixedRequest)
   UsvfsRequestOptions options;
   options.binary = QFileInfo(temporary.filePath(QStringLiteral("game.exe")));
   options.workingDirectory = QDir(temporary.path());
-  options.arguments = {QStringLiteral("--profile"), QStringLiteral("Test Profile")};
+  options.arguments = {QStringLiteral("--profile"), QStringLiteral("Test Profile"),
+                       QString{}, QString::fromUtf8("Grüße 🧪"),
+                       QStringLiteral("$HOME;*.esp'\"\\")};
   options.mappings = {
       {temporary.filePath(QStringLiteral("mod")),
        temporary.filePath(QStringLiteral("game/Data")), true, true},
@@ -129,9 +131,12 @@ TEST(UsvfsRequest, WritesVersionedLengthPrefixedRequest)
   EXPECT_EQ(toWinePath(options.workingDirectory.absolutePath()),
             readString(bytes, offset));
   EXPECT_EQ(toWinePath(options.logPath), readString(bytes, offset));
-  EXPECT_EQ(2U, readU32(bytes, offset));
+  EXPECT_EQ(5U, readU32(bytes, offset));
   EXPECT_EQ(QStringLiteral("--profile"), readString(bytes, offset));
   EXPECT_EQ(QStringLiteral("Test Profile"), readString(bytes, offset));
+  EXPECT_EQ(QString{}, readString(bytes, offset));
+  EXPECT_EQ(QString::fromUtf8("Grüße 🧪"), readString(bytes, offset));
+  EXPECT_EQ(QStringLiteral("$HOME;*.esp'\"\\"), readString(bytes, offset));
   EXPECT_EQ(1U, readU32(bytes, offset));
   ASSERT_LT(offset + 3, bytes.size());
   EXPECT_EQ(1, bytes.at(offset++));

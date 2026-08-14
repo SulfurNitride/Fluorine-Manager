@@ -851,7 +851,8 @@ ExactSignalResult signalExactProcess(const ProcContext& context,
 #endif
 }
 
-QStringList buildExpectedExecutables(const QFileInfo& binary, const QString& arguments,
+QStringList buildExpectedExecutables(const QFileInfo& binary,
+                                     const QStringList& arguments,
                                      const QStringList& additional)
 {
   QStringList expected;
@@ -864,8 +865,7 @@ QStringList buildExpectedExecutables(const QFileInfo& binary, const QString& arg
 
   addName(binary.fileName());
 
-  const auto args = QProcess::splitCommand(arguments);
-  for (const QString& arg : args) {
+  for (const QString& arg : arguments) {
     const QFileInfo fi(arg);
     const QString base = fi.fileName();
     if (base.endsWith(".exe", Qt::CaseInsensitive)) {

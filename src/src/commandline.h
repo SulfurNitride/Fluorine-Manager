@@ -83,9 +83,9 @@ public:
   // whether this command can be forwarded to the primary instance if one is
   // already running
   //
-  // if an instance is already running and this returns true, the whole command
-  // line is sent as a message to the primary instance, which will construct a
-  // new CommandLine and call runPostOrganizer() with it
+  // if an instance is already running and this returns true, the semantic
+  // arguments are sent to the primary instance in a versioned envelope. The
+  // primary constructs a new CommandLine and calls runPostOrganizer() with it
   //
   // if an instance is already running and this returns false, the "an instance
   // is already running" error dialog will be shown
@@ -307,6 +307,10 @@ public:
   //
   std::optional<int> process(const std::wstring& line);
 
+  // Parses semantic arguments that have already been tokenized by the OS.
+  // The program name is not included.
+  std::optional<int> processArguments(const QStringList& arguments);
+
   // called as soon as the MOApplication has been created; this handles a few
   // global actions and forwards to the command, if any
   //
@@ -392,8 +396,11 @@ private:
   QStringList m_untouched;
   Command* m_command{nullptr};
   std::wstring m_originalLine;
+  QStringList m_originalArguments;
 
   void createOptions();
+  std::optional<int> processTokens(const QStringList& arguments,
+                                   std::wstring originalLine);
   static std::string more() ;
 
   template <class... Ts>

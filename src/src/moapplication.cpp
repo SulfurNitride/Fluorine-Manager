@@ -20,6 +20,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "moapplication.h"
 #include "applicationappearance.h"
 #include "commandline.h"
+#include "commandlinearguments.h"
 #include "instancemanager.h"
 #include "loglist.h"
 #include "mainwindow.h"
@@ -768,7 +769,21 @@ void MOApplication::dispatchExternalMessage(const QString& message)
   } else {
     cl::CommandLine cl;
 
-    if (auto r = cl.process(message.toStdWString())) {
+    std::optional<int> result;
+    if (cl::isForwardedArgumentsMessage(message)) {
+      const auto arguments = cl::decodeForwardedArguments(message);
+      if (!arguments) {
+        log::warn("rejecting malformed forwarded command arguments");
+        return;
+      }
+      result = cl.processArguments(*arguments);
+    } else {
+      // Backward compatibility for simple textual messages from older
+      // installations and integrations.
+      result = cl.process(message.toStdWString());
+    }
+
+    if (result) {
       log::debug("while processing external message, command line wants to "
                  "exit; ignoring");
 

@@ -1,4 +1,5 @@
 #include "commandline.h"
+#include "commandlinearguments.h"
 #include "env.h"
 #include "fluorinepaths.h"
 #include "instancemanager.h"
@@ -32,7 +33,8 @@
 using namespace MOBase;
 
 int run(int argc, char* argv[]);
-int runApplication(int argc, char* argv[], UnixTerminationBridge& termination);
+int runApplication(int argc, char* argv[], const QStringList& arguments,
+                   UnixTerminationBridge& termination);
 
 int main(int argc, char* argv[])
 {
@@ -45,10 +47,30 @@ int run(int argc, char* argv[])
 {
   const QString lockPath = fluorineDataDir() + QStringLiteral("/runtime.lock");
 
-  if (argc >= 3 && QString(argv[1]) == "nxm-handle") {
-    QString nxmUrl = QString::fromLocal8Bit(argv[2]);
-    if (nxmUrl == "nxm-handle" && argc >= 4) {
-      nxmUrl = QString::fromLocal8Bit(argv[3]);
+  QString argumentError;
+  const auto arguments =
+      cl::decodeUnixArguments(argc, argv, &argumentError);
+  if (!arguments) {
+    std::fprintf(stderr, "ERROR: invalid process arguments: %s\n",
+                 argumentError.toUtf8().constData());
+    return 1;
+  }
+
+  if (!arguments->isEmpty() && arguments->at(0) == "nxm-handle") {
+    QString nxmUrl;
+    if (arguments->size() == 2) {
+      nxmUrl = arguments->at(1);
+    } else if (arguments->size() == 3 &&
+               arguments->at(1) == "nxm-handle") {
+      nxmUrl = arguments->at(2);
+    } else {
+      std::fprintf(stderr, "ERROR: nxm-handle requires exactly one NXM link\n");
+      return 1;
+    }
+    if (!isNxmLink(nxmUrl) || nxmUrl.contains(QLatin1Char('\r')) ||
+        nxmUrl.contains(QLatin1Char('\n'))) {
+      std::fprintf(stderr, "ERROR: invalid NXM link\n");
+      return 1;
     }
     if (NxmHandlerLinux::sendToSocket(nxmUrl)) {
       return 0;
@@ -102,7 +124,7 @@ int run(int argc, char* argv[])
 
   try {
     UnixTerminationBridge termination;
-    const int result = runApplication(argc, argv, termination);
+    const int result = runApplication(argc, argv, *arguments, termination);
 
     // The bridge outlives MOApplication so its hard deadline also covers core,
     // FUSE and Qt member destruction. Disarm only after that teardown returns.
@@ -115,32 +137,15 @@ int run(int argc, char* argv[])
   }
 }
 
-int runApplication(int argc, char* argv[], UnixTerminationBridge& termination)
+int runApplication(int argc, char* argv[], const QStringList& arguments,
+                   UnixTerminationBridge& termination)
 {
 
   MOShared::SetThisThreadName("main");
   setExceptionHandlers();
 
   cl::CommandLine cl;
-
-  // Build a wstring from argv for the CommandLine parser. Each argument must
-  // be quoted so that po::split_unix() round-trips correctly when paths
-  // contain spaces.
-  std::wstring cmdLine;
-  for (int i = 0; i < argc; ++i) {
-    if (i > 0)
-      cmdLine += L' ';
-    std::string arg(argv[i]);
-    std::wstring const warg(arg.begin(), arg.end());
-    if (warg.find(L' ') != std::wstring::npos) {
-      cmdLine += L'"';
-      cmdLine += warg;
-      cmdLine += L'"';
-    } else {
-      cmdLine += warg;
-    }
-  }
-  if (auto r = cl.process(cmdLine)) {
+  if (auto r = cl.processArguments(arguments)) {
     return *r;
   }
   if (termination.requested()) {

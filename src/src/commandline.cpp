@@ -1,4 +1,5 @@
 #include "commandline.h"
+#include "commandlinearguments.h"
 #include "env.h"
 #include "instancemanager.h"
 #include "loglist.h"
@@ -63,24 +64,110 @@ CommandLine::CommandLine()
 
 std::optional<int> CommandLine::process(const std::wstring& line)
 {
-  m_originalLine = line;
   try {
-    // Convert wstring args to vector<wstring> for compatibility with
-    // wcommand_line_parser.
-    auto narrow_args = po::split_unix(QString::fromStdWString(line).toStdString());
-    std::vector<std::wstring> args;
-    for (const auto& a : narrow_args) {
-      args.push_back(QString::fromStdString(a).toStdWString());
-    }
-    if (!args.empty()) {
+    auto wideArguments = po::split_unix(line);
+    if (!wideArguments.empty()) {
       // remove program name
-      args.erase(args.begin());
+      wideArguments.erase(wideArguments.begin());
+    }
+
+    QStringList originalArguments;
+    originalArguments.reserve(
+        static_cast<qsizetype>(wideArguments.size()));
+    for (const std::wstring& argument : wideArguments) {
+      originalArguments.push_back(QString::fromStdWString(argument));
+    }
+    return processTokens(originalArguments, line);
+  } catch (const std::exception& e) {
+    env::Console const console;
+    std::cerr << e.what() << "\n" << usage() << "\n";
+    return 1;
+  }
+}
+
+std::optional<int>
+CommandLine::processArguments(const QStringList& arguments)
+{
+  return processTokens(arguments,
+                       arguments.join(QLatin1Char(' ')).toStdWString());
+}
+
+std::optional<int>
+CommandLine::processTokens(const QStringList& arguments,
+                           std::wstring originalLine)
+{
+  clear();
+  m_originalLine = std::move(originalLine);
+  m_originalArguments = arguments;
+  try {
+    const auto classifyInvocation = [this](const QStringList& invocation)
+        -> std::optional<int> {
+      if (invocation.isEmpty()) {
+        return {};
+      }
+
+      const QString& target = invocation.front();
+      if (target.startsWith(QStringLiteral("--"))) {
+        env::Console const console;
+        std::cerr << "\nUnrecognized option " << target.toStdString()
+                  << "\n";
+        return 1;
+      }
+
+      m_shortcut = target;
+      if (!m_shortcut.isValid()) {
+        if (isNxmLink(target)) {
+          m_nxmLink = target;
+        } else {
+          m_executable = target;
+        }
+      }
+      m_untouched = invocation.sliced(1);
+      return {};
+    };
+
+    const ProcessArgumentPartition partition =
+        partitionProcessArguments(arguments);
+    const bool recognizedCommand =
+        !partition.invocation.isEmpty() &&
+        std::any_of(m_commands.begin(), m_commands.end(),
+                    [&](const auto& command) {
+                      return command->name() ==
+                             partition.invocation.front().toStdString();
+                    });
+
+    if (!partition.invocation.isEmpty() && !recognizedCommand) {
+      std::vector<std::string> managerArguments;
+      managerArguments.reserve(
+          static_cast<std::size_t>(partition.managerArguments.size()));
+      for (const QString& argument : partition.managerArguments) {
+        managerArguments.push_back(argument.toUtf8().toStdString());
+      }
+      auto managerParsed =
+          po::command_line_parser(managerArguments)
+              .options(m_visibleOptions)
+              .run();
+      po::store(managerParsed, m_vm);
+      po::notify(m_vm);
+
+      if (m_vm.contains("help")) {
+        env::Console const console;
+        std::cout << usage() << "\n";
+        return 0;
+      }
+      return classifyInvocation(partition.invocation);
+    }
+
+    std::vector<std::string> args;
+    args.reserve(static_cast<std::size_t>(arguments.size()));
+    for (const QString& argument : arguments) {
+      args.push_back(argument.toUtf8().toStdString());
     }
 
     // parsing the first part of the command line, including global options and
     // command name, but not the rest, which will be collected below
 
-    auto parsed = po::wcommand_line_parser(args)
+    auto parsed = po::command_line_parser(args)
                       .options(m_allOptions)
                       .positional(m_positional)
                       .allow_unregistered()
@@ -112,7 +199,7 @@ std::optional<int> CommandLine::process(const std::wstring& line)
             if (!c->legacy()) {
               // parse the the remainder of the command line according to the
               // command's options
-              po::wcommand_line_parser parser(opts);
+              po::command_line_parser parser(opts);
 
               auto co = c->allOptions();
               parser.options(co);
@@ -135,7 +222,13 @@ std::optional<int> CommandLine::process(const std::wstring& line)
               po::notify(m_vm);
             }
 
-            c->set(line, m_vm, opts);
+            std::vector<std::wstring> untouched;
+            untouched.reserve(opts.size());
+            for (const std::string& option : opts) {
+              untouched.push_back(
+                  QString::fromStdString(option).toStdWString());
+            }
+            c->set(m_originalLine, m_vm, std::move(untouched));
             m_command = c.get();
 
             return runEarly();
@@ -162,36 +255,12 @@ std::optional<int> CommandLine::process(const std::wstring& line)
     }
 
     if (!opts.empty()) {
-      const auto qs = QString::fromStdWString(opts[0]);
-
-      if (qs.startsWith("--")) {
-        // assume that for something like `ModOrganizer.exe --bleh`, it's just
-        // a bad option instead of an executable that starts with "--"
-        env::Console const console;
-        std::cerr << "\nUnrecognized option " << qs.toStdString() << "\n";
-
-        return 1;
+      QStringList invocation;
+      invocation.reserve(static_cast<qsizetype>(opts.size()));
+      for (const std::string& option : opts) {
+        invocation.push_back(QString::fromStdString(option));
       }
-
-      // try as an moshortcut://
-      m_shortcut = qs;
-
-      if (!m_shortcut.isValid()) {
-        // not a shortcut, try a link
-        if (isNxmLink(qs)) {
-          m_nxmLink = qs;
-        } else {
-          // assume an executable name/binary
-          m_executable = qs;
-        }
-      }
-
-      // remove the shortcut/nxm/executable
-      opts.erase(opts.begin());
-
-      for (auto&& o : opts) {
-        m_untouched.push_back(QString::fromStdWString(o));
-      }
+      return classifyInvocation(invocation);
     }
 
     return {};
@@ -211,7 +280,13 @@ std::optional<bool> CommandLine::forwardToPrimary(MOMultiProcess& multiProcess)
   } else if (m_nxmLink) {
     return multiProcess.sendMessage(*m_nxmLink);
   } else if (m_command && m_command->canForwardToPrimary()) {
-    return multiProcess.sendMessage(QString::fromStdWString(m_originalLine));
+    const auto message = encodeForwardedArguments(m_originalArguments);
+    if (!message) {
+      reportError(QObject::tr("Unable to encode command arguments for the "
+                              "running Fluorine process."));
+      return false;
+    }
+    return multiProcess.sendMessage(*message);
   } else {
     return std::nullopt;
   }
@@ -316,12 +391,20 @@ std::optional<int> CommandLine::runPostOrganizer(OrganizerCore& core)
 void CommandLine::clear()
 {
   m_vm.clear();
+  m_originalLine.clear();
+  m_originalArguments.clear();
+  m_command = nullptr;
   m_shortcut = {};
-  m_nxmLink  = {};
+  m_nxmLink = {};
+  m_executable = {};
+  m_untouched.clear();
 }
 
 void CommandLine::createOptions()
 {
+  // Keep the global names and arities synchronized with
+  // partitionProcessArguments(), which protects bare executable suffixes from
+  // manager option parsing.
   m_visibleOptions.add_options()("help", "show this message")
 
       ("multiple", "allow multiple MO processes to run; see below")

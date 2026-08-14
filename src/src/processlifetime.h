@@ -89,7 +89,8 @@ struct Callbacks
 
 using Completion = std::function<void(Result result, std::uint32_t exitCode)>;
 
-QStringList buildExpectedExecutables(const QFileInfo& binary, const QString& arguments,
+QStringList buildExpectedExecutables(const QFileInfo& binary,
+                                     const QStringList& arguments,
                                      const QStringList& additional = {});
 
 std::optional<std::uint64_t> processStartTime(pid_t pid);

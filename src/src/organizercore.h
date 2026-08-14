@@ -318,7 +318,9 @@ public:
 
   ProcessRunner processRunner();
 
-  bool beforeRun(const QFileInfo& binary, const QDir& cwd, const QString& arguments,
+  bool beforeRun(const QFileInfo& binary, const QDir& cwd,
+                 const QString& arguments,
+                 const QStringList& argumentList,
                  const QString& profileName, const QString& customOverwrite,
                  const QList<MOBase::ExecutableForcedLoadSetting>& forcedLibraries,
                  bool useProton, const QString& launchToken, bool ownsVfs,
