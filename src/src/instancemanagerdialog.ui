@@ -52,19 +52,6 @@
        </widget>
       </item>
       <item>
-       <widget class="QPushButton" name="downloadCollection">
-        <property name="enabled">
-         <bool>false</bool>
-        </property>
-        <property name="text">
-         <string>Download Collection</string>
-        </property>
-        <property name="toolTip">
-         <string>Coming soon: browse Nexus Collections and install one as a new instance.</string>
-        </property>
-       </widget>
-      </item>
-      <item>
        <spacer name="horizontalSpacer">
         <property name="orientation">
          <enum>Qt::Horizontal</enum>

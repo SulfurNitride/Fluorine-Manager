@@ -61,6 +61,15 @@ set_tests_properties(test_executable_shortcut_surface PROPERTIES
     TIMEOUT 10
 )
 add_test(
+    NAME test_collection_surface
+    COMMAND ${Python3_EXECUTABLE} -m unittest -v
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_collection_surface.py
+)
+set_tests_properties(test_collection_surface PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    TIMEOUT 10
+)
+add_test(
     NAME test_desktop_entry
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/test_desktop_entry.py

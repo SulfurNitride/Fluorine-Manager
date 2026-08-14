@@ -1192,16 +1192,6 @@ API requests will be consumed, and Mod Organizer may stutter.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="downloadmanager.cpp" line="742"/>
-        <source>This is a Nexus collections link. These are not yet supported by MO.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="downloadmanager.cpp" line="743"/>
-        <source>Collections Not Supported</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
         <location filename="downloadmanager.cpp" line="775"/>
         <location filename="downloadmanager.cpp" line="2048"/>
         <source>Wrong Game</source>

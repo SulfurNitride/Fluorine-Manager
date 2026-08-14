@@ -57,8 +57,6 @@ TEST(NxmRequest, RejectsNonNxmInput)
   EXPECT_FALSE(NxmRequest::parse(
       QStringLiteral("nxm://game:123/mods/1/files/2")));
   EXPECT_FALSE(NxmRequest::parse(
-      QStringLiteral("nxm://game/collections/abc/revisions/1")));
-  EXPECT_FALSE(NxmRequest::parse(
       QStringLiteral("modl://game/path?url=https%3A%2F%2Fexample.invalid")));
   EXPECT_FALSE(NxmRequest::parse(
       QStringLiteral("modl://game/?url=file%3A%2F%2F%2Ftmp%2Fpayload")));
@@ -70,4 +68,18 @@ TEST(NxmRequest, RejectsNonNxmInput)
       QStringLiteral("modl://game/?url=https%3A%2F%2Fuser%3Apass%40example.invalid")));
   EXPECT_FALSE(NxmRequest::parse(
       QStringLiteral("modl://game/?url=https%3A%2F%2Fexample.invalid%2Fa%0Ab")));
+}
+
+TEST(NxmRequest, RejectsUnsupportedCollectionLinks)
+{
+  for (const QString& link : {
+           QStringLiteral("nxm://game/collections/abc/revisions/1"),
+           QStringLiteral("nxm://game/collections/abc/revisions/1?key=secret"),
+           QStringLiteral("NXM://GAME/COLLECTIONS/ABC/REVISIONS/1"),
+           QStringLiteral("modl://game/collections/abc/revisions/1"),
+           QStringLiteral("modl://game/collections/abc/revisions/1?url="
+                          "https%3A%2F%2Fexample.invalid%2Farchive"),
+       }) {
+    EXPECT_FALSE(NxmRequest::parse(link)) << link.toStdString();
+  }
 }
