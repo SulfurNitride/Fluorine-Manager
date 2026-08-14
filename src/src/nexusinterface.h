@@ -716,7 +716,6 @@ private:
                              const MOBase::IPluginGame* game) ;
 
 private:
-  QNetworkDiskCache* m_DiskCache;
   NXMAccessManager* m_AccessManager;
   std::list<NXMRequestInfo> m_ActiveRequest;
   QQueue<NXMRequestInfo> m_RequestQueue;

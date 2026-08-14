@@ -70,6 +70,15 @@ set_tests_properties(test_collection_surface PROPERTIES
     TIMEOUT 10
 )
 add_test(
+    NAME test_nexus_cache_surface
+    COMMAND ${Python3_EXECUTABLE} -m unittest -v
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_nexus_cache_surface.py
+)
+set_tests_properties(test_nexus_cache_surface PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    TIMEOUT 10
+)
+add_test(
     NAME test_desktop_entry
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/test_desktop_entry.py
@@ -1110,6 +1119,29 @@ add_test(NAME test_downloadwritelifecycle COMMAND test_downloadwritelifecycle)
 set_tests_properties(test_downloadwritelifecycle PROPERTIES TIMEOUT 10)
 
 # ---------------------------------------------------------------------------
+# Bounded Nexus network-cache directory ownership
+# ---------------------------------------------------------------------------
+add_executable(test_nexuscachedirectory EXCLUDE_FROM_ALL
+    test_nexuscachedirectory.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/nexuscachedirectory.cpp
+)
+set_target_properties(test_nexuscachedirectory PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_nexuscachedirectory PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_nexuscachedirectory PRIVATE
+    Qt6::Core
+    Qt6::Network
+    GTest::gtest
+)
+add_test(NAME test_nexuscachedirectory COMMAND test_nexuscachedirectory)
+set_tests_properties(test_nexuscachedirectory PROPERTIES TIMEOUT 10)
+
+# ---------------------------------------------------------------------------
 # Serialized, recoverable bundle publication tests
 # ---------------------------------------------------------------------------
 add_test(NAME test_fluorine_publisher
@@ -1146,4 +1178,4 @@ add_custom_target(fluorine-tests
             test_logredaction test_recenterrorlog test_nxmhandlerintegration
             test_problemcheckrunner test_persistentcookiejar
             test_instancegeneralsettings test_downloadmetadatapolicy
-            test_downloadwritelifecycle)
+            test_downloadwritelifecycle test_nexuscachedirectory)

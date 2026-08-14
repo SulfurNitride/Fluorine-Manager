@@ -9072,7 +9072,7 @@ If you disable this feature, MO will only display official DLCs this way. Please
     </message>
     <message>
         <location filename="settingsdialog.ui" line="1420"/>
-        <source>Remove cache and cookies.</source>
+        <source>Remove the Nexus network cache and Nexus cookies.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>

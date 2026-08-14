@@ -21,6 +21,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "bbcode.h"
 #include "iplugingame.h"
+#include "nexuscachedirectory.h"
 #include "nxmaccessmanager.h"
 #include "organizerproxy.h"
 #include "selectiondialog.h"
@@ -373,8 +374,6 @@ NexusInterface::NexusInterface(Settings* s)
 
   m_AccessManager = new NXMAccessManager(this, s, createVersionInfo().string());
 
-  m_DiskCache = new QNetworkDiskCache(this);
-
   connect(m_AccessManager, &NXMAccessManager::requestNXMDownload, this,
           &NexusInterface::downloadRequestedNXM);
 
@@ -403,8 +402,13 @@ NexusInterface& NexusInterface::instance()
 
 void NexusInterface::setCacheDirectory(const QString& directory)
 {
-  m_DiskCache->setCacheDirectory(directory);
-  m_AccessManager->setCache(m_DiskCache);
+  const auto prepared = NexusCacheDirectory::configure(*m_AccessManager, directory);
+  if (!prepared) {
+    log::error("Refusing unsafe Nexus cache directory '{}'; collision or I/O "
+               "failure at '{}'",
+               directory, prepared.errorPath);
+    return;
+  }
 }
 
 void NexusInterface::loginCompleted()
@@ -975,12 +979,11 @@ IPluginGame* NexusInterface::getGame(QString gameName) const
 void NexusInterface::cleanup()
 {
   m_AccessManager = nullptr;
-  m_DiskCache     = nullptr;
 }
 
 void NexusInterface::clearCache()
 {
-  m_DiskCache->clear();
+  NexusCacheDirectory::clear(*m_AccessManager);
   m_AccessManager->clearCookies();
 }
 
