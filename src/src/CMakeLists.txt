@@ -69,6 +69,7 @@ file(GLOB ORGANIZER_QRC
 # Keep explicitly listed sources tracked by CMake even when using GLOB.
 list(APPEND ORGANIZER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/commandlinearguments.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/downloadmetadatapolicy.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/externalmessagequeue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fluorineconfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fluorinepaths.cpp
@@ -88,6 +89,7 @@ list(APPEND ORGANIZER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/wineprefix.cpp)
 list(APPEND ORGANIZER_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/commandlinearguments.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/downloadmetadatapolicy.h
     ${CMAKE_CURRENT_SOURCE_DIR}/externalmessagequeue.h
     ${CMAKE_CURRENT_SOURCE_DIR}/fluorineconfig.h
     ${CMAKE_CURRENT_SOURCE_DIR}/fluorinepaths.h

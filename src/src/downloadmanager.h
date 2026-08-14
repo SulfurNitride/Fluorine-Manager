@@ -87,6 +87,13 @@ public:
 private:
   struct DownloadInfo
   {
+    enum class RenameResult
+    {
+      Failed,
+      Complete,
+      MetadataNeedsRewrite,
+    };
+
     ~DownloadInfo() { delete m_FileInfo; }
     accumulator_set<qint64, stats<tag::rolling_mean>> m_DownloadAcc;
     accumulator_set<qint64, stats<tag::rolling_mean>> m_DownloadTimeAcc;
@@ -103,6 +110,7 @@ private:
     DownloadState m_State;
     int m_CurrentUrl;
     QStringList m_Urls;
+    QStringList m_ObsoleteMetaFiles;
     qint64 m_ResumePos;
     qint64 m_TotalSize{0};
     QDateTime m_Created;  // used as a cache in DownloadManager::getFileTime, may not be
@@ -144,8 +152,11 @@ private:
      * @param newName the new name to setName
      * @param renameFile if true, the file is assumed to exist and renamed. If the file
      *does not yet exist, set this to false
+     * @param reportFailure whether to report a rename failure immediately
+     * @param finalName omit the partial-download suffix for a completed byte stream
      **/
-    void setName(QString newName, bool renameFile);
+    RenameResult setName(QString newName, bool renameFile,
+                         bool reportFailure = true, bool finalName = false);
 
     unsigned int downloadID() const { return m_DownloadID; }
 
@@ -565,7 +576,7 @@ private slots:
   void checkDownloadTimeout();
 
 private:
-  void createMetaFile(DownloadInfo* info);
+  bool createMetaFile(DownloadInfo* info);
   DownloadManager::DownloadInfo* getDownloadInfo(QString fileName);
 
 public:

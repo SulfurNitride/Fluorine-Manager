@@ -20,6 +20,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "downloadmanager.h"
 
 #include "bbcode.h"
+#include "downloadmetadatapolicy.h"
 #include "envfs.h"
 #include "filesystemutilities.h"
 #include "iplugingame.h"
@@ -107,6 +108,35 @@ static bool downloadPathUnitExists(const QString& finalPath)
          pathExists(finalPath + UNFINISHED + ".meta");
 }
 
+static DownloadMetadataPolicy::CapabilityRetention capabilityRetention(
+    DownloadManager::DownloadState state)
+{
+  using Phase = DownloadMetadataPolicy::DownloadPhase;
+  static_assert(DownloadManager::STATE_STARTED == static_cast<int>(Phase::Started));
+  static_assert(DownloadManager::STATE_DOWNLOADING ==
+                static_cast<int>(Phase::Downloading));
+  static_assert(DownloadManager::STATE_CANCELING ==
+                static_cast<int>(Phase::Canceling));
+  static_assert(DownloadManager::STATE_PAUSING == static_cast<int>(Phase::Pausing));
+  static_assert(DownloadManager::STATE_CANCELED ==
+                static_cast<int>(Phase::Canceled));
+  static_assert(DownloadManager::STATE_PAUSED == static_cast<int>(Phase::Paused));
+  static_assert(DownloadManager::STATE_ERROR == static_cast<int>(Phase::Error));
+  static_assert(DownloadManager::STATE_FETCHINGMODINFO ==
+                static_cast<int>(Phase::FetchingModInfo));
+  static_assert(DownloadManager::STATE_FETCHINGFILEINFO ==
+                static_cast<int>(Phase::FetchingFileInfo));
+  static_assert(DownloadManager::STATE_FETCHINGMODINFO_MD5 ==
+                static_cast<int>(Phase::FetchingModInfoMd5));
+  static_assert(DownloadManager::STATE_NOFETCH == static_cast<int>(Phase::NoFetch));
+  static_assert(DownloadManager::STATE_READY == static_cast<int>(Phase::Ready));
+  static_assert(DownloadManager::STATE_INSTALLED ==
+                static_cast<int>(Phase::Installed));
+  static_assert(DownloadManager::STATE_UNINSTALLED ==
+                static_cast<int>(Phase::Uninstalled));
+  return DownloadMetadataPolicy::retentionForPhase(static_cast<Phase>(state));
+}
+
 unsigned int DownloadManager::DownloadInfo::s_NextDownloadID = 1U;
 int DownloadManager::m_DirWatcherDisabler                    = 0;
 
@@ -138,47 +168,63 @@ DownloadManager::DownloadInfo::createFromMeta(const QString& filePath, bool show
                                               std::optional<uint64_t> fileSize,
                                               std::optional<unsigned int> reservedID)
 {
-  DownloadInfo* info = new DownloadInfo;
-
   QString const metaFileName = filePath + ".meta";
   QFileInfo const metaFileInfo(metaFileName);
   if (QDir::fromNativeSeparators(metaFileInfo.path())
           .compare(QDir::fromNativeSeparators(outputDirectory), Qt::CaseInsensitive) !=
       0)
     return nullptr;
-  QSettings const metaFile(metaFileName, QSettings::IniFormat);
-  if (!showHidden && metaFile.value("removed", false).toBool()) {
+  if (!DownloadMetadataPolicy::isSafeMetadataLeaf(metaFileName)) {
+    log::warn("refusing unsafe download metadata leaf '{}'", metaFileName);
     return nullptr;
-  } else {
-    info->m_Hidden = metaFile.value("removed", false).toBool();
   }
+  QSettings metaFile(metaFileName, QSettings::IniFormat);
+  const bool hidden = metaFile.value("removed", false).toBool();
 
   QString const fileName = QFileInfo(filePath).fileName();
+  DownloadState loadedState;
 
   if (fileName.endsWith(UNFINISHED)) {
-    info->m_FileName =
-        fileName.mid(0, fileName.length() - static_cast<int>(strlen(UNFINISHED)));
-    info->m_State = STATE_PAUSED;
+    loadedState = STATE_PAUSED;
   } else {
-    info->m_FileName = fileName;
-
     if (metaFile.value("paused", false).toBool()) {
-      info->m_State = STATE_PAUSED;
+      loadedState = STATE_PAUSED;
     } else if (metaFile.value("uninstalled", false).toBool()) {
-      info->m_State = STATE_UNINSTALLED;
+      loadedState = STATE_UNINSTALLED;
     } else if (metaFile.value("installed", false).toBool()) {
-      info->m_State = STATE_INSTALLED;
+      loadedState = STATE_INSTALLED;
     } else {
-      info->m_State = STATE_READY;
+      loadedState = STATE_READY;
     }
   }
+
+  const auto capabilities = DownloadMetadataPolicy::loadAndConverge(
+      metaFile, capabilityRetention(loadedState));
+  if (capabilities.changed && capabilities.status != QSettings::NoError) {
+    log::warn("failed to retire completed download capabilities from '{}'",
+              metaFileName);
+  }
+  if (!showHidden && hidden) {
+    return nullptr;
+  }
+
+  DownloadInfo* info = new DownloadInfo;
+  info->m_Hidden     = hidden;
+  info->m_State      = loadedState;
+  const QString logicalFileName =
+      fileName.endsWith(UNFINISHED)
+          ? fileName.mid(0, fileName.length() -
+                                static_cast<int>(strlen(UNFINISHED)))
+          : fileName;
+  info->m_FileName =
+      DownloadMetadataPolicy::unambiguousFinalBaseName(logicalFileName);
 
   info->m_DownloadID = reservedID.value_or(s_NextDownloadID++);
   info->m_Output.setFileName(filePath);
   info->m_TotalSize      = fileSize ? *fileSize : QFileInfo(filePath).size();
   info->m_PreResumeSize  = info->m_TotalSize;
   info->m_CurrentUrl     = 0;
-  info->m_Urls           = metaFile.value("url", "").toString().split(";");
+  info->m_Urls           = capabilities.urls;
   info->m_Tries          = 0;
   info->m_TaskProgressId = TaskProgressManager::instance().getId();
   QString const gameName       = metaFile.value("gameName", "").toString();
@@ -201,7 +247,7 @@ DownloadManager::DownloadInfo::createFromMeta(const QString& filePath, bool show
   info->m_FileInfo->categoryID   = metaFile.value("category", 0).toInt();
   info->m_FileInfo->fileCategory = metaFile.value("fileCategory", 0).toInt();
   info->m_FileInfo->repository   = metaFile.value("repository", "Nexus").toString();
-  info->m_FileInfo->userData     = metaFile.value("userData").toMap();
+  info->m_FileInfo->userData     = capabilities.userData;
   info->m_FileInfo->author       = metaFile.value("author", "").toString();
   info->m_FileInfo->uploader     = metaFile.value("uploader", "").toString();
   info->m_FileInfo->uploaderUrl  = metaFile.value("uploaderUrl", "").toString();
@@ -240,33 +286,53 @@ void DownloadManager::endDisableDirWatcher()
   }
 }
 
-void DownloadManager::DownloadInfo::setName(QString newName, bool renameFile)
+DownloadManager::DownloadInfo::RenameResult DownloadManager::DownloadInfo::setName(
+    QString newName, bool renameFile, bool reportFailure, bool finalName)
 {
-  QString oldMetaFileName = QString("%1.meta").arg(m_FileName);
-  m_FileName              = QFileInfo(newName).fileName();
-  if ((m_State == DownloadManager::STATE_STARTED) ||
-      (m_State == DownloadManager::STATE_DOWNLOADING) ||
-      (m_State == DownloadManager::STATE_PAUSED)) {
+  const QString oldOutputName   = m_Output.fileName();
+  const QString oldDisplayName  = m_FileName;
+  const QString oldMetaFileName = oldOutputName + QStringLiteral(".meta");
+  m_FileName                      = QFileInfo(newName).fileName();
+  if (!finalName && ((m_State == DownloadManager::STATE_STARTED) ||
+                     (m_State == DownloadManager::STATE_DOWNLOADING) ||
+                     (m_State == DownloadManager::STATE_PAUSED))) {
     newName.append(UNFINISHED);
-    oldMetaFileName = QString("%1%2.meta").arg(m_FileName).arg(UNFINISHED);
   }
   if (renameFile) {
     if ((newName != m_Output.fileName()) && !m_Output.rename(newName)) {
+      m_FileName = oldDisplayName;
       logDownloadFileFailure("rename", m_Output);
-      reportError(tr(R"(failed to rename "%1" to "%2")")
-                      .arg(m_Output.fileName())
-                      .arg(newName));
-      return;
+      if (reportFailure) {
+        reportError(tr(R"(failed to rename "%1" to "%2")")
+                        .arg(m_Output.fileName())
+                        .arg(newName));
+      }
+      return RenameResult::Failed;
     }
 
-    QFile metaFile(QFileInfo(newName).path() + "/" + oldMetaFileName);
-    if (metaFile.exists())
-      metaFile.rename(newName.mid(0).append(".meta"));
+    QFile metaFile(oldMetaFileName);
+    const QString newMetaFileName = newName + QStringLiteral(".meta");
+    if (oldMetaFileName != newMetaFileName && metaFile.exists() &&
+        !metaFile.rename(newMetaFileName)) {
+      log::warn("failed to move download metadata from '{}' to '{}'",
+                oldMetaFileName, newMetaFileName);
+      if (m_Output.rename(oldOutputName)) {
+        m_FileName = oldDisplayName;
+        if (reportFailure) {
+          reportError(tr("Failed to move the download metadata; the archive "
+                         "rename was rolled back."));
+        }
+        return RenameResult::Failed;
+      }
+      m_ObsoleteMetaFiles.append(oldMetaFileName);
+      return RenameResult::MetadataNeedsRewrite;
+    }
   }
   if (!m_Output.isOpen()) {
     // can't set file name if it's open
     m_Output.setFileName(newName);
   }
+  return RenameResult::Complete;
 }
 
 bool DownloadManager::DownloadInfo::isPausedState() const
@@ -871,7 +937,10 @@ bool DownloadManager::startDownload(QNetworkReply* reply, DownloadInfo* newDownl
   // NewOnly establishes exclusive ownership of the output before metadata is
   // written, so a colliding partial cannot be truncated or have its metadata
   // overwritten by a concurrently admitted download.
-  createMetaFile(newDownload);
+  if (!createMetaFile(newDownload)) {
+    log::error("refusing to start download without durable recovery metadata");
+    return rejectStart(reacquire());
+  }
   if ((newDownload = reacquire()) == nullptr) {
     return rejectStart(nullptr);
   }
@@ -1916,7 +1985,9 @@ void DownloadManager::markUninstalled(QString fileName)
 
 QString DownloadManager::getDownloadFileName(const QString& baseName, bool rename) const
 {
-  const QString sanitizedBaseName = MOBase::sanitizeFileName(baseName);
+  const QString sanitizedBaseName =
+      DownloadMetadataPolicy::unambiguousFinalBaseName(
+          MOBase::sanitizeFileName(baseName));
   QString fullPath = m_OutputDirectory + "/" + sanitizedBaseName;
   if (rename && downloadPathUnitExists(fullPath)) {
     int i = 1;
@@ -2001,8 +2072,9 @@ void DownloadManager::setState(DownloadManager::DownloadInfo* info,
         info->m_GamesToQuery[0], info->m_Hash, this, info->m_DownloadID, QString()));
   } break;
   case STATE_READY: {
-    createMetaFile(info);
-    m_DownloadComplete(row);
+    if (createMetaFile(info)) {
+      m_DownloadComplete(row);
+    }
   } break;
   default: /* NOP */
     break;
@@ -2084,17 +2156,25 @@ void DownloadManager::downloadReadyRead()
   }
 }
 
-void DownloadManager::createMetaFile(DownloadInfo* info)
+bool DownloadManager::createMetaFile(DownloadInfo* info)
 {
   // Avoid triggering refreshes from DirWatcher
   ScopedDisableDirWatcher const scopedDirWatcher(this);
 
-  QSettings metaFile(QString("%1.meta").arg(info->m_Output.fileName()),
-                     QSettings::IniFormat);
+  const QString metaPath = QString("%1.meta").arg(info->m_Output.fileName());
+  if (!DownloadMetadataPolicy::isSafeMetadataLeaf(metaPath)) {
+    log::error("refusing unsafe download metadata leaf '{}'", metaPath);
+    return false;
+  }
+
+  QSettings metaFile(metaPath, QSettings::IniFormat);
+  if (metaFile.status() != QSettings::NoError) {
+    log::error("failed to read download metadata '{}'", metaPath);
+    return false;
+  }
   metaFile.setValue("gameName", info->m_FileInfo->gameName);
   metaFile.setValue("modID", info->m_FileInfo->modID);
   metaFile.setValue("fileID", info->m_FileInfo->fileID);
-  metaFile.setValue("url", info->m_Urls.join(";"));
   metaFile.setValue("name", info->m_FileInfo->name);
   metaFile.setValue("description", info->m_FileInfo->description);
   metaFile.setValue("modName", info->m_FileInfo->modName);
@@ -2104,7 +2184,8 @@ void DownloadManager::createMetaFile(DownloadInfo* info)
   metaFile.setValue("fileCategory", info->m_FileInfo->fileCategory);
   metaFile.setValue("category", info->m_FileInfo->categoryID);
   metaFile.setValue("repository", info->m_FileInfo->repository);
-  metaFile.setValue("userData", info->m_FileInfo->userData);
+  DownloadMetadataPolicy::write(metaFile, capabilityRetention(info->m_State),
+                                info->m_Urls, info->m_FileInfo->userData);
   metaFile.setValue("author", info->m_FileInfo->author);
   metaFile.setValue("uploader", info->m_FileInfo->uploader);
   metaFile.setValue("uploaderUrl", info->m_FileInfo->uploaderUrl);
@@ -2113,6 +2194,11 @@ void DownloadManager::createMetaFile(DownloadInfo* info)
   metaFile.setValue("paused", (info->m_State == DownloadManager::STATE_PAUSED) ||
                                   (info->m_State == DownloadManager::STATE_ERROR));
   metaFile.setValue("removed", info->m_Hidden);
+  metaFile.sync();
+  if (metaFile.status() != QSettings::NoError) {
+    log::error("failed to publish download metadata '{}'", metaPath);
+    return false;
+  }
 
   // slightly hackish...
   for (int i = 0; i < m_ActiveDownloads.size(); ++i) {
@@ -2120,6 +2206,7 @@ void DownloadManager::createMetaFile(DownloadInfo* info)
       emit update(i);
     }
   }
+  return true;
 }
 
 void DownloadManager::nxmDescriptionAvailable(QString, int, QVariant userData,
@@ -2682,14 +2769,49 @@ void DownloadManager::downloadFinished(int index)
 
   if (info != nullptr && info->m_Reply != nullptr) {
     QNetworkReply* reply = info->m_Reply;
-    const auto retireReply = [this, info, reply]() {
-      if (reply == nullptr || info->m_Reply.data() != reply) {
+    const unsigned int downloadID = info->m_DownloadID;
+    QPointer<QNetworkReply> finishedReply(reply);
+    const auto reacquire = [this, downloadID, &finishedReply](int* currentIndex) {
+      DownloadInfo* current = downloadInfoByID(downloadID);
+      if (current == nullptr || finishedReply.isNull() ||
+          current->m_Reply.data() != finishedReply.data()) {
+        return static_cast<DownloadInfo*>(nullptr);
+      }
+      const int foundIndex = m_ActiveDownloads.indexOf(current);
+      if (foundIndex < 0) {
+        return static_cast<DownloadInfo*>(nullptr);
+      }
+      if (currentIndex != nullptr) {
+        *currentIndex = foundIndex;
+      }
+      return current;
+    };
+    const auto reacquireRetired = [this, downloadID](int* currentIndex) {
+      DownloadInfo* current = downloadInfoByID(downloadID);
+      if (current == nullptr || !current->m_Reply.isNull()) {
+        return static_cast<DownloadInfo*>(nullptr);
+      }
+      const int foundIndex = m_ActiveDownloads.indexOf(current);
+      if (foundIndex < 0) {
+        return static_cast<DownloadInfo*>(nullptr);
+      }
+      if (currentIndex != nullptr) {
+        *currentIndex = foundIndex;
+      }
+      return current;
+    };
+    const auto retireReply = [this, downloadID, &finishedReply]() {
+      QNetworkReply* liveReply = finishedReply.data();
+      if (liveReply == nullptr) {
         return;
       }
-      download_reply::retire(info->m_Reply);
-      QObject::disconnect(reply, nullptr, this, nullptr);
-      reply->close();
-      reply->deleteLater();
+      DownloadInfo* current = downloadInfoByID(downloadID);
+      if (current != nullptr && current->m_Reply.data() == liveReply) {
+        download_reply::retire(current->m_Reply);
+      }
+      QObject::disconnect(liveReply, nullptr, this, nullptr);
+      liveReply->close();
+      liveReply->deleteLater();
     };
     if (reply->isOpen() && info->m_HasData) {
       writeData(info);
@@ -2727,6 +2849,10 @@ void DownloadManager::downloadFinished(int index)
         }
         error = true;
         setState(info, STATE_ERROR);
+        if ((info = reacquire(&index)) == nullptr) {
+          retireReply();
+          return;
+        }
       }
     }
 
@@ -2739,11 +2865,41 @@ void DownloadManager::downloadFinished(int index)
       setState(info, STATE_PAUSED);
     }
 
-    if (info->m_State == STATE_CANCELED || (info->m_Tries == 0 && error)) {
-      emit aboutToUpdate();
-      info->m_Output.remove();
-      m_ByID.remove(info->m_DownloadID);
+    if ((info = reacquire(&index)) == nullptr) {
       retireReply();
+      return;
+    }
+
+    if (info->m_State == STATE_CANCELED || (info->m_Tries == 0 && error)) {
+      const QString discardedOutputPath = info->m_Output.fileName();
+      QStringList discardedMetaPaths = info->m_ObsoleteMetaFiles;
+      discardedMetaPaths.append(discardedOutputPath + QStringLiteral(".meta"));
+      discardedMetaPaths.removeDuplicates();
+
+      const bool outputRemoved =
+          info->m_Output.remove() || !QFileInfo::exists(discardedOutputPath);
+      if (outputRemoved) {
+        for (const QString& retiredMetaPath : discardedMetaPaths) {
+          if (!DownloadMetadataPolicy::retireFile(retiredMetaPath)) {
+            log::warn("failed to retire discarded download metadata at '{}'",
+                      retiredMetaPath);
+          }
+        }
+      } else {
+        log::warn("failed to remove discarded partial download '{}'; preserving "
+                  "its recovery metadata",
+                  discardedOutputPath);
+      }
+      emit aboutToUpdate();
+      if ((info = reacquire(&index)) == nullptr) {
+        retireReply();
+        return;
+      }
+      retireReply();
+      if ((info = reacquireRetired(&index)) == nullptr) {
+        return;
+      }
+      m_ByID.remove(info->m_DownloadID);
       delete info;
       m_ActiveDownloads.erase(m_ActiveDownloads.begin() + index);
       if (error)
@@ -2754,7 +2910,19 @@ void DownloadManager::downloadFinished(int index)
       return;
     } else if (info->isPausedState() || info->m_State == STATE_PAUSING) {
       info->m_Output.close();
-      createMetaFile(info);
+      const bool recoveryMetadataPublished = createMetaFile(info);
+      if ((info = reacquire(&index)) == nullptr) {
+        retireReply();
+        return;
+      }
+      if (!recoveryMetadataPublished) {
+        reportError(tr("Failed to update recovery metadata for the partial "
+                       "download. The existing partial file was preserved."));
+        if ((info = reacquire(&index)) == nullptr) {
+          retireReply();
+          return;
+        }
+      }
       emit update(index);
     } else {
       QString const url = info->m_Urls[info->m_CurrentUrl];
@@ -2776,36 +2944,139 @@ void DownloadManager::downloadFinished(int index)
       }
 
       bool const isNexus = info->m_FileInfo->repository == "Nexus";
-      // need to change state before changing the file name, otherwise .unfinished is
-      // appended
-      if (isNexus) {
-        setState(info, STATE_FETCHINGMODINFO);
-      } else {
-        setState(info, STATE_NOFETCH);
-      }
+      // Delay the state change and network request until the final archive and
+      // capability-free metadata have both been published.
+      const DownloadState completionState =
+          isNexus ? STATE_FETCHINGMODINFO : STATE_NOFETCH;
 
       QString const newName = getFileNameFromNetworkReply(reply);
       QString const oldName = QFileInfo(info->m_Output).fileName();
+      const QString partialOutputPath = info->m_Output.fileName();
+      const QString partialMetaPath = partialOutputPath + QStringLiteral(".meta");
 
-      startDisableDirWatcher();
+      ScopedDisableDirWatcher const completionWatcher(this);
       // Rename to Content-Disposition if either we have no name yet, or the
       // name we seeded from the API looks like a CDN object key.
+      DownloadInfo::RenameResult renameResult = DownloadInfo::RenameResult::Failed;
       if (!newName.isEmpty() &&
           (oldName.isEmpty() || looksLikeCdnObjectKey(info->m_FileName))) {
-        info->setName(getDownloadFileName(newName), true);
+        renameResult = info->setName(getDownloadFileName(newName, true), true,
+                                     false, true);
       } else {
-        info->setName(m_OutputDirectory + "/" + info->m_FileName,
-                      true);  // don't rename but remove the ".unfinished" extension
+        renameResult = info->setName(
+            m_OutputDirectory + "/" + info->m_FileName, true,
+            false, true);  // remove the ".unfinished" extension
       }
-      endDisableDirWatcher();
-
-      if (!isNexus) {
-        setState(info, STATE_READY);
+      if ((info = reacquire(&index)) == nullptr) {
+        retireReply();
+        return;
       }
+      const bool archivePublished =
+          renameResult != DownloadInfo::RenameResult::Failed &&
+          DownloadMetadataPolicy::retentionAfterPublication(
+              info->m_Output.fileName(), partialOutputPath) ==
+              DownloadMetadataPolicy::CapabilityRetention::Retire;
+      if (!archivePublished) {
+        // A failed final rename must remain resumable. Restore an error state
+        // and republish the partial metadata with its exact recovery URLs.
+        info->m_State = STATE_ERROR;
+        const bool recoveryMetadataPublished = createMetaFile(info);
+        if ((info = reacquire(&index)) == nullptr) {
+          retireReply();
+          return;
+        }
+        reportError(recoveryMetadataPublished
+                        ? tr("Failed to publish the completed download archive. "
+                             "The partial download was kept for recovery.")
+                        : tr("Failed to publish the completed download archive "
+                             "or update its recovery metadata. The partial file "
+                             "was preserved."));
+        if ((info = reacquire(&index)) == nullptr) {
+          retireReply();
+          return;
+        }
+        retireReply();
+        if ((info = reacquireRetired(&index)) == nullptr) {
+          return;
+        }
+        setState(info, STATE_ERROR);
+        return;
+      } else {
+        info->m_State = completionState;
+        info->m_Urls.clear();
+        info->m_CurrentUrl = 0;
+        info->m_FileInfo->userData.remove(QStringLiteral("downloadMap"));
 
-      emit update(index);
+        bool terminalMetadataPublished = createMetaFile(info);
+        if ((info = reacquire(&index)) == nullptr) {
+          retireReply();
+          return;
+        }
+
+        const QString finalMetaPath =
+            info->m_Output.fileName() + QStringLiteral(".meta");
+        if (!terminalMetadataPublished) {
+          // A malformed or otherwise unwritable inherited metadata file may
+          // still contain the old capability bytes. Removing the exact leaf is
+          // a safe terminal fallback; READY can regenerate ordinary metadata.
+          terminalMetadataPublished =
+              DownloadMetadataPolicy::retireFile(finalMetaPath);
+        }
+        QStringList obsoleteMetaFiles = info->m_ObsoleteMetaFiles;
+        obsoleteMetaFiles.append(partialMetaPath);
+        obsoleteMetaFiles.removeDuplicates();
+        QStringList unretiredMetaFiles;
+        bool staleMetadataRetired = true;
+        for (const QString& obsoleteMetaPath : obsoleteMetaFiles) {
+          if (obsoleteMetaPath != finalMetaPath &&
+              !DownloadMetadataPolicy::retireFile(obsoleteMetaPath)) {
+            staleMetadataRetired = false;
+            unretiredMetaFiles.append(obsoleteMetaPath);
+            log::warn(
+                "failed to retire stale partial download capabilities at '{}'",
+                obsoleteMetaPath);
+          }
+        }
+        info->m_ObsoleteMetaFiles = unretiredMetaFiles;
+
+        const bool capabilityPublicationComplete =
+            terminalMetadataPublished && staleMetadataRetired;
+        if (!capabilityPublicationComplete) {
+          reportError(
+              tr("The archive completed, but Fluorine could not fully retire its "
+                 "private download URLs. No further network request will be made."));
+          if ((info = reacquire(&index)) == nullptr) {
+            retireReply();
+            return;
+          }
+        }
+
+        retireReply();
+        if ((info = reacquireRetired(&index)) == nullptr) {
+          return;
+        }
+        if (!capabilityPublicationComplete) {
+          // The final archive is usable, but do not emit the normal completion
+          // callback or start a Nexus request after a failed privacy cleanup.
+          // Re-enabling the directory watcher below will converge the model.
+          info->m_State = STATE_READY;
+          return;
+        }
+        const bool startNexusRequest =
+            isNexus && info->m_State == completionState &&
+            !m_AdmissionSuppressed.load(std::memory_order_acquire);
+        if (startNexusRequest) {
+          setState(info, STATE_FETCHINGMODINFO);
+        } else if (info->m_State < STATE_READY) {
+          setState(info, STATE_READY);
+        }
+        return;
+      }
     }
     retireReply();
+    if ((info = reacquireRetired(&index)) == nullptr) {
+      return;
+    }
 
     if ((info->m_Tries > 0) && error) {
       --info->m_Tries;
@@ -2840,15 +3111,57 @@ void DownloadManager::metaDataChanged()
     if (shouldReplace) {
       log::info("metaDataChanged: replacing '{}' with Content-Disposition '{}'",
                 info->m_FileName, newName);
-      startDisableDirWatcher();
-      info->setName(getDownloadFileName(newName), true);
-      endDisableDirWatcher();
+      const unsigned int downloadID = info->m_DownloadID;
+      QPointer<QNetworkReply> expectedReply(info->m_Reply);
+      const auto reacquire = [this, downloadID, &expectedReply]() {
+        DownloadInfo* current = downloadInfoByID(downloadID);
+        return current != nullptr && !expectedReply.isNull() &&
+                       current->m_Reply.data() == expectedReply.data()
+                   ? current
+                   : nullptr;
+      };
+      ScopedDisableDirWatcher const metadataWatcher(this);
+      const auto renameResult =
+          info->setName(getDownloadFileName(newName, true), true, false);
+      if ((info = reacquire()) == nullptr) {
+        return;
+      }
+      bool metadataPublished = true;
+      if (renameResult == DownloadInfo::RenameResult::MetadataNeedsRewrite) {
+        metadataPublished = createMetaFile(info);
+        if ((info = reacquire()) == nullptr) {
+          return;
+        }
+        if (metadataPublished) {
+          QStringList unretiredMetaFiles;
+          for (const QString& obsoleteMetaPath : info->m_ObsoleteMetaFiles) {
+            if (!DownloadMetadataPolicy::retireFile(obsoleteMetaPath)) {
+              unretiredMetaFiles.append(obsoleteMetaPath);
+            }
+          }
+          info->m_ObsoleteMetaFiles = unretiredMetaFiles;
+          metadataPublished = unretiredMetaFiles.isEmpty();
+        }
+      }
       refreshAlphabeticalTranslation();
+      if ((info = reacquire()) == nullptr) {
+        return;
+      }
       if (!info->m_Output.isOpen() &&
           !info->m_Output.open(QIODevice::WriteOnly | QIODevice::Append)) {
         logDownloadFileFailure("resume open", info->m_Output);
         reportError(tr("failed to re-open %1").arg(info->m_FileName));
-        setState(info, STATE_CANCELING);
+        if ((info = reacquire()) != nullptr) {
+          setState(info, STATE_CANCELING);
+        }
+      } else if (renameResult == DownloadInfo::RenameResult::Failed) {
+        reportError(tr("Failed to rename the active download; the original name "
+                       "was restored."));
+      } else if (!metadataPublished) {
+        reportError(tr("Failed to publish metadata for the renamed download."));
+        if ((info = reacquire()) != nullptr) {
+          setState(info, STATE_CANCELING);
+        }
       }
     }
   } else {

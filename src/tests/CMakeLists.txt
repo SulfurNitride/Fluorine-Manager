@@ -1047,6 +1047,29 @@ add_test(NAME test_instancegeneralsettings COMMAND test_instancegeneralsettings)
 set_tests_properties(test_instancegeneralsettings PROPERTIES TIMEOUT 10)
 
 # ---------------------------------------------------------------------------
+# Resumable-only download capability metadata
+# ---------------------------------------------------------------------------
+add_executable(test_downloadmetadatapolicy EXCLUDE_FROM_ALL
+    test_downloadmetadatapolicy.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/downloadmetadatapolicy.cpp
+)
+set_target_properties(test_downloadmetadatapolicy PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_downloadmetadatapolicy PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_downloadmetadatapolicy PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_downloadmetadatapolicy COMMAND test_downloadmetadatapolicy)
+set_tests_properties(test_downloadmetadatapolicy PROPERTIES TIMEOUT 10)
+
+# ---------------------------------------------------------------------------
 # Serialized, recoverable bundle publication tests
 # ---------------------------------------------------------------------------
 add_test(NAME test_fluorine_publisher
@@ -1082,4 +1105,4 @@ add_custom_target(fluorine-tests
             test_nxmrequest test_fluorineupdater
             test_logredaction test_recenterrorlog test_nxmhandlerintegration
             test_problemcheckrunner test_persistentcookiejar
-            test_instancegeneralsettings)
+            test_instancegeneralsettings test_downloadmetadatapolicy)
