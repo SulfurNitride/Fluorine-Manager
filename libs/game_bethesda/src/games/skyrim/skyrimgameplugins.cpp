@@ -1,7 +1,6 @@
 #include "skyrimgameplugins.h"
 #include <ipluginlist.h>
 #include <report.h>
-#include <safewritefile.h>
 #include <scopeguard.h>
 
 #include <QDir>
@@ -12,7 +11,6 @@ using MOBase::IOrganizer;
 using MOBase::IPluginGame;
 using MOBase::IPluginList;
 using MOBase::reportError;
-using MOBase::SafeWriteFile;
 
 SkyrimGamePlugins::SkyrimGamePlugins(IOrganizer* organizer)
     : GamebryoGamePlugins(organizer)

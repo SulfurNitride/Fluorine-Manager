@@ -80,7 +80,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "systemtraymanager.h"
 #include <bsainvalidation.h>
 #include <dataarchives.h>
-#include <safewritefile.h>
+#include <transactionalwritefile.h>
 #include <scopeguard.h>
 #include <taskprogressmanager.h>
 #include <uibase/game_features/savegameinfo.h>
@@ -3068,17 +3068,24 @@ void MainWindow::saveArchiveList()
   }
 
   if (m_OrganizerCore.isArchivesInit()) {
-    SafeWriteFile archiveFile(m_OrganizerCore.currentProfile()->getArchivesFileName());
+    QByteArray contents;
     for (int i = 0; i < ui->bsaList->topLevelItemCount(); ++i) {
       QTreeWidgetItem* tlItem = ui->bsaList->topLevelItem(i);
       for (int j = 0; j < tlItem->childCount(); ++j) {
         QTreeWidgetItem* item = tlItem->child(j);
         if (item->checkState(0) == Qt::Checked) {
-          archiveFile->write(item->text(0).toUtf8().append("\r\n"));
+          contents.append(item->text(0).toUtf8()).append("\r\n");
         }
       }
     }
-    archiveFile->commit();
+
+    const QString fileName =
+        m_OrganizerCore.currentProfile()->getArchivesFileName();
+    TransactionalWriteFile archiveFile(fileName);
+    if (!archiveFile.replaceWith(contents)) {
+      reportError(tr("Failed to save archive list '%1': %2")
+                      .arg(fileName, archiveFile.errorString()));
+    }
   } else {
     log::debug("archive list not initialised");
   }
@@ -4909,7 +4916,7 @@ QString MainWindow::queryRestore(const QString& filePath)
   SelectionDialog dialog(tr("Choose backup to restore"), this);
   QRegularExpression const exp(QRegularExpression::anchoredPattern(pluginFileInfo.fileName() +
                                                              PATTERN_BACKUP_REGEX));
-  // match orphaned SafeWriteFile temporaries
+  // match orphaned legacy safe-write temporaries
   QRegularExpression const exp2(QRegularExpression::anchoredPattern(
       pluginFileInfo.fileName() + "\\.([A-Za-z]{6})"));
   QRegularExpression const exp3(

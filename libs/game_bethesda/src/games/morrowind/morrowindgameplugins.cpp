@@ -1,14 +1,14 @@
 #include "morrowindgameplugins.h"
-#include "registry.h"
+#include "morrowindpluginlistwriter.h"
 #include <imodinterface.h>
 #include <iplugingame.h>
 #include <ipluginlist.h>
-#include <report.h>
 #include <scopeguard.h>
 #include <utility.h>
 
 #include <QDateTime>
 #include <QDir>
+#include <QObject>
 #include <QSettings>
 #include <QString>
 #include <QStringEncoder>
@@ -16,7 +16,6 @@
 
 using MOBase::IOrganizer;
 using MOBase::IPluginList;
-using MOBase::reportError;
 
 MorrowindGamePlugins::MorrowindGamePlugins(IOrganizer* organizer)
     : GamebryoGamePlugins(organizer)
@@ -29,6 +28,7 @@ void MorrowindGamePlugins::writePluginLists(const IPluginList* pluginList)
     return;
   }
 
+  resetWriteStatus();
   if (organizer()->profile()->localSettingsEnabled()) {
     writePluginList(pluginList,
                     organizer()->profile()->absolutePath() + "/Morrowind.ini");
@@ -37,11 +37,18 @@ void MorrowindGamePlugins::writePluginLists(const IPluginList* pluginList)
                     organizer()->managedGame()->gameDirectory().absolutePath() +
                         "/Morrowind.ini");
   }
+  if (reportWriteFailure()) {
+    return;
+  }
 
-  writeLoadOrderList(pluginList,
-                     organizer()->profile()->absolutePath() + "/loadorder.txt");
+  if (!writeLoadOrderList(
+          pluginList, organizer()->profile()->absolutePath() + "/loadorder.txt")) {
+    reportWriteFailure();
+    return;
+  }
 
   m_LastRead = QDateTime::currentDateTime();
+  reportInvalidFileNames();
 }
 
 void MorrowindGamePlugins::readPluginLists(MOBase::IPluginList* pluginList)
@@ -77,55 +84,43 @@ void MorrowindGamePlugins::readPluginLists(MOBase::IPluginList* pluginList)
 void MorrowindGamePlugins::writePluginList(const MOBase::IPluginList* pluginList,
                                            const QString& filePath)
 {
-  return writeList(pluginList, filePath, false);
-}
-
-void MorrowindGamePlugins::writeList(const IPluginList* pluginList,
-                                     const QString& filePath, bool loadOrder)
-{
-  QStringEncoder encoder = loadOrder
-                               ? QStringEncoder(QStringConverter::Encoding::Utf8)
-                               : QStringEncoder(QStringConverter::Encoding::System);
-
-  QSettings settings(filePath, QSettings::IniFormat);
-  settings.remove("Game Files");
+  QStringEncoder encoder(QStringConverter::Encoding::System);
 
   bool invalidFileNames = false;
-  int writtenCount      = 0;
+  QList<QByteArray> encodedPlugins;
 
   QStringList plugins = pluginList->pluginNames();
   std::sort(plugins.begin(), plugins.end(),
             [pluginList](const QString& lhs, const QString& rhs) {
               return pluginList->priority(lhs) < pluginList->priority(rhs);
             });
-  QString key = "GameFile";
   for (const QString& pluginName : plugins) {
-    if (loadOrder || (pluginList->state(pluginName) == IPluginList::STATE_ACTIVE)) {
+    if (pluginList->state(pluginName) == IPluginList::STATE_ACTIVE) {
       auto result = encoder.encode(pluginName);
       if (encoder.hasError()) {
         invalidFileNames = true;
         qCritical("invalid plugin name %s", qUtf8Printable(pluginName));
       } else {
-        if (!MOBase::WriteRegistryValue(
-                "Game Files", key + QString::number(writtenCount), pluginName,
-                filePath)) {
-          qWarning("failed to set game files in \"%s\"", qUtf8Printable(filePath));
-        }
+        encodedPlugins.append(result);
       }
-      ++writtenCount;
     }
   }
 
   if (invalidFileNames) {
-    reportError(QObject::tr("Some of your plugins have invalid names! These "
-                            "plugins can not be loaded by the game. Please see "
-                            "the latest interface log in the instance's logs folder "
-                            "for a list of affected plugins and rename them."));
+    recordInvalidFileNames();
   }
 
-  if (writtenCount == 0) {
+  if (encodedPlugins.isEmpty()) {
     qWarning("plugin list would be empty, this is almost certainly wrong. Not "
              "saving.");
+    recordWriteFailure(filePath,
+                       QObject::tr("The Morrowind plugin list would be empty."));
+    return;
+  }
+
+  const auto result = MorrowindPluginListWriter::publish(filePath, encodedPlugins);
+  if (result.status != MorrowindPluginListWriter::Status::Published) {
+    recordWriteFailure(filePath, result.error);
   }
 }
 

@@ -1,4 +1,5 @@
 #include "wineprefix.h"
+#include "winepluginlistsync.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -8,6 +9,7 @@
 #include <QFileInfo>
 #include <QTextStream>
 #include <log.h>
+#include <uibase/transactionalwritefile.h>
 #include <uibase/filesystemutilities.h>
 
 #include <sys/stat.h>
@@ -169,6 +171,7 @@ QStringList findCaseVariants(const QString& path)
   }
   return result;
 }
+
 }  // namespace
 
 WinePrefix::WinePrefix(const QString& prefixPath)
@@ -663,6 +666,14 @@ bool WinePrefix::syncPluginsBack(const QString& profilePluginsPath,
     }
   }
 
+  MOBase::TransactionalWriteFile profileFile(profilePluginsPath);
+  const auto sourceRead = WinePluginListSync::read(newest);
+  if (!sourceRead.snapshot) {
+    MOBase::log::error("syncPluginsBack: {}", sourceRead.error);
+    return false;
+  }
+  const WinePluginListSync::Snapshot& sourceSnapshot = *sourceRead.snapshot;
+
   // Active-plugin count guard.  Bethesda games rewrite Plugins.txt as part
   // of normal shutdown, but on a crash (e.g. a buggy SKSE plugin going down
   // mid-frame) the engine can write the file with the active set partially
@@ -674,61 +685,49 @@ bool WinePrefix::syncPluginsBack(const QString& profilePluginsPath,
   // is a crash artifact, not a legitimate user-edit.  Refuse the copy in
   // that case and let the profile's existing list stand.
   auto countStarredLines = [](const QString& path) -> int {
-    QFile f(path);
-    if (!f.open(QIODevice::ReadOnly)) {
-      return -1;
-    }
-    int count = 0;
-    while (!f.atEnd()) {
-      const QByteArray line = f.readLine();
-      // Skip leading whitespace to be tolerant of formatting quirks.
-      int i = 0;
-      while (i < line.size() &&
-             (line[i] == ' ' || line[i] == '\t')) {
-        ++i;
-      }
-      if (i < line.size() && line[i] == '*') {
-        ++count;
-      }
-    }
-    return count;
+    const auto result = WinePluginListSync::read(path);
+    return result.snapshot ? WinePluginListSync::countStarred(
+                                 result.snapshot->contents)
+                           : -1;
   };
 
   const int profileStars = countStarredLines(profilePluginsPath);
-  const int candidateStars = countStarredLines(newest);
-  if (profileStars > 10 && candidateStars >= 0) {
+  const int candidateStars =
+      WinePluginListSync::countStarred(sourceSnapshot.contents);
+  if (WinePluginListSync::isSuspiciousActiveDrop(profileStars,
+                                                  candidateStars)) {
     const int absDrop = profileStars - candidateStars;
     const double relDrop =
         static_cast<double>(absDrop) / static_cast<double>(profileStars);
-    if (absDrop > 10 && relDrop > 0.30) {
-      MOBase::log::warn(
-          "syncPluginsBack: refusing copy — active plugin count would drop "
-          "from {} to {} ({:.0f}% loss). Likely a game-crash artifact, not "
-          "a real edit. Profile preserved; prefix file left in place at '{}'.",
-          profileStars, candidateStars, relDrop * 100.0, newest);
-      return true;
-    }
+    MOBase::log::warn(
+        "syncPluginsBack: refusing copy — active plugin count would drop "
+        "from {} to {} ({:.0f}% loss). Likely a game-crash artifact, not "
+        "a real edit. Profile preserved; prefix file left in place at '{}'.",
+        profileStars, candidateStars, relDrop * 100.0, newest);
+    return true;
   }
 
   MOBase::log::info("syncPluginsBack: '{}' <- '{}'", profilePluginsPath, newest);
-  if (!copyFileWithParents(newest, profilePluginsPath)) {
-    MOBase::log::error("syncPluginsBack: failed to copy plugins.txt back to '{}'",
-                       profilePluginsPath);
+  QString publicationError;
+  if (!WinePluginListSync::publish(profileFile, sourceSnapshot,
+                                   publicationError)) {
+    MOBase::log::error("syncPluginsBack: failed to publish '{}': {}",
+                       profilePluginsPath, publicationError);
     return false;
   }
 
+  bool allMirrored = true;
   for (const QString& sibling : variants) {
-    if (sibling == newest) {
+    if (sibling == newest ||
+        WinePluginListSync::isSameFile(sibling, sourceSnapshot)) {
       continue;
     }
-    if (!QFile::remove(sibling)) {
-      MOBase::log::warn("syncPluginsBack: failed to remove stale sibling '{}'",
-                        sibling);
-      continue;
-    }
-    if (!QFile::copy(newest, sibling)) {
-      MOBase::log::warn("syncPluginsBack: failed to mirror '{}' -> '{}'",
-                        newest, sibling);
+    MOBase::TransactionalWriteFile siblingFile(sibling);
+    QString siblingError;
+    if (!WinePluginListSync::publish(siblingFile, sourceSnapshot, siblingError)) {
+      MOBase::log::error("syncPluginsBack: failed to mirror '{}' into '{}': {}",
+                         newest, sibling, siblingError);
+      allMirrored = false;
     }
   }
 
@@ -741,7 +740,7 @@ bool WinePrefix::syncPluginsBack(const QString& profilePluginsPath,
     QFile::remove(stale);
   }
 
-  return true;
+  return allMirrored;
 }
 
 // ── Wine registry (.reg file) access ─────────────────────────────────────────

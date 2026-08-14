@@ -1142,6 +1142,99 @@ add_test(NAME test_nexuscachedirectory COMMAND test_nexuscachedirectory)
 set_tests_properties(test_nexuscachedirectory PROPERTIES TIMEOUT 10)
 
 # ---------------------------------------------------------------------------
+# Atomic authoritative-file publication
+# ---------------------------------------------------------------------------
+add_executable(test_transactionalwritefile EXCLUDE_FROM_ALL
+    test_transactionalwritefile.cpp
+)
+set_target_properties(test_transactionalwritefile PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_link_libraries(test_transactionalwritefile PRIVATE
+    Qt6::Core
+    mo2::uibase
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_transactionalwritefile COMMAND test_transactionalwritefile)
+set_tests_properties(test_transactionalwritefile PROPERTIES TIMEOUT 15)
+
+add_executable(test_profilemodlistrename EXCLUDE_FROM_ALL
+    test_profilemodlistrename.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/profilemodlistrename.cpp
+)
+set_target_properties(test_profilemodlistrename PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_profilemodlistrename PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_profilemodlistrename PRIVATE
+    Qt6::Core
+    mo2::uibase
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_profilemodlistrename COMMAND test_profilemodlistrename)
+set_tests_properties(test_profilemodlistrename PROPERTIES TIMEOUT 10)
+
+add_executable(test_morrowindpluginlistwriter EXCLUDE_FROM_ALL
+    test_morrowindpluginlistwriter.cpp
+    ${CMAKE_SOURCE_DIR}/libs/game_bethesda/src/games/morrowind/morrowindpluginlistwriter.cpp
+)
+set_target_properties(test_morrowindpluginlistwriter PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_morrowindpluginlistwriter PRIVATE
+    ${CMAKE_SOURCE_DIR}/libs/game_bethesda/src/games/morrowind
+)
+target_link_libraries(test_morrowindpluginlistwriter PRIVATE
+    Qt6::Core
+    mo2::uibase
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_morrowindpluginlistwriter
+         COMMAND test_morrowindpluginlistwriter)
+set_tests_properties(test_morrowindpluginlistwriter PROPERTIES TIMEOUT 10)
+
+add_executable(test_winepluginlistsync EXCLUDE_FROM_ALL
+    test_winepluginlistsync.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/winepluginlistsync.cpp
+)
+set_target_properties(test_winepluginlistsync PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_winepluginlistsync PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_winepluginlistsync PRIVATE
+    Qt6::Core
+    mo2::uibase
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_winepluginlistsync COMMAND test_winepluginlistsync)
+set_tests_properties(test_winepluginlistsync PROPERTIES TIMEOUT 10)
+
+add_test(NAME test_authoritative_write_surface
+    COMMAND ${Python3_EXECUTABLE} -m unittest -v
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_authoritative_write_surface.py
+)
+set_tests_properties(test_authoritative_write_surface PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    TIMEOUT 10
+)
+
+# ---------------------------------------------------------------------------
 # Serialized, recoverable bundle publication tests
 # ---------------------------------------------------------------------------
 add_test(NAME test_fluorine_publisher
@@ -1178,4 +1271,6 @@ add_custom_target(fluorine-tests
             test_logredaction test_recenterrorlog test_nxmhandlerintegration
             test_problemcheckrunner test_persistentcookiejar
             test_instancegeneralsettings test_downloadmetadatapolicy
-            test_downloadwritelifecycle test_nexuscachedirectory)
+            test_downloadwritelifecycle test_nexuscachedirectory
+            test_transactionalwritefile test_profilemodlistrename
+            test_morrowindpluginlistwriter test_winepluginlistsync)

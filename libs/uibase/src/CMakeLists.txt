@@ -27,6 +27,7 @@ set(root_headers
 	../include/uibase/registry.h
 	../include/uibase/report.h
 	../include/uibase/safewritefile.h
+	../include/uibase/transactionalwritefile.h
 	../include/uibase/scopeguard.h
 	../include/uibase/steamutility.h
 	../include/uibase/strings.h
@@ -118,6 +119,7 @@ set(UIBASE_SOURCES
 	registry.cpp
 	report.cpp
 	safewritefile.cpp
+	transactionalwritefile.cpp
 	scopeguard.cpp
 	steamutility.cpp
 	strings.cpp

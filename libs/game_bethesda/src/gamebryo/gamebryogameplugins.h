@@ -20,19 +20,29 @@ protected:
 
   virtual void writePluginList(const MOBase::IPluginList* pluginList,
                                const QString& filePath);
-  virtual void writeLoadOrderList(const MOBase::IPluginList* pluginList,
-                                  const QString& filePath);
+  bool writeLoadOrderList(const MOBase::IPluginList* pluginList,
+                          const QString& filePath);
   virtual QStringList readLoadOrderList(MOBase::IPluginList* pluginList,
                                         const QString& filePath);
   virtual QStringList readPluginList(MOBase::IPluginList* pluginList);
 
 protected:
+  void resetWriteStatus();
+  void recordWriteFailure(const QString& filePath, const QString& error);
+  void recordInvalidFileNames();
+  bool reportWriteFailure();
+  void reportInvalidFileNames();
+
   MOBase::IOrganizer* m_Organizer;
   QDateTime m_LastRead;
 
 private:
-  void writeList(const MOBase::IPluginList* pluginList, const QString& filePath,
+  bool writeList(const MOBase::IPluginList* pluginList, const QString& filePath,
                  bool loadOrder);
+
+  QString m_WriteError;
+  bool m_WriteFailed                  = false;
+  bool m_InvalidFileNamesDuringWrite = false;
 };
 
 #endif  // GAMEBRYOGAMEPLUGINS_H

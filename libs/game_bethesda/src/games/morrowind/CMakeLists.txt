@@ -9,6 +9,8 @@ add_library(game_morrowind SHARED
 	morrowinddataarchives.h
 	morrowindgameplugins.cpp
 	morrowindgameplugins.h
+	morrowindpluginlistwriter.cpp
+	morrowindpluginlistwriter.h
 	morrowindlocalsavegames.cpp
 	morrowindlocalsavegames.h
 	morrowindmoddatachecker.h

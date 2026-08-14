@@ -18,10 +18,6 @@ protected:
   virtual QStringList readPluginList(MOBase::IPluginList* pluginList) override;
 
 private:
-  virtual void writeList(const MOBase::IPluginList* pluginList, const QString& filePath,
-                         bool loadOrder);
-
-private:
   QDateTime m_LastRead;
 };
 
