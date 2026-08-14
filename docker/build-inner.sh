@@ -63,6 +63,28 @@ if [ "${BUILD_MODE:-tarball}" = "test" ]; then
     exit 0
 fi
 
+# The build tree is intentionally incremental, but packaging must not discover
+# a plugin left behind by a target that no longer exists. Remove only the
+# package-shaped outputs; Ninja recreates every output owned by the current
+# graph below.
+if [ -d build/libs ]; then
+    find build/libs -type f \( \
+        -name "libgame_*.so" -o \
+        -name "libinstaller_*.so" -o \
+        -name "libpreview_*.so" -o \
+        -name "libdiagnose_*.so" -o \
+        -name "libcheck_*.so" -o \
+        -name "libskse_*.so" -o \
+        -name "libtool_*.so" -o \
+        -name "libinieditor.so" -o \
+        -name "libinibakery.so" -o \
+        -name "libbsa_extractor.so" -o \
+        -name "libbsa_packer.so" -o \
+        -name "libbsplugins.so" -o \
+        -name "libproxy.so" \
+    \) -delete
+fi
+
 if [ -n "${BUILD_JOBS:-}" ]; then
     cmake --build build --parallel "${BUILD_JOBS}"
 else
@@ -82,6 +104,144 @@ rm -rf "${OUT_DIR}"
 mkdir -p "${OUT_DIR}/plugins" "${OUT_DIR}/lib" "${OUT_DIR}/fonts"
 
 mkdir -p "${OUT_DIR}/licenses"
+
+# A distributed GPL binary must carry its license, and users need an offline
+# explanation that the extracted archive publishes a managed per-user runtime.
+cp -f /src/LICENSE.txt "${OUT_DIR}/LICENSE.txt"
+cp -f /src/packaging/README-PORTABLE.txt "${OUT_DIR}/README-PORTABLE.txt"
+cp -f /src/docs/installation.md "${OUT_DIR}/INSTALLATION.md"
+cp -f /src/packaging/desktop_entry.py "${OUT_DIR}/fluorine-desktop-entry.py"
+chmod 755 "${OUT_DIR}/fluorine-desktop-entry.py"
+for required_document in LICENSE.txt README-PORTABLE.txt INSTALLATION.md; do
+    if [ ! -s "${OUT_DIR}/${required_document}" ]; then
+        echo "ERROR: required package document is missing: ${required_document}" >&2
+        exit 1
+    fi
+done
+
+# Preserve the licenses available for source components copied into the
+# portable bundle. Names are fixed so later updates retire stale notices.
+declare -A SOURCE_LICENSES=(
+    [7zip-license]="build/_deps/7zip_src-src/DOC/License.txt"
+    [7zip-copying]="build/_deps/7zip_src-src/DOC/copying.txt"
+    [archive]="libs/archive/LICENSE"
+    [basic-games]="libs/basic_games/LICENSE"
+    [blake3-apache]="build/_deps/blake3_upstream-src/LICENSE_A2"
+    [blake3-apache-llvm]="build/_deps/blake3_upstream-src/LICENSE_A2LLVM"
+    [blake3-cc0]="build/_deps/blake3_upstream-src/LICENSE_CC0"
+    [bsa-packer]="libs/bsapacker/LICENSE.md"
+    [esp-json]="build/_deps/esp_json-src/LICENSE"
+    [esp-json-tes5edit]="build/_deps/esp_json-src/TES5Edit/LICENSE.txt"
+    [fnis-tool]="libs/fnistool/LICENSE"
+    [form43-checker]="libs/form43_checker/LICENSE"
+    [gli]="build/_deps/gli-src/manual.md"
+    [installer-bsplugins]="libs/installer_bsplugins/LICENSE"
+    [installer-omod]="libs/installer_omod/LICENSE"
+    [icu-73.2]="/opt/fluorine-icu-73.2-LICENSE"
+    [libbsarch]="libs/libbsarch/LICENSE"
+    [libfuse]="/opt/fluorine-libfuse-LICENSE"
+    [libfuse-GPL-2]="/opt/fluorine-libfuse-GPL2"
+    [libfuse-LGPL-2.1]="/opt/fluorine-libfuse-LGPL2"
+    [microsoft-dds]="libs/dds-header/LICENSE"
+    [nifly]="build/_deps/nifly-src/LICENSE"
+    [preview-dds]="libs/preview_dds/LICENSE"
+    [preview-nif]="libs/preview_nif/LICENSE"
+    [script-extender-plugin-checker]="libs/script_extender_plugin_checker/LICENSE"
+    [steam-vdf-parser-apache]="libs/steam_appinfo_ffi/vendor/steam-vdf-parser/LICENSE-APACHE"
+    [steam-vdf-parser-mit]="libs/steam_appinfo_ffi/vendor/steam-vdf-parser/LICENSE-MIT"
+    [spdlog]="/usr/share/doc/libspdlog-dev/copyright"
+    [utf8proc]="build/_deps/utf8proc_upstream-src/LICENSE.md"
+)
+for license_name in "${!SOURCE_LICENSES[@]}"; do
+    license_source="${SOURCE_LICENSES[${license_name}]}"
+    if [ ! -s "${license_source}" ]; then
+        echo "ERROR: source license is missing: ${license_source}" >&2
+        exit 1
+    fi
+    cp -f "${license_source}" "${OUT_DIR}/licenses/${license_name}.txt"
+done
+cp -f /src/packaging/THIRD-PARTY-NOTICES.txt "${OUT_DIR}/licenses/README.txt"
+
+# Rust cdylibs statically contain their target-reachable crates, so retain each
+# crate's own copyright/license text rather than only the top-level manifests.
+"${BUILD_PY}" /src/docker/collect_cargo_licenses.py \
+    --output "${OUT_DIR}/licenses/cargo" \
+    /src/libs/bsa_ffi/Cargo.toml \
+    /src/libs/steam_appinfo_ffi/Cargo.toml
+
+# The bundled interpreter and selected Python distributions are copied without
+# dist-info at runtime. Preserve their notices before pruning that metadata.
+PYTHON_LICENSE_ROOT="/opt/python-bundled/lib/python3.12"
+PYTHON_SITE="${PYTHON_LICENSE_ROOT}/site-packages"
+cp -f "${PYTHON_LICENSE_ROOT}/LICENSE.txt" \
+    "${OUT_DIR}/licenses/python-3.12.txt"
+
+copy_single_python_license() {
+    local destination_name="$1"
+    local source_pattern="$2"
+    local matches=()
+    mapfile -t matches < <(compgen -G "${source_pattern}" || true)
+    if [ "${#matches[@]}" -ne 1 ] || [ ! -s "${matches[0]}" ]; then
+        echo "ERROR: expected one Python license matching ${source_pattern}" >&2
+        exit 1
+    fi
+    cp -f "${matches[0]}" "${OUT_DIR}/licenses/${destination_name}.txt"
+}
+
+copy_single_python_license psutil "${PYTHON_SITE}/psutil-*.dist-info/LICENSE"
+copy_single_python_license vdf "${PYTHON_SITE}/vdf-*.dist-info/LICENSE"
+copy_single_python_license pybind11 "${PYTHON_SITE}/pybind11-*.dist-info/LICENSE"
+copy_single_python_license pyqt6 \
+    "${PYTHON_SITE}/pyqt6-*.dist-info/licenses/LICENSE"
+copy_single_python_license pyqt6-qt6 \
+    "${PYTHON_SITE}/pyqt6_qt6-*.dist-info/LICENSE"
+copy_single_python_license pyqt6-sip \
+    "${PYTHON_SITE}/pyqt6_sip-*.dist-info/licenses/LICENSE"
+
+for python_sbom in \
+    "${PYTHON_SITE}"/larian_formats-*.dist-info/sboms/*.json \
+    "${PYTHON_SITE}"/libloot-*.dist-info/sboms/*.json; do
+    if [ ! -s "${python_sbom}" ]; then
+        echo "ERROR: required Python SBOM is missing: ${python_sbom}" >&2
+        exit 1
+    fi
+    cp -f "${python_sbom}" \
+        "${OUT_DIR}/licenses/$(basename "${python_sbom}")"
+done
+if [ ! -d /opt/python-bundled/share/licenses/libloot-cargo ]; then
+    echo "ERROR: libloot Cargo license payload is missing" >&2
+    exit 1
+fi
+cp -a /opt/python-bundled/share/licenses/libloot-cargo \
+    "${OUT_DIR}/licenses/libloot-cargo"
+if [ ! -d /opt/python-bundled/share/licenses/larian-formats-cargo ]; then
+    echo "ERROR: larian-formats Cargo license payload is missing" >&2
+    exit 1
+fi
+cp -a /opt/python-bundled/share/licenses/larian-formats-cargo \
+    "${OUT_DIR}/licenses/larian-formats-cargo"
+
+# Qt's wheel carries the LGPL text above; retain the component-specific SPDX
+# SBOMs for every Qt module represented in the pruned runtime.
+QT_RUNTIME_VERSION="$(basename "$(dirname "${Qt6_DIR}")")"
+mkdir -p "${OUT_DIR}/licenses/qt-sbom"
+for qt_component in qtbase qtdeclarative qtimageformats qtnetworkauth qtsvg qtwayland; do
+    qt_sbom="${Qt6_DIR}/sbom/${qt_component}-${QT_RUNTIME_VERSION}.spdx.json"
+    if [ ! -s "${qt_sbom}" ]; then
+        echo "ERROR: Qt SBOM is missing: ${qt_sbom}" >&2
+        exit 1
+    fi
+    cp -f "${qt_sbom}" "${OUT_DIR}/licenses/qt-sbom/"
+done
+
+for common_license in Apache-2.0 GPL-3 LGPL-3; do
+    if [ ! -s "/usr/share/common-licenses/${common_license}" ]; then
+        echo "ERROR: common license text is missing: ${common_license}" >&2
+        exit 1
+    fi
+    cp -f "/usr/share/common-licenses/${common_license}" \
+        "${OUT_DIR}/licenses/common-${common_license}.txt"
+done
 
 # Fluorine deliberately selects DejaVu Sans through QFontDatabase so its UI
 # does not depend on a desktop theme choosing a sensible application font.
@@ -122,25 +282,31 @@ fi
 
 # ── Main binary + helpers ──
 cp -f "${RUNDIR}/ModOrganizer" "${OUT_DIR}/ModOrganizer-core"
-[ -f "${RUNDIR}/README-PORTABLE.txt" ] && cp -f "${RUNDIR}/README-PORTABLE.txt" "${OUT_DIR}/"
 [ -f "/src/src/fluorine-manager" ] && cp -f "/src/src/fluorine-manager" "${OUT_DIR}/"
 
-# Wine-side USVFS controller and pinned x64/x86 injection runtime.
-if [ -f "${RUNDIR}/usvfs/fluorine-usvfs-launcher.exe" ]; then
-    cp -a "${RUNDIR}/usvfs" "${OUT_DIR}/usvfs"
-    if [ -n "${FLUORINE_USVFS_PROVENANCE:-}" ]; then
-        if [ ! -f "${FLUORINE_USVFS_PROVENANCE}" ]; then
-            echo "ERROR: USVFS provenance file is missing: ${FLUORINE_USVFS_PROVENANCE}"
-            exit 1
-        fi
-        cp -f "${FLUORINE_USVFS_PROVENANCE}" \
-            "${OUT_DIR}/usvfs/fluorine-candidate-build.txt"
+# Wine-side USVFS controller and pinned x64/x86 injection runtime. Stage only
+# the five owned runtime leaves so incremental build-tree residue cannot enter
+# the typed package manifest.
+mkdir -p "${OUT_DIR}/usvfs"
+for usvfs_leaf in \
+    fluorine-usvfs-launcher.exe \
+    usvfs_x64.dll usvfs_x86.dll \
+    usvfs_proxy_x64.exe usvfs_proxy_x86.exe; do
+    if [ ! -f "${RUNDIR}/usvfs/${usvfs_leaf}" ]; then
+        echo "ERROR: Wine-side USVFS runtime is missing ${usvfs_leaf}"
+        exit 1
     fi
-    cp -f /opt/fluorine-usvfs/LICENSE "${OUT_DIR}/licenses/usvfs-GPL-3.0.txt"
-else
-    echo "ERROR: Wine-side USVFS runtime was not built"
-    exit 1
+    cp -f "${RUNDIR}/usvfs/${usvfs_leaf}" "${OUT_DIR}/usvfs/${usvfs_leaf}"
+done
+if [ -n "${FLUORINE_USVFS_PROVENANCE:-}" ]; then
+    if [ ! -f "${FLUORINE_USVFS_PROVENANCE}" ]; then
+        echo "ERROR: USVFS provenance file is missing: ${FLUORINE_USVFS_PROVENANCE}"
+        exit 1
+    fi
+    cp -f "${FLUORINE_USVFS_PROVENANCE}" \
+        "${OUT_DIR}/usvfs/fluorine-candidate-build.txt"
 fi
+cp -f /opt/fluorine-usvfs/LICENSE "${OUT_DIR}/licenses/usvfs-GPL-3.0.txt"
 
 # wrestool/icotool no longer needed — icon extraction is built into the C++ PE parser
 
@@ -183,25 +349,26 @@ for pyfile in \
     [ -f "${pyfile}" ] && cp -f "${pyfile}" "${OUT_DIR}/plugins/"
 done
 
-# basic_games Python module (directory package) — copy the whole tree, .py files only
+# basic_games Python module. Copy only runtime Python source so ignored local
+# files, caches and repository metadata cannot enter a release manifest.
 if [ -d "libs/basic_games" ]; then
-    cp -a "libs/basic_games" "${OUT_DIR}/plugins/basic_games"
-    # Remove non-Python clutter (metadata, lock files, vcpkg, etc.)
-    find "${OUT_DIR}/plugins/basic_games" \
-        \( -name "*.toml" -o -name "*.lock" -o -name "*.json" \
-        -o -name "*.txt" -o -name "*.md" -o -name "LICENSE" \
-        -o -name "CMakeLists.txt" -o -name "CMakePresets.json" \) \
-        -delete 2>/dev/null || true
-    # Remove __pycache__ directories to prevent stale bytecode
-    find "${OUT_DIR}/plugins/basic_games" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+    while IFS= read -r -d '' source_file; do
+        relative_path="${source_file#libs/basic_games/}"
+        destination="${OUT_DIR}/plugins/basic_games/${relative_path}"
+        mkdir -p "$(dirname "${destination}")"
+        cp -f -- "${source_file}" "${destination}"
+    done < <(find "libs/basic_games" -type f -name '*.py' -print0)
 fi
 # data/ dir (DDS headers etc., used by DDSPreview.py via plugins/data/ in sys.path).
-# Stage DDS package from source directly (cmake staging is OFF by default).
+# Stage its Python source explicitly (cmake staging is OFF by default).
 if [ -d "libs/preview_dds/src/DDS" ]; then
-    mkdir -p "${OUT_DIR}/plugins/data"
-    cp -a "libs/preview_dds/src/DDS" "${OUT_DIR}/plugins/data/DDS"
+    while IFS= read -r -d '' source_file; do
+        relative_path="${source_file#libs/preview_dds/src/DDS/}"
+        destination="${OUT_DIR}/plugins/data/DDS/${relative_path}"
+        mkdir -p "$(dirname "${destination}")"
+        cp -f -- "${source_file}" "${destination}"
+    done < <(find "libs/preview_dds/src/DDS" -type f -name '*.py' -print0)
 fi
-[ -d "build/src/src/plugins/data" ] && cp -a "build/src/src/plugins/data" "${OUT_DIR}/plugins/"
 
 # preview_nif shaders. ShaderManager loads them from
 # IOrganizer::getPluginDataPath()/shaders/, which on Linux is
@@ -214,8 +381,14 @@ if [ -d "libs/preview_nif/data/shaders" ]; then
 fi
 
 # ── Stylesheets (themes) ──
-if [ -d "build/src/src/stylesheets" ]; then
-    cp -a "build/src/src/stylesheets" "${OUT_DIR}/"
+if [ -d "src/src/stylesheets" ]; then
+    while IFS= read -r -d '' source_file; do
+        relative_path="${source_file#src/src/stylesheets/}"
+        destination="${OUT_DIR}/stylesheets/${relative_path}"
+        mkdir -p "$(dirname "${destination}")"
+        cp -f -- "${source_file}" "${destination}"
+    done < <(find "src/src/stylesheets" -type f \
+        \( -name '*.qss' -o -name '*.png' \) -print0)
     echo "Bundled stylesheets"
 fi
 
@@ -224,7 +397,13 @@ fi
 # CMake's development run tree has them, but the portable staging step must copy
 # them explicitly alongside ModOrganizer-core.
 if [ -d "src/src/tutorials" ]; then
-    cp -a "src/src/tutorials" "${OUT_DIR}/"
+    while IFS= read -r -d '' source_file; do
+        relative_path="${source_file#src/src/tutorials/}"
+        destination="${OUT_DIR}/tutorials/${relative_path}"
+        mkdir -p "$(dirname "${destination}")"
+        cp -f -- "${source_file}" "${destination}"
+    done < <(find "src/src/tutorials" -type f \
+        \( -name '*.js' -o -name '*.qml' \) -print0)
     echo "Bundled tutorials"
 fi
 
@@ -258,9 +437,11 @@ done
 echo "Bundling shared library dependencies..."
 
 # Libraries that MUST come from the host (glibc, GPU drivers, etc.)
-SKIP_PATTERN="linux-vdso|ld-linux|libc\.so|libm\.so|libdl\.so|librt\.so|libpthread|libresolv|libnss|libgcc_s|libstdc\+\+"
+SKIP_PATTERN="linux-vdso|ld-linux|libc\.so|libm\.so|libdl\.so|librt\.so|libpthread|libresolv|libutil\.so|libnss|libgcc_s|libstdc\+\+"
 # GPU/graphics drivers must be host-provided
-SKIP_PATTERN="${SKIP_PATTERN}|libGL\.so|libEGL|libGLX|libGLdispatch|libdrm|libvulkan|libX11|libxcb|libwayland-client|libwayland-server|libwayland-cursor|libwayland-egl|libxkbcommon"
+SKIP_PATTERN="${SKIP_PATTERN}|libGL\.so|libEGL|libGLX|libGLdispatch|libdrm|libgbm|libvulkan|libX11"
+SKIP_PATTERN="${SKIP_PATTERN}|libxcb\.so(\.|$)|libxcb-(glx|randr|render|shape|shm|sync|xfixes|xkb)\.so(\.|$)"
+SKIP_PATTERN="${SKIP_PATTERN}|libwayland-client|libwayland-server|libwayland-cursor|libwayland-egl|libxkbcommon"
 # libpython — user provides via system Python; do not bundle.
 SKIP_PATTERN="${SKIP_PATTERN}|libpython"
 # OpenSSL should come from the host so we don't pin users to a stale TLS stack.
@@ -359,6 +540,12 @@ if [ -d "${QT6_PLUGIN_DIR}" ]; then
             cp -a "${QT6_PLUGIN_DIR}/${plugin_type}" "${OUT_DIR}/qt6plugins/"
         fi
     done
+    # These optional plugins are not part of Fluorine's supported runtime
+    # boundary. qgtk3 recursively binds the bundle to the build host's GTK
+    # stack, while aqt's TIFF plugin requires obsolete libtiff.so.5. Qt falls
+    # back to its own platform theme and the remaining image formats.
+    rm -f "${OUT_DIR}/qt6plugins/platformthemes/libqgtk3.so"
+    rm -f "${OUT_DIR}/qt6plugins/imageformats/libqtiff.so"
     # Bundle deps of Qt plugins too
     find "${OUT_DIR}/qt6plugins" -name "*.so" -exec sh -c '
         ldd "$1" 2>/dev/null | grep "=>" | awk "{print \$3}" | grep "^/" | while read dep; do
@@ -394,6 +581,7 @@ cp -a "${PBS_SRC}/lib/python3.12" "${PYTHON_OUT}/lib/"
 find "${PYTHON_OUT}" -type d \( -name "test" -o -name "tests" \) \
     -exec rm -rf {} + 2>/dev/null || true
 rm -rf "${PYTHON_OUT}/lib/python3.12/tkinter"
+rm -f "${PYTHON_OUT}/lib/python3.12/lib-dynload/"_tkinter*.so
 rm -rf "${PYTHON_OUT}/lib/python3.12/ensurepip"
 rm -rf "${PYTHON_OUT}/lib/python3.12/distutils"
 rm -rf "${PYTHON_OUT}/lib/python3.12/lib2to3"
@@ -418,18 +606,17 @@ for pkg in psutil vdf larian_formats loot; do
     fi
 done
 
-# Bundle any non-system shared libs the libloot extension (loot*.so) links
-# against. The main dep-collection loops above don't scan the bundled Python
-# site-packages, and loot*.so is dlopen'd by the interpreter with our lib/ on
-# LD_LIBRARY_PATH, so its deps must live there. Usually a static Rust build only
-# needs glibc/libgcc (host-provided) and this finds nothing — but it future-
-# proofs the bundle if a transitive crate pulls in a native library.
-find "${PYTHON_OUT}/lib/python3.12/site-packages" -name "loot*.so" 2>/dev/null | while read -r loot_so; do
-    ldd "${loot_so}" 2>/dev/null | grep "=>" | awk '{print $3}' | grep "^/" | while read -r dep; do
+# Bundle non-system dependencies of every Python extension. These objects are
+# loaded dynamically and therefore were not covered by the earlier executable
+# and plugin scan (for example, CPython's _crypt module needs libcrypt).
+find "${PYTHON_OUT}/lib/python3.12" -type f -name "*.so" 2>/dev/null | \
+while read -r python_extension; do
+    ldd "${python_extension}" 2>/dev/null | grep "=>" | awk '{print $3}' | grep "^/" | while read -r dep; do
         dep_name="$(basename "${dep}")"
         echo "${dep_name}" | grep -qE "${SKIP_PATTERN}" && continue
         [ -f "${OUT_DIR}/lib/${dep_name}" ] && continue
-        cp -Lf "${dep}" "${OUT_DIR}/lib/" 2>/dev/null && echo "  + ${dep_name} (libloot dep)" || true
+        cp -Lf "${dep}" "${OUT_DIR}/lib/" 2>/dev/null && \
+            echo "  + ${dep_name} (Python extension dependency)" || true
     done
 done
 
@@ -575,7 +762,8 @@ find "${OUT_DIR}/lib" -name "*.so" -exec strip --strip-unneeded {} \; 2>/dev/nul
 echo "Patching RPATH..."
 patchelf --force-rpath --set-rpath '$ORIGIN/lib' "${OUT_DIR}/ModOrganizer-core"
 find "${OUT_DIR}/plugins" -maxdepth 1 -name "*.so" -exec patchelf --force-rpath --set-rpath '$ORIGIN/../lib' {} \; 2>/dev/null || true
-find "${OUT_DIR}/plugins/libs" -name "*.so" -exec patchelf --force-rpath --set-rpath '$ORIGIN/../../lib' {} \; 2>/dev/null || true
+find "${OUT_DIR}/plugins/libs" -maxdepth 1 -name "*.so" -exec patchelf --force-rpath --set-rpath '$ORIGIN/../../lib' {} \; 2>/dev/null || true
+find "${OUT_DIR}/plugins/libs/PyQt6" -name "*.so" -exec patchelf --force-rpath --set-rpath '$ORIGIN/../../../lib' {} \; 2>/dev/null || true
 find "${OUT_DIR}/lib" \( -name "*.so" -o -name "*.so.*" \) -exec patchelf --force-rpath --set-rpath '$ORIGIN' {} \; 2>/dev/null || true
 # Qt platform plugins keep aqtinstall's hardcoded RPATH (/opt/qt6/.../lib) which
 # doesn't exist on user systems — the linker falls through to system Qt, loading
@@ -583,6 +771,62 @@ find "${OUT_DIR}/lib" \( -name "*.so" -o -name "*.so.*" \) -exec patchelf --forc
 # lookups (including PyQt6 bindings).  All Qt plugins sit one subdir deep under
 # qt6plugins/, so $ORIGIN/../../lib resolves correctly to our lib/ for all of them.
 find "${OUT_DIR}/qt6plugins" -name "*.so" -exec patchelf --force-rpath --set-rpath '$ORIGIN/../../lib' {} \; 2>/dev/null || true
+
+# Most non-Qt libraries copied from the builder are distribution packages.
+# Preserve the exact package copyright file for every staged basename that can
+# be resolved to a builder-owned library. Qt, Python, Rust, libfuse and the
+# source-built components have their upstream notices staged above.
+declare -A SYSTEM_LICENSE_PACKAGES=()
+for bundled_library in "${OUT_DIR}"/lib/*.so*; do
+    [ -e "${bundled_library}" ] || continue
+    library_name="$(basename "${bundled_library}")"
+    case "${library_name}" in
+        libQt6*|libicu*|libpython*|libfuse3*) continue ;;
+    esac
+    for system_library in \
+        "/lib/x86_64-linux-gnu/${library_name}" \
+        "/usr/lib/x86_64-linux-gnu/${library_name}"; do
+        [ -e "${system_library}" ] || continue
+        resolved_library="$(readlink -f "${system_library}")"
+        ownership="$(
+            dpkg-query -S "${system_library}" 2>/dev/null | head -n 1 || true
+        )"
+        if [ -z "${ownership}" ]; then
+            ownership="$(
+                dpkg-query -S "${resolved_library}" 2>/dev/null | head -n 1 || true
+            )"
+        fi
+        if [ -n "${ownership}" ]; then
+            package_with_arch="$(printf '%s\n' "${ownership}" | sed 's|: /.*$||')"
+            package_name="${package_with_arch%%:*}"
+            SYSTEM_LICENSE_PACKAGES["${package_name}"]=1
+            break
+        fi
+    done
+done
+
+mkdir -p "${OUT_DIR}/licenses/system"
+system_license_count=0
+while IFS= read -r package_name; do
+    [ -n "${package_name}" ] || continue
+    copyright_file="/usr/share/doc/${package_name}/copyright"
+    if [ ! -s "${copyright_file}" ]; then
+        echo "ERROR: package copyright file is missing: ${copyright_file}" >&2
+        exit 1
+    fi
+    cp -Lf "${copyright_file}" \
+        "${OUT_DIR}/licenses/system/${package_name}.txt"
+    system_license_count=$((system_license_count + 1))
+done < <(printf '%s\n' "${!SYSTEM_LICENSE_PACKAGES[@]}" | sort)
+if [ "${system_license_count}" -eq 0 ]; then
+    echo "ERROR: no distribution library copyright files were staged" >&2
+    exit 1
+fi
+
+# Every non-host dependency must now resolve through the completed bundle.
+# This is intentionally after all pruning, dependency collection and RPATH
+# edits, and before the typed manifest authenticates the result.
+"${BUILD_PY}" /src/packaging/elf_dependency_policy.py "${OUT_DIR}"
 
 # ── Launcher script ──
 cat > "${OUT_DIR}/fluorine-manager" <<'LAUNCH'
@@ -716,39 +960,68 @@ if [ -n "${CLEAN_UPDATE}" ]; then
     esac
 fi
 
-if [ "${PUBLISH_ONLY}" -eq 1 ]; then
-    exit 0
-fi
-
 # ── Install icon + desktop file for Wayland taskbar/decoration ──
 ICON_SRC="${BIN_DST}/icons/com.fluorine.manager.png"
 ICON_DST="${HOME}/.local/share/icons/hicolor/256x256/apps/com.fluorine.manager.png"
 DESKTOP_SRC="${BIN_DST}/icons/com.fluorine.manager.desktop"
 DESKTOP_DST="${HOME}/.local/share/applications/com.fluorine.manager.desktop"
-if [ -f "${ICON_SRC}" ] && [ ! -f "${ICON_DST}" ]; then
-    mkdir -p "$(dirname "${ICON_DST}")"
-    cp -f "${ICON_SRC}" "${ICON_DST}"
-fi
-if [ -f "${DESKTOP_SRC}" ]; then
-    mkdir -p "$(dirname "${DESKTOP_DST}")"
-    # This file belongs to Fluorine, so refresh it on every launch. Older
-    # releases advertised the main desktop entry as an NXM handler but did not
-    # include %u; leaving that file in place causes portals to drop the URL and
-    # launch a second argument-less process.
-    BIN_DST_SED="$(printf '%s' "${BIN_DST}" | sed 's/[&|\\]/\\&/g')"
-    DESKTOP_TMP="${DESKTOP_DST}.tmp.$$"
-    if sed \
-        -e "s|^Exec=fluorine-manager %u$|Exec=\"${BIN_DST_SED}/fluorine-manager\" %u|" \
-        -e "s|^Exec=fluorine-manager |Exec=\"${BIN_DST_SED}/fluorine-manager\" |" \
-        "${DESKTOP_SRC}" > "${DESKTOP_TMP}"; then
-        chmod +x "${DESKTOP_TMP}"
-        mv -f "${DESKTOP_TMP}" "${DESKTOP_DST}"
-        command -v update-desktop-database >/dev/null 2>&1 && \
-            update-desktop-database "$(dirname "${DESKTOP_DST}")" \
-                >/dev/null 2>&1 || true
+DESKTOP_RENDERER="${BIN_DST}/fluorine-desktop-entry.py"
+INTEGRATION_FAILED=0
+if [ -f "${ICON_SRC}" ]; then
+    if mkdir -p "$(dirname "${ICON_DST}")"; then
+        if ICON_TMP="$(mktemp "${ICON_DST}.tmp.XXXXXX")"; then
+            if cp -f -- "${ICON_SRC}" "${ICON_TMP}" && \
+               chmod 644 "${ICON_TMP}" && \
+               mv -fT "${ICON_TMP}" "${ICON_DST}"; then
+                :
+            else
+                echo "WARNING: could not install Fluorine desktop icon." >&2
+                rm -f -- "${ICON_TMP}"
+                INTEGRATION_FAILED=1
+            fi
+        else
+            echo "WARNING: could not create a temporary desktop icon." >&2
+            INTEGRATION_FAILED=1
+        fi
     else
-        rm -f "${DESKTOP_TMP}"
+        echo "WARNING: could not create the desktop icon directory." >&2
+        INTEGRATION_FAILED=1
     fi
+else
+    echo "WARNING: Fluorine desktop icon is missing." >&2
+    INTEGRATION_FAILED=1
+fi
+if [ -f "${DESKTOP_SRC}" ] && [ -f "${DESKTOP_RENDERER}" ]; then
+    if mkdir -p "$(dirname "${DESKTOP_DST}")"; then
+        # This file belongs to Fluorine, so refresh it on every launch. Older
+        # releases advertised the main desktop entry as an NXM handler but did
+        # not include %u; leaving that file in place causes portals to drop the
+        # URL and launch a second argument-less process.
+        if env \
+            LD_LIBRARY_PATH="${BIN_DST}/lib" \
+            PYTHONHOME="${BIN_DST}/python" \
+            PYTHONPATH= PYTHONNOUSERSITE=1 \
+            "${BIN_DST}/python/bin/python3" "${DESKTOP_RENDERER}" \
+            "${DESKTOP_SRC}" "${DESKTOP_DST}" \
+            "${BIN_DST}/fluorine-manager"; then
+            command -v update-desktop-database >/dev/null 2>&1 && \
+                update-desktop-database "$(dirname "${DESKTOP_DST}")" \
+                    >/dev/null 2>&1 || true
+        else
+            echo "WARNING: could not install Fluorine desktop entry." >&2
+            INTEGRATION_FAILED=1
+        fi
+    else
+        echo "WARNING: could not create the desktop entry directory." >&2
+        INTEGRATION_FAILED=1
+    fi
+else
+    echo "WARNING: Fluorine desktop integration files are missing." >&2
+    INTEGRATION_FAILED=1
+fi
+
+if [ "${PUBLISH_ONLY}" -eq 1 ]; then
+    exit "${INTEGRATION_FAILED}"
 fi
 
 # Run from the synced location.
@@ -875,11 +1148,11 @@ echo "Wrote typed manifest: $(wc -c < "${OUT_DIR}/fluorine-manifest-v2.json") by
 # BUILD_MODE is passed from build.sh: tarball (default), installer, all
 BUILD_MODE="${BUILD_MODE:-tarball}"
 
-# ── Build portable distribution (directory) ──
-# No archive created — GitHub zips release assets automatically.
+# ── Build relocatable release distribution (directory) ──
+# No archive is created locally. CI wraps this exact directory in .tar.gz.
 build_tarball() {
     echo ""
-    echo "=== Building portable distribution ==="
+    echo "=== Building relocatable release distribution ==="
     cd /src/build
     TARBALL_NAME="fluorine-manager"
     rm -rf "${TARBALL_NAME}"
@@ -889,12 +1162,17 @@ build_tarball() {
 }
 
 # ── Build self-extracting installer (.bin frontloader) ──
-build_installer() {
+build_installer() (
     echo ""
     echo "=== Building installer ==="
 
+    cd /src/build
+    TARBALL_NAME="fluorine-manager"
+    INSTALLER_WORK_ROOT="$(mktemp -d /src/build/.fluorine-installer-payload.XXXXXX)"
+    trap 'rm -rf -- "${INSTALLER_WORK_ROOT}"' EXIT
+
     # Create the installer header script
-    INSTALLER_SCRIPT="/src/build/installer-header.sh"
+    INSTALLER_SCRIPT="${INSTALLER_WORK_ROOT}/installer-header.sh"
     cat > "${INSTALLER_SCRIPT}" <<'INSTALLER_HEADER'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -923,13 +1201,13 @@ if [ -d "${INSTALL_DIR}" ] && [ -f "${INSTALL_DIR}/ModOrganizer-core" ]; then
     echo "Existing installation detected at: ${INSTALL_DIR}"
     echo ""
     echo "  1) Update existing installation"
-    echo "  2) Extract portable copy here (./fluorine-manager/)"
+    echo "  2) Extract release bundle here (./fluorine-manager/)"
     echo "  3) Cancel"
     echo ""
     read -rp "Choose [1/2/3]: " CHOICE
 else
-    echo "  1) Install to ${INSTALL_DIR} (global)"
-    echo "  2) Extract portable copy here (./fluorine-manager/)"
+    echo "  1) Install to ${INSTALL_DIR} (per-user)"
+    echo "  2) Extract release bundle here (./fluorine-manager/)"
     echo "  3) Cancel"
     echo ""
     read -rp "Choose [1/2/3]: " CHOICE
@@ -952,26 +1230,13 @@ case "${CHOICE}" in
         fi
         "${BUNDLE_ROOT}/fluorine-manager" --fluorine-publish-only
 
-        # Create desktop shortcut
-        mkdir -p "${DESKTOP_DIR}" "${ICON_DIR}"
-        cp -f "${INSTALL_DIR}/icons/com.fluorine.manager.png" "${ICON_DIR}/"
-
-        cat > "${DESKTOP_DIR}/com.fluorine.manager.desktop" <<DESKTOP_EOF
-[Desktop Entry]
-Type=Application
-Name=Fluorine Manager
-Comment=Mod Organizer for Linux
-Exec=${INSTALL_DIR}/fluorine-manager %u
-Icon=com.fluorine.manager
-Terminal=false
-Categories=Game;Utility;
-StartupWMClass=ModOrganizer
-DESKTOP_EOF
-        chmod +x "${DESKTOP_DIR}/com.fluorine.manager.desktop"
-
-        # Update desktop database if available
-        command -v update-desktop-database >/dev/null 2>&1 && \
-            update-desktop-database "${DESKTOP_DIR}" 2>/dev/null || true
+        DESKTOP_TARGET="${DESKTOP_DIR}/com.fluorine.manager.desktop"
+        ICON_TARGET="${ICON_DIR}/com.fluorine.manager.png"
+        if [ ! -f "${DESKTOP_TARGET}" ] || [ -L "${DESKTOP_TARGET}" ] || \
+           [ ! -f "${ICON_TARGET}" ] || [ -L "${ICON_TARGET}" ]; then
+            echo "ERROR: launcher did not install desktop integration" >&2
+            exit 1
+        fi
         echo ""
         echo "Installation complete!"
         echo "  Binary:   ${INSTALL_DIR}/fluorine-manager"
@@ -985,9 +1250,9 @@ DESKTOP_EOF
     2)
         echo ""
         PORTABLE_DIR="$(pwd)/fluorine-manager"
-        echo "Extracting portable copy to ${PORTABLE_DIR}..."
+        echo "Extracting release bundle to ${PORTABLE_DIR}..."
         if [ -L "${PORTABLE_DIR}" ]; then
-            echo "ERROR: ${PORTABLE_DIR} is a symlink; refusing portable extraction." >&2
+            echo "ERROR: ${PORTABLE_DIR} is a symlink; refusing extraction." >&2
             exit 1
         fi
         if [ -e "${PORTABLE_DIR}" ] && [ ! -d "${PORTABLE_DIR}" ]; then
@@ -1011,7 +1276,7 @@ DESKTOP_EOF
         mv -T "${PORTABLE_STAGE}/fluorine-manager" "${PORTABLE_DIR}"
 
         echo ""
-        echo "Portable extraction complete!"
+        echo "Release bundle extraction complete!"
         echo "  Run: ${PORTABLE_DIR}/fluorine-manager"
         ;;
     *)
@@ -1023,22 +1288,23 @@ exit 0
 __PAYLOAD__
 INSTALLER_HEADER
 
-    # Build the tarball payload
-    cd /src/build
-    TARBALL_NAME="fluorine-manager"
-    rm -rf "${TARBALL_NAME}"
-    cp -a staging "${TARBALL_NAME}"
-    tar czf "${TARBALL_NAME}-payload.tar.gz" "${TARBALL_NAME}"/
-    rm -rf "${TARBALL_NAME}"
+    bash -n "${INSTALLER_SCRIPT}"
+
+    # Build the installer payload in a private work directory. In particular,
+    # do not reuse the public release directory produced by build_tarball().
+    cp -a staging "${INSTALLER_WORK_ROOT}/${TARBALL_NAME}"
+    tar czf "${INSTALLER_WORK_ROOT}/${TARBALL_NAME}-payload.tar.gz" \
+        -C "${INSTALLER_WORK_ROOT}" "${TARBALL_NAME}"/
 
     # Combine header + payload into self-extracting .bin
-    cat "${INSTALLER_SCRIPT}" "${TARBALL_NAME}-payload.tar.gz" > "${TARBALL_NAME}.bin"
+    cat "${INSTALLER_SCRIPT}" \
+        "${INSTALLER_WORK_ROOT}/${TARBALL_NAME}-payload.tar.gz" \
+        > "${TARBALL_NAME}.bin"
     chmod +x "${TARBALL_NAME}.bin"
-    rm -f "${INSTALLER_SCRIPT}" "${TARBALL_NAME}-payload.tar.gz"
 
     echo "Installer: /src/build/${TARBALL_NAME}.bin"
     ls -lh "/src/build/${TARBALL_NAME}.bin"
-}
+)
 
 # ── Execute requested build mode ──
 case "${BUILD_MODE}" in

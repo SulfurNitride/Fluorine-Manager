@@ -64,6 +64,11 @@ jobs:
               echo "::error::Tag v${VERSION} does not match VERSION (${BASE_VERSION})"
               exit 1
             fi
+            RELEASE_NOTES="docs/release-notes-${VERSION}.md"
+            if [[ ! -s "${RELEASE_NOTES}" ]]; then
+              echo "::error::Stable release notes are missing or empty: ${RELEASE_NOTES}"
+              exit 1
+            fi
           else
             CHANNEL=nightly
             VERSION="${BASE_VERSION}"
@@ -102,6 +107,26 @@ jobs:
             ARCHIVE_NAME="fluorine-manager-nightly-linux-x86_64.tar.gz"
           fi
           tar czf "${ARCHIVE_NAME}" fluorine-manager/
+          ARCHIVE_LIST="$(mktemp)"
+          tar tzf "${ARCHIVE_NAME}" > "${ARCHIVE_LIST}"
+          mapfile -t TOP_LEVEL < <(awk -F/ 'NF {print $1}' "${ARCHIVE_LIST}" | sort -u)
+          if [[ "${#TOP_LEVEL[@]}" -ne 1 || "${TOP_LEVEL[0]}" != "fluorine-manager" ]]; then
+            echo "::error::Release archive must contain exactly one fluorine-manager/ root"
+            exit 1
+          fi
+          for REQUIRED in \
+            fluorine-manager/fluorine-manager \
+            fluorine-manager/ModOrganizer-core \
+            fluorine-manager/fluorine-manifest-v2.json \
+            fluorine-manager/LICENSE.txt \
+            fluorine-manager/README-PORTABLE.txt \
+            fluorine-manager/INSTALLATION.md; do
+            if ! grep -Fqx "${REQUIRED}" "${ARCHIVE_LIST}"; then
+              echo "::error::Release archive is missing ${REQUIRED}"
+              exit 1
+            fi
+          done
+          rm -f "${ARCHIVE_LIST}"
           echo "archive=${ARCHIVE_NAME}" >> "$GITHUB_ENV"
           echo "archive_path=build/${ARCHIVE_NAME}" >> "$GITHUB_ENV"
 
@@ -188,27 +213,30 @@ jobs:
           COMMIT="${GITHUB_SHA}"
           SHORT="${COMMIT:0:7}"
           TITLE="Fluorine Manager ${VERSION}"
+          RELEASE_NOTES="docs/release-notes-${VERSION}.md"
           NOTES_FILE="$(mktemp)"
           {
-            echo "Stable release ${VERSION} built from ${TAG} @ ${SHORT}."
+            cat "${RELEASE_NOTES}"
             echo ""
-            echo "- Channel: stable"
-            echo "- Commit: ${COMMIT}"
-            echo ""
-            echo "See the GitHub release notes for the full list of changes."
+            echo "---"
+            echo "Build provenance: stable ${TAG} @ ${COMMIT}."
           } > "${NOTES_FILE}"
 
           EXISTING_DRAFT="$(gh release view "${TAG}" --json isDraft --jq '.isDraft' 2>/dev/null || true)"
           if [[ -n "${EXISTING_DRAFT}" ]]; then
+            # The versioned, reviewed repository document is the source of
+            # truth for stable notes, including reruns of an existing release.
             if [[ "${EXISTING_DRAFT}" == "true" ]]; then
               gh release edit "${TAG}" \
                 --title "${TITLE}" \
+                --notes-file "${NOTES_FILE}" \
                 --draft \
                 --prerelease=false \
                 --latest=false
             else
               gh release edit "${TAG}" \
                 --title "${TITLE}" \
+                --notes-file "${NOTES_FILE}" \
                 --draft=false \
                 --prerelease=false \
                 --latest

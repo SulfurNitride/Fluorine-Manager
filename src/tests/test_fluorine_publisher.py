@@ -520,6 +520,16 @@ class PublisherTest(unittest.TestCase):
         launcher_path.chmod(0o755)
         (bundle / "fluorine-publisher.py").write_bytes(PUBLISHER_PATH.read_bytes())
 
+        icons = bundle / "icons"
+        icons.mkdir()
+        (icons / "com.fluorine.manager.png").write_bytes(b"icon")
+        (icons / "com.fluorine.manager.desktop").write_text(
+            "[Desktop Entry]\nExec=fluorine-manager %u\n", encoding="utf-8"
+        )
+        (bundle / "fluorine-desktop-entry.py").write_bytes(
+            (SOURCE_ROOT / "packaging" / "desktop_entry.py").read_bytes()
+        )
+
         python_wrapper = bundle / "python" / "bin" / "python3"
         python_wrapper.parent.mkdir(parents=True)
         python_wrapper.write_text(
@@ -552,6 +562,14 @@ class PublisherTest(unittest.TestCase):
 
         home = self.root / "launcher-home"
         home.mkdir()
+        # Desktop integration is best-effort for ordinary launches. Broken
+        # user-local integration paths must not prevent the core from running.
+        local_share = home / ".local" / "share"
+        local_share.mkdir(parents=True)
+        (local_share / "icons").write_text("not a directory", encoding="utf-8")
+        (local_share / "applications").write_text(
+            "not a directory", encoding="utf-8"
+        )
         marker = self.root / "core-marker.json"
         environment = os.environ.copy()
         environment.update(

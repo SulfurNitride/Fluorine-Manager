@@ -8,14 +8,3 @@ Icon=com.fluorine.manager
 Terminal=false
 Categories=Game;Utility;
 Keywords=mod;organizer;modding;skyrim;fallout;
-Actions=create-portable;list-instances;
-
-[Desktop Action create-portable]
-Name=Create Portable Instance
-Exec=fluorine-manager create-portable
-Icon=com.fluorine.manager
-
-[Desktop Action list-instances]
-Name=List Instances
-Exec=fluorine-manager list-instances
-Icon=com.fluorine.manager

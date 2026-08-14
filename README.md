@@ -1,6 +1,6 @@
 # Fluorine Manager
 
-Fluorine Manager an attempt at porting [MO2 (Mod Organizer 2)](https://github.com/ModOrganizer2/modorganizer) to linux with FUSE as the VFS system. A video guide for a quick setup can be found [here](https://youtu.be/yIZFUweb7v8). 
+Fluorine Manager is a Linux port of [MO2 (Mod Organizer 2)](https://github.com/ModOrganizer2/modorganizer) with FUSE and experimental USVFS virtual-filesystem backends. A video guide for a quick setup can be found [here](https://youtu.be/yIZFUweb7v8).
 
 [NEXUS RELEASE](https://www.nexusmods.com/site/mods/1997)
 
@@ -11,18 +11,17 @@ NOTE: This is primarily for my personal use but I will see about fixing issues i
 ## Current Status
 
 - Core app builds and runs on Linux.
-- NaK integration is wired for game/proton detection and dependency handling.
+- Built-in game/Proton detection and dependency setup are available.
 - Linux-native game plugins (`libgame_*.so`) are supported.
 - Portable instances are supported via local `ModOrganizer.ini` detection.
 
 ## FUSE Permissions
 
-- Users only need to change `/etc/fuse.conf` when MO2 mounts with `allow_other` (or `allow_root`).
-- If `allow_other` is used, uncomment `user_allow_other` in `/etc/fuse.conf` once (system-wide).
-
-## Example
-
-`#user_allow_other` to `user_allow_other` if its missing please add it.
+Fluorine's native VFS does not request `allow_other` or `allow_root`, so it does
+not require the system-wide `user_allow_other` setting in `/etc/fuse.conf`. The
+user running Fluorine must be able to access `/dev/fuse`, and the host must
+provide the `fusermount3` helper (normally installed by the distribution's
+`fuse3` package).
 
 ## Virtual Filesystem Backends
 
@@ -33,16 +32,25 @@ their own VFS are unchanged. See the
 [USVFS backend design and benchmarking guide](docs/usvfs-backend.md).
 
 ## Installing and Running
-Download the latest zip from the [releases](https://github.com/SulfurNitride/Fluorine-Manager/releases) and after you download it.
 
-You are able to run it with this command: `./fluorine-manager` or by double-clicking it.
+Download the Linux x86-64 application asset named
+`fluorine-manager-<version>.tar.gz` from the
+[Fluorine releases](https://github.com/SulfurNitride/Fluorine-Manager/releases).
+Do not download GitHub's automatically generated source-code ZIP: it is source,
+not a runnable application package.
+
+Extract the archive into its own directory and run `./fluorine-manager`. The
+launcher verifies the bundle, publishes the managed runtime to
+`~/.local/share/fluorine/bin`, and runs that stable copy. The extraction can be
+removed after a successful launch; deleting it does not uninstall Fluorine.
 
 Before manually applying the first update from an older installation that did
 not use the typed bundle manifest, close every running Fluorine Manager window.
 The in-app updater waits for the old process automatically. Subsequent releases
 serialize publication against the running application.
 
-More information can be found in the [FAQ](https://github.com/SulfurNitride/Fluorine-Manager/blob/main/docs/FAQ.md).
+See [installation, updates, data locations, and removal](docs/installation.md)
+and the [FAQ](docs/FAQ.md) for details.
 
 You can find me in the [NaK Discord](https://discord.gg/9JWQzSeUWt)
 
@@ -55,10 +63,16 @@ Fluorine Manager is built inside a Docker/Podman container — no host toolchain
 **Prerequisites:** Docker or Podman
 
 ```bash
-./build.sh              # Build portable .tar.gz
+./build.sh              # Build the relocatable release directory
+./build.sh installer    # Build the optional self-extracting installer
+./build.sh all          # Build both outputs
+./build.sh test         # Build and run the test suite
 ```
 
-The default output is `build/fluorine-manager.tar.gz` — extract anywhere and run `./fluorine-manager`.
+The default local output is the relocatable `build/fluorine-manager/` release
+directory. CI wraps that directory
+in the release `.tar.gz`; local builds deliberately avoid creating a second
+multi-gigabyte archive.
 
 Fluorine hashes changed catalog files concurrently using the available CPU
 threads while retaining cached BLAKE3 digests for unchanged files. Uncached
@@ -103,7 +117,6 @@ programs.nix-ld.libraries = with pkgs; [
 ## Known Limitations
 
 - Some third-party MO2 plugins are Windows-only and will fail on Linux (for example DLL/ctypes `windll` assumptions).
-- Themes are currently not working as intended.
 
 ## Project Layout
 

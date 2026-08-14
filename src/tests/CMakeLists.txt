@@ -41,6 +41,26 @@ add_test(
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/test_openmw_process_lifetime.py
 )
+add_test(
+    NAME test_elf_dependency_policy
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_elf_dependency_policy.py
+)
+add_test(
+    NAME test_packaging_metadata
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_packaging_metadata.py
+)
+add_test(
+    NAME test_desktop_entry
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_desktop_entry.py
+)
+add_test(
+    NAME test_cargo_license_collection
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_cargo_license_collection.py
+)
 
 # ---------------------------------------------------------------------------
 # TES3 metadata and OpenMW Player stub parsing tests

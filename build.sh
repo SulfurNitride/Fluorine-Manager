@@ -4,10 +4,10 @@ set -euo pipefail
 # Build Fluorine Manager using Docker.
 #
 # Usage:
-#   ./build.sh              # Build portable .tar.gz (default)
-#   ./build.sh tarball      # Build portable .tar.gz only
+#   ./build.sh              # Build relocatable release directory (default)
+#   ./build.sh tarball      # Compatibility name for release directory
 #   ./build.sh installer    # Build self-extracting .bin installer only
-#   ./build.sh all          # Build tarball + installer
+#   ./build.sh all          # Build release directory + installer
 #   ./build.sh test         # Build and run the standalone test suite
 #   ./build.sh usvfs [RUN]  # Test Fluorine and package an exact green USVFS run
 #   ./build.sh shell        # Drop into the build container for debugging
@@ -221,9 +221,9 @@ case "${REQUESTED_MODE}" in
     *)
         echo "Usage: ./build.sh [tarball|installer|all|test|shell|usvfs [RUN_ID]]"
         echo ""
-        echo "  tarball    Build portable .tar.gz"
+        echo "  tarball    Build release directory (CI creates the .tar.gz)"
         echo "  installer  Build self-extracting .bin installer"
-        echo "  all        Build tarball + installer"
+        echo "  all        Build release directory + installer"
         echo "  test       Build and run the standalone test suite"
         echo "  shell      Drop into build container"
         echo "  usvfs      Test and package the exact green USVFS commit/run"

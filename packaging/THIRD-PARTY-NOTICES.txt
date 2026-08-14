@@ -1,0 +1,14 @@
+Fluorine Manager third-party notices
+=====================================
+
+This directory accompanies the exact binary bundle. It contains:
+
+- license texts from source components compiled or copied into the bundle;
+- target-reachable Cargo package license files;
+- Python runtime and shipped Python-distribution license metadata;
+- SPDX software-bill-of-materials documents for the shipped Qt modules; and
+- distribution copyright files for shared libraries copied from the builder.
+
+The files describe their respective components and retain their upstream
+copyright notices. Their inclusion does not change Fluorine Manager's own
+GPL-3.0-or-later license, provided as ../LICENSE.txt.

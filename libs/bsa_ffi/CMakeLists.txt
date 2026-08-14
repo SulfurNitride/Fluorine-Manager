@@ -12,17 +12,13 @@ endif()
 set(BSA_FFI_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(BSA_FFI_LIB ${BSA_FFI_DIR}/target/${CARGO_BUILD_TYPE}/libbsa_ffi.so)
 
-add_custom_command(
-  OUTPUT ${BSA_FFI_LIB}
+add_custom_target(bsa_ffi_build
   COMMAND cargo build ${CARGO_BUILD_FLAGS}
   WORKING_DIRECTORY ${BSA_FFI_DIR}
   COMMENT "Building BSA FFI library (Rust)"
-  DEPENDS
-    ${BSA_FFI_DIR}/Cargo.toml
-    ${BSA_FFI_DIR}/src/lib.rs
+  BYPRODUCTS ${BSA_FFI_LIB}
+  VERBATIM
 )
-
-add_custom_target(bsa_ffi_build DEPENDS ${BSA_FFI_LIB})
 
 add_library(bsa_ffi_wrapper INTERFACE)
 target_link_libraries(bsa_ffi_wrapper INTERFACE ${BSA_FFI_LIB})

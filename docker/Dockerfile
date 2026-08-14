@@ -85,6 +85,9 @@ RUN curl -L --fail \
     meson install -C /tmp/libfuse-build && \
     ldconfig && \
     test "$(pkg-config --modversion fuse3)" = "${LIBFUSE_VERSION}" && \
+    cp "/tmp/fuse-${LIBFUSE_VERSION}/LICENSE" /opt/fluorine-libfuse-LICENSE && \
+    cp "/tmp/fuse-${LIBFUSE_VERSION}/GPL2.txt" /opt/fluorine-libfuse-GPL2 && \
+    cp "/tmp/fuse-${LIBFUSE_VERSION}/LGPL2.txt" /opt/fluorine-libfuse-LGPL2 && \
     rm -rf /tmp/libfuse.tar.gz "/tmp/fuse-${LIBFUSE_VERSION}" /tmp/libfuse-build
 
 # ── uv (Astral) ──
@@ -110,6 +113,12 @@ RUN uv tool run --from aqtinstall aqt install-qt linux desktop 6.11.1 linux_gcc_
       -m qtwebsockets qtwaylandcompositor qtnetworkauth qttasktree qtimageformats \
       --outputdir /opt/qt6 && \
     ls /opt/qt6/6.11.1/gcc_64/bin/qmake
+ARG ICU_LICENSE_SHA256=f3005e195ff74d8812cc1f182a1c446fab678d70a10e3dada497585befee5416
+RUN curl -L --fail --retry 3 \
+      https://raw.githubusercontent.com/unicode-org/icu/release-73-2/icu4c/LICENSE \
+      -o /opt/fluorine-icu-73.2-LICENSE && \
+    echo "${ICU_LICENSE_SHA256}  /opt/fluorine-icu-73.2-LICENSE" | \
+      sha256sum -c -
 ENV Qt6_DIR=/opt/qt6/6.11.1/gcc_64
 ENV CMAKE_PREFIX_PATH="/opt/qt6/6.11.1/gcc_64:${CMAKE_PREFIX_PATH}"
 ENV PATH="/opt/qt6/6.11.1/gcc_64/bin:${PATH}"
@@ -132,6 +141,20 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
 # [lib] name = "loot"). build-inner.sh stages the resulting loot*.so into the
 # runtime site-packages. The whole step is best-effort/optional at runtime: if
 # the module is absent the "Sort with LOOT" tool degrades to a clear message.
+COPY collect_cargo_licenses.py /usr/local/libexec/collect-cargo-licenses.py
+ARG LARIAN_FORMATS_CRATE_SHA256=1913f9bbee52ba773388af75942b90b33f9ee79eef191998593e0f854cf94636
+RUN curl -L --fail --retry 3 -A 'cargo/1.0' \
+      https://static.crates.io/crates/larian-formats/larian-formats-0.8.1.crate \
+      -o /tmp/larian-formats-0.8.1.crate && \
+    echo "${LARIAN_FORMATS_CRATE_SHA256}  /tmp/larian-formats-0.8.1.crate" | \
+      sha256sum -c - && \
+    tar -xf /tmp/larian-formats-0.8.1.crate -C /tmp && \
+    cp /usr/share/common-licenses/Apache-2.0 \
+      /tmp/larian-formats-0.8.1/LICENSE-APACHE-2.0 && \
+    /opt/python-bundled/bin/python3 /usr/local/libexec/collect-cargo-licenses.py \
+      --output /opt/python-bundled/share/licenses/larian-formats-cargo \
+      /tmp/larian-formats-0.8.1/Cargo.toml && \
+    rm -rf /tmp/larian-formats-0.8.1 /tmp/larian-formats-0.8.1.crate
 ARG LIBLOOT_VERSION=0.29.6
 RUN uv pip install --system --break-system-packages \
       --python /opt/python-bundled/bin/python3 --no-cache "maturin>=1.8,<2.0" && \
@@ -144,6 +167,9 @@ RUN uv pip install --system --break-system-packages \
     uv pip install --system --break-system-packages \
       --python /opt/python-bundled/bin/python3 --no-cache /tmp/libloot-wheels/*.whl && \
     /opt/python-bundled/bin/python3 -c "import loot; print('libloot', loot.libloot_version())" && \
+    /opt/python-bundled/bin/python3 /usr/local/libexec/collect-cargo-licenses.py \
+      --output /opt/python-bundled/share/licenses/libloot-cargo \
+      /tmp/libloot/python/Cargo.toml && \
     rm -rf /tmp/libloot /tmp/libloot-wheels
 
 WORKDIR /build

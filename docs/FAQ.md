@@ -1,23 +1,47 @@
 # FAQ
 
 ## Where Are Logs Stored?
-Logs are written next to the app binary in a `logs/` folder.
+Manager session logs are written to the selected instance's `logs/` directory.
+For a portable instance that is `<instance>/logs`; global instances live below
+`~/.local/share/fluorine`. Prefix setup and dependency-installer diagnostics are
+stored separately in `~/.local/share/fluorine/logs`.
 
 ## Does Removing an Instance Delete My Files?
-Not by default. It removes the profile from the menu, and gives you the option to delete it if you want to.
 
-## Do I Need to Install 9 Million Different Dependencies?
-No, the dependencies are handled by NaK! If there is something missing I will gladly add it to the list. This also includes WINEDLLOVERWRITES as well!
+**Remove from list** does not delete instance content. It unregisters a portable
+instance or disables a global instance's discovery file so the entry disappears
+from the selector. **Delete instance…** is a separate destructive action; it
+shows the exact files and directories selected for permanent deletion before
+asking for confirmation.
 
-## Make Sure to Select a Proton in the Settings Before Playing!
-You will need to create a prefix before being able to play, I have added a Wine/Proton tab in the settings. Just let it install all the dependencies and then you are good to play.
+## Do I Need to Install Many Dependencies?
+The release bundles its application runtime and Fluorine can install supported
+Wine-prefix dependencies. It intentionally uses the host graphics stack,
+X11/Wayland, Fontconfig, OpenSSL, glibc, and libstdc++; these are normally
+provided by the distribution. See [installation](installation.md) for the
+current runtime boundary.
+
+## Do I Need to Select Proton Before Playing?
+Windows games and Windows modding tools need a selected Proton version and a
+configured Wine prefix under **Settings > Wine/Proton**. Native Linux games
+such as OpenMW do not use that Proton launch path.
 <img width="2818" height="1688" alt="Screenshot_20260211_021905" src="https://github.com/user-attachments/assets/3437628f-7e75-4a07-b643-62b1cc130bbf" />
 
 ## Does It Work with Existing Modlists?
-Yes, it can phrase wine paths and read them out as Linux paths in the GUI. It will also save the paths as wine paths in case you move to MO2 via proton/wine.
+Yes. Fluorine translates Wine paths for the Linux GUI and preserves compatible
+paths for MO2 under Proton/Wine.
 
-To use a portable install you can run this as an example. `flatpak run com.fluorine.manager --instance /home/luke/Games/Skyrim/` and it should pick right up where you left off.
+To open an existing portable instance containing `ModOrganizer.ini`, run:
 
-And all the buttons like associate with mod manager downloads button and MO2 OAuth also works.
+```bash
+~/.local/share/fluorine/bin/fluorine-manager \
+  --instance '/absolute/path/to/instance'
+```
+
+The historical Flatpak command is no longer a supported entry point. Native
+Fluorine imports unambiguous data from the old Flatpak layout automatically and
+reports anything that needs manual attention.
+
+Browser “Download with manager” links and Nexus OAuth are supported.
 
 FAQ is going to be updated with more info in the future.
