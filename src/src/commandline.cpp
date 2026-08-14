@@ -1,6 +1,7 @@
 #include "commandline.h"
 #include "commandlinearguments.h"
 #include "env.h"
+#include "instancegeneralsettings.h"
 #include "instancemanager.h"
 #include "loglist.h"
 #include "messagedialog.h"
@@ -1049,12 +1050,17 @@ std::optional<int> CreatePortableCommand::runEarly()
     QSettings ini(QDir(instanceDir).filePath("ModOrganizer.ini"), QSettings::IniFormat);
 
     if (vm().contains("game")) {
-      ini.setValue("General/gameName", QString::fromStdString(vm()["game"].as<std::string>()));
+      InstanceGeneralSettings::write(
+          ini, InstanceGeneralSettings::Key::GameName,
+          QString::fromStdString(vm()["game"].as<std::string>()));
     }
     if (vm().contains("game-path")) {
-      ini.setValue("General/gamePath", QString::fromStdString(vm()["game-path"].as<std::string>()));
+      InstanceGeneralSettings::write(
+          ini, InstanceGeneralSettings::Key::GamePath,
+          QString::fromStdString(vm()["game-path"].as<std::string>()));
     }
-    ini.setValue("General/portable", true);
+    InstanceGeneralSettings::write(
+        ini, InstanceGeneralSettings::Key::Portable, true);
     SettingsMigration::markNewInstance(ini);
 
     ini.setValue("Settings/download_directory", "%BASE_DIR%/downloads");
@@ -1113,12 +1119,21 @@ std::optional<int> ListInstancesCommand::runEarly()
       const QString iniPath = QDir(dir.filePath(entry)).filePath("ModOrganizer.ini");
       if (QFile::exists(iniPath)) {
         QSettings const ini(iniPath, QSettings::IniFormat);
-        if (ini.value("General/portable", false).toBool()) {
+        const bool portable =
+            InstanceGeneralSettings::read(
+                ini, InstanceGeneralSettings::Key::Portable)
+                .value_or(false)
+                .toBool();
+        if (portable) {
           if (!found) {
             std::cout << "Portable instances:\n";
             found = true;
           }
-          const auto gameName = ini.value("General/gameName", "unknown").toString();
+          const auto gameName =
+              InstanceGeneralSettings::read(
+                  ini, InstanceGeneralSettings::Key::GameName)
+                  .value_or(QStringLiteral("unknown"))
+                  .toString();
           std::cout << "  " << entry.toStdString()
                     << " (" << gameName.toStdString() << ")"
                     << " - " << dir.filePath(entry).toStdString() << "\n";
@@ -1173,9 +1188,22 @@ std::optional<int> InfoCommand::runEarly()
   QSettings const ini(iniPath, QSettings::IniFormat);
 
   std::cout << "Instance: " << instancePath.toStdString() << "\n";
-  std::cout << "  Game:       " << ini.value("General/gameName", "not set").toString().toStdString() << "\n";
-  std::cout << "  Game Path:  " << ini.value("General/gamePath", "not set").toString().toStdString() << "\n";
-  std::cout << "  Portable:   " << (ini.value("General/portable", false).toBool() ? "yes" : "no") << "\n";
+  const auto gameName =
+      InstanceGeneralSettings::read(ini, InstanceGeneralSettings::Key::GameName)
+          .value_or(QStringLiteral("not set"))
+          .toString();
+  const auto gamePath =
+      InstanceGeneralSettings::read(ini, InstanceGeneralSettings::Key::GamePath)
+          .value_or(QStringLiteral("not set"))
+          .toString();
+  const bool portable =
+      InstanceGeneralSettings::read(ini, InstanceGeneralSettings::Key::Portable)
+          .value_or(false)
+          .toBool();
+
+  std::cout << "  Game:       " << gameName.toStdString() << "\n";
+  std::cout << "  Game Path:  " << gamePath.toStdString() << "\n";
+  std::cout << "  Portable:   " << (portable ? "yes" : "no") << "\n";
   std::cout << "  Mods Dir:   " << ini.value("Settings/mod_directory", "not set").toString().toStdString() << "\n";
   std::cout << "  Downloads:  " << ini.value("Settings/download_directory", "not set").toString().toStdString() << "\n";
 

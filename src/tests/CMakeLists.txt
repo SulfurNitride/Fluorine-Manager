@@ -1024,6 +1024,29 @@ add_test(NAME test_persistentcookiejar COMMAND test_persistentcookiejar)
 set_tests_properties(test_persistentcookiejar PROPERTIES TIMEOUT 10)
 
 # ---------------------------------------------------------------------------
+# Canonical and legacy instance [General] key mapping
+# ---------------------------------------------------------------------------
+add_executable(test_instancegeneralsettings EXCLUDE_FROM_ALL
+    test_instancegeneralsettings.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/instancegeneralsettings.cpp
+)
+set_target_properties(test_instancegeneralsettings PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_instancegeneralsettings PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_instancegeneralsettings PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_instancegeneralsettings COMMAND test_instancegeneralsettings)
+set_tests_properties(test_instancegeneralsettings PROPERTIES TIMEOUT 10)
+
+# ---------------------------------------------------------------------------
 # Serialized, recoverable bundle publication tests
 # ---------------------------------------------------------------------------
 add_test(NAME test_fluorine_publisher
@@ -1058,4 +1081,5 @@ add_custom_target(fluorine-tests
             test_commandlinearguments
             test_nxmrequest test_fluorineupdater
             test_logredaction test_recenterrorlog test_nxmhandlerintegration
-            test_problemcheckrunner test_persistentcookiejar)
+            test_problemcheckrunner test_persistentcookiejar
+            test_instancegeneralsettings)
