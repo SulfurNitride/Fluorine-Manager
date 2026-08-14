@@ -6,7 +6,7 @@
 #include "loglist.h"
 #include "moapplication.h"
 #include "multiprocess.h"
-#include "nxmhandler_linux.h"
+#include "nxmrequest.h"
 #include "organizercore.h"
 #include "runtimelock.h"
 #include "shared/util.h"
@@ -67,20 +67,35 @@ int run(int argc, char* argv[])
       std::fprintf(stderr, "ERROR: nxm-handle requires exactly one NXM link\n");
       return 1;
     }
-    if (!isNxmLink(nxmUrl) || nxmUrl.contains(QLatin1Char('\r')) ||
-        nxmUrl.contains(QLatin1Char('\n'))) {
+    if (!NxmRequest::parse(nxmUrl)) {
       std::fprintf(stderr, "ERROR: invalid NXM link\n");
       return 1;
     }
-    if (NxmHandlerLinux::sendToSocket(nxmUrl)) {
+    QString deliveryError;
+    const auto delivery =
+        MOMultiProcess::trySendToPrimary(nxmUrl, &deliveryError);
+    if (MOMultiProcess::mayHaveDelivered(delivery)) {
+      // The complete frame reached an authenticated primary, but its ACK was
+      // lost or delayed. Preserve the old NXM handoff's at-most-once retry
+      // behavior rather than launching a second process and duplicating it.
       return 0;
     }
 
+    // No primary, a primary still reaching readiness, or a rejected admission
+    // all use the established cold-start path. The normal invocation either
+    // becomes primary or retries through the same framed IPC after election.
+    if (delivery == MOMultiProcess::DeliveryResult::Rejected &&
+        !deliveryError.isEmpty()) {
+      std::fprintf(stderr, "NXM handoff unavailable: %s\n",
+                   deliveryError.toUtf8().constData());
+    }
+
     // Older registered handler scripts only invoke `nxm-handle`; they do not
-    // contain the newer shell fallback that starts Fluorine when its socket is
-    // absent. Replace this lightweight handler process with a normal Fluorine
-    // invocation so existing registrations also open the last-used instance
-    // and process the URL. /proc/self/exe avoids relying on argv[0] or PATH.
+    // contain the newer shell fallback that starts Fluorine when no primary
+    // accepts the request. Replace this lightweight handler process with a
+    // normal Fluorine invocation so existing registrations also open the
+    // last-used instance and process the URL. /proc/self/exe avoids relying on
+    // argv[0] or PATH.
     // A packaged launcher descriptor must not survive the fallback exec. Adopt
     // it now so it becomes close-on-exec and the managed launcher can establish
     // exactly one fresh lease. Legacy bare handlers have no descriptor and are
@@ -304,39 +319,6 @@ int runApplication(int argc, char* argv[], const QStringList& arguments,
       }
       if (auto r = terminationExit()) {
         return *r;
-      }
-
-      NxmHandlerLinux nxmHandler;
-      if (!nxmHandler.startListener()) {
-        log::warn("nxm listener could not be started");
-      } else {
-        QObject::connect(
-            &nxmHandler, &NxmHandlerLinux::nxmReceived, &app.core(),
-            [&](const NxmLink& link) {
-              app.core().downloadRequestedNXM(
-                  QString("nxm://%1/mods/%2/files/%3?key=%4&expires=%5&user_id=%6")
-                      .arg(link.game_domain)
-                      .arg(link.mod_id)
-                      .arg(link.file_id)
-                      .arg(link.key)
-                      .arg(link.expires)
-                      .arg(link.user_id));
-            });
-
-        QObject::connect(&nxmHandler, &NxmHandlerLinux::directDownloadReceived,
-                         &app.core(), [&](const QString& url, const QString&) {
-                           QMetaObject::invokeMethod(
-                               &app.core(),
-                               [&app, url] {
-                                 app.core().downloadManager()->startDownloadURLs(
-                                     QStringList{url});
-                               },
-                               Qt::QueuedConnection);
-                         });
-      }
-
-      if (auto terminationResult = terminationExit()) {
-        return *terminationResult;
       }
 
       const auto r = app.run(multiProcess);

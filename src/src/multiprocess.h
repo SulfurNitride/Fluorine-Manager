@@ -24,6 +24,14 @@ class MOMultiProcess : public QObject
   Q_OBJECT
 
 public:
+  enum class DeliveryResult
+  {
+    Accepted,
+    Rejected,
+    Unavailable,
+    Indeterminate,
+  };
+
   struct Endpoint
   {
     QString directory;
@@ -38,6 +46,16 @@ public:
   ~MOMultiProcess() override;
 
   static Endpoint defaultEndpoint();
+
+  // Quiet, pre-QApplication delivery for lightweight integrations such as the
+  // desktop NXM handler. This never participates in election or creates a
+  // listener: it only sends to an already-running primary.
+  static DeliveryResult trySendToPrimary(const QString& message,
+                                         QString* error = nullptr);
+  static DeliveryResult trySendToPrimary(const QString& message,
+                                         const Endpoint& endpoint,
+                                         QString* error = nullptr);
+  static bool mayHaveDelivered(DeliveryResult result) noexcept;
 
   /**
    * @return true if this process's job is to forward data to the primary

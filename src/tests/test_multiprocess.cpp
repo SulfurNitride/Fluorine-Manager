@@ -202,6 +202,113 @@ TEST(MultiProcess, ForwardsOneFramedMessageAndAcknowledgesIt) {
   EXPECT_EQ(received, expected);
 }
 
+TEST(MultiProcess, QuietClientTargetsPrimaryDespiteMultipleInstance) {
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const auto testEndpoint = endpoint(temporary, QStringLiteral("nxm-primary"));
+  MOMultiProcess primary(false, testEndpoint);
+  primary.setMessageHandler([](const QString &) { return true; });
+
+  struct stat before{};
+  const QByteArray path = QFile::encodeName(socketPath(testEndpoint));
+  ASSERT_EQ(::lstat(path.constData(), &before), 0);
+
+  MOMultiProcess secondary(true, testEndpoint);
+  ASSERT_TRUE(secondary.secondary());
+
+  struct stat after{};
+  ASSERT_EQ(::lstat(path.constData(), &after), 0);
+  EXPECT_EQ(before.st_dev, after.st_dev);
+  EXPECT_EQ(before.st_ino, after.st_ino);
+
+  const QString expected = QStringLiteral(
+      "nxm://example/mods/1/files/2?key=secret&expires=3&user_id=4");
+  QString received;
+  QObject::connect(&primary, &MOMultiProcess::messageSent,
+                   [&](const QString &message) { received = message; });
+
+  auto result = std::async(std::launch::async, [&] {
+    return MOMultiProcess::trySendToPrimary(expected, testEndpoint);
+  });
+  ASSERT_TRUE(waitUntil([&] {
+    return !received.isEmpty() &&
+           result.wait_for(std::chrono::milliseconds(0)) ==
+               std::future_status::ready;
+  }));
+  EXPECT_EQ(result.get(), MOMultiProcess::DeliveryResult::Accepted);
+  EXPECT_EQ(received, expected);
+}
+
+TEST(MultiProcess, QuietClientDistinguishesUnavailableAndRejected) {
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+
+  const auto unavailableEndpoint =
+      endpoint(temporary, QStringLiteral("not-running"));
+  EXPECT_EQ(MOMultiProcess::trySendToPrimary(QStringLiteral("nxm://missing"),
+                                            unavailableEndpoint),
+            MOMultiProcess::DeliveryResult::Unavailable);
+
+  const auto rejectedEndpoint =
+      endpoint(temporary, QStringLiteral("rejecting-primary"));
+  MOMultiProcess primary(false, rejectedEndpoint);
+  primary.setMessageHandler([](const QString &) { return false; });
+
+  auto result = std::async(std::launch::async, [&] {
+    return MOMultiProcess::trySendToPrimary(QStringLiteral("nxm://rejected"),
+                                            rejectedEndpoint);
+  });
+  ASSERT_TRUE(waitUntil([&] {
+    return result.wait_for(std::chrono::milliseconds(0)) ==
+           std::future_status::ready;
+  }));
+  EXPECT_EQ(result.get(), MOMultiProcess::DeliveryResult::Rejected);
+}
+
+TEST(MultiProcess, QuietClientDoesNotRetryAnUnacknowledgedFrame) {
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const auto testEndpoint =
+      endpoint(temporary, QStringLiteral("missing-acknowledgement"));
+  const QString path = socketPath(testEndpoint);
+
+  QLocalServer server;
+  server.setSocketOptions(QLocalServer::NoOptions);
+  ASSERT_TRUE(server.listen(path));
+  ASSERT_EQ(::chmod(QFile::encodeName(path).constData(), 0600), 0);
+
+  const QString message =
+      QStringLiteral("nxm://game/mods/1/files/2?key=uncertain");
+  auto result = std::async(std::launch::async, [&] {
+    return MOMultiProcess::trySendToPrimary(message, testEndpoint);
+  });
+
+  ASSERT_TRUE(waitUntil([&] { return server.hasPendingConnections(); }));
+  std::unique_ptr<QLocalSocket> peer(server.nextPendingConnection());
+  ASSERT_NE(peer, nullptr);
+  QByteArray receivedFrame;
+  multiprocess_ipc::DecodeResult decoded;
+  ASSERT_TRUE(waitUntil([&] {
+    receivedFrame.append(peer->readAll());
+    decoded = multiprocess_ipc::decodeMessage(receivedFrame);
+    return decoded.status != multiprocess_ipc::DecodeStatus::Incomplete;
+  }));
+  ASSERT_EQ(decoded.status, multiprocess_ipc::DecodeStatus::Complete);
+  EXPECT_EQ(decoded.message, message);
+
+  ASSERT_TRUE(waitUntil([&] {
+    return result.wait_for(std::chrono::milliseconds(0)) ==
+           std::future_status::ready;
+  }));
+  const auto delivery = result.get();
+  EXPECT_EQ(delivery, MOMultiProcess::DeliveryResult::Indeterminate);
+  EXPECT_TRUE(MOMultiProcess::mayHaveDelivered(delivery));
+  EXPECT_FALSE(MOMultiProcess::mayHaveDelivered(
+      MOMultiProcess::DeliveryResult::Unavailable));
+  EXPECT_FALSE(MOMultiProcess::mayHaveDelivered(
+      MOMultiProcess::DeliveryResult::Rejected));
+}
+
 TEST(MultiProcess, FragmentedClientDoesNotBlockTheEventLoop) {
   QTemporaryDir temporary;
   ASSERT_TRUE(temporary.isValid());

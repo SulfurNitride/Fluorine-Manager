@@ -819,6 +819,29 @@ add_test(NAME test_commandlinearguments COMMAND test_commandlinearguments)
 set_tests_properties(test_commandlinearguments PROPERTIES TIMEOUT 10)
 
 # ---------------------------------------------------------------------------
+# NXM and mod.pub direct-download request classification
+# ---------------------------------------------------------------------------
+add_executable(test_nxmrequest EXCLUDE_FROM_ALL
+    test_nxmrequest.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/nxmrequest.cpp
+)
+set_target_properties(test_nxmrequest PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_nxmrequest PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_nxmrequest PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_nxmrequest COMMAND test_nxmrequest)
+set_tests_properties(test_nxmrequest PROPERTIES TIMEOUT 10)
+
+# ---------------------------------------------------------------------------
 # Serialized, recoverable bundle publication tests
 # ---------------------------------------------------------------------------
 add_test(NAME test_fluorine_publisher
@@ -849,4 +872,5 @@ add_custom_target(fluorine-tests
             test_vfs_catalog test_vfs_index
             test_staging_promotion test_python_module_switch
             test_stylesheetpath test_applicationappearance test_plugindatapath
-            test_instancepathidentity test_commandlinearguments)
+            test_instancepathidentity test_commandlinearguments
+            test_nxmrequest)

@@ -1,6 +1,4 @@
 #include "nxmhandler_linux.h"
-#include "fluorinepaths.h"
-
 #include <log.h>
 
 #include <QCoreApplication>
@@ -9,13 +7,9 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QLocalServer>
-#include <QLocalSocket>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QTextStream>
-#include <QUrl>
-#include <QUrlQuery>
 
 using namespace MOBase;
 
@@ -368,78 +362,6 @@ void removeMimeAppsAssociation(const QString& path, const QString& mimeType,
 }
 }  // namespace
 
-std::optional<NxmLink> NxmLink::parse(const QString& url)
-{
-  const QUrl parsed(url);
-  const QString scheme = parsed.scheme().toLower();
-  if (!parsed.isValid() || (scheme != "nxm" && scheme != "modl")) {
-    log::debug("NxmLink::parse rejected scheme: '{}'", url);
-    return {};
-  }
-
-  const QString gameDomain = parsed.host().trimmed();
-  if (gameDomain.isEmpty()) {
-    log::debug("NxmLink::parse rejected empty host: '{}'", url);
-    return {};
-  }
-
-  const QStringList parts =
-      parsed.path().split('/', Qt::SkipEmptyParts);
-
-  if (parts.size() != 4 || parts[0] != "mods" || parts[2] != "files") {
-    log::debug("NxmLink::parse rejected path (expected /mods/ID/files/ID): '{}'", url);
-    return {};
-  }
-
-  bool modOk     = false;
-  bool fileOk    = false;
-  const uint64_t modId  = parts[1].toULongLong(&modOk);
-  const uint64_t fileId = parts[3].toULongLong(&fileOk);
-  if (!modOk || !fileOk) {
-    log::debug("NxmLink::parse rejected non-numeric IDs: '{}'", url);
-    return {};
-  }
-
-  // key/expires are required for NXM but optional for modl:// (mod.pub).
-  const QUrlQuery query(parsed);
-  const QString key      = query.queryItemValue("key");
-  const uint64_t expires = query.queryItemValue("expires").toULongLong();
-  const int userId       = query.queryItemValue("user_id").toInt();
-
-  return NxmLink{.game_domain=gameDomain, .mod_id=modId, .file_id=fileId, .key=key, .expires=expires, .user_id=userId};
-}
-
-QString NxmLink::lookupKey() const
-{
-  return QString("%1:%2:%3").arg(game_domain).arg(mod_id).arg(file_id);
-}
-
-NxmHandlerLinux::NxmHandlerLinux(QObject* parent) : QObject(parent)
-{
-  qRegisterMetaType<NxmLink>("NxmLink");
-}
-
-NxmHandlerLinux::~NxmHandlerLinux()
-{
-  if (m_server != nullptr) {
-    m_server->close();
-    delete m_server;
-    m_server = nullptr;
-  }
-}
-
-QString NxmHandlerLinux::socketPath()
-{
-  // Use our own data dir for the socket — XDG_RUNTIME_DIR may point to a
-  // read-only location on Steam Deck (SteamOS has a read-only root).
-  const QString dataDir = fluorineDataDir();
-  if (!dataDir.isEmpty()) {
-    return QDir(dataDir).filePath("tmp/mo2-nxm.sock");
-  }
-
-  return QDir::homePath() + "/.local/share/fluorine/tmp/mo2-nxm.sock";
-}
-
 void NxmHandlerLinux::registerHandler()
 {
   const QString home = QDir::homePath();
@@ -476,10 +398,10 @@ void NxmHandlerLinux::registerHandler()
           ? launcherInfo.absoluteFilePath()
           : QCoreApplication::applicationFilePath();
 
-  // Prefer the lightweight socket handoff when Fluorine is already running.
-  // If no listener exists, start Fluorine normally with the URL; normal
-  // startup selects the last-used instance and CommandLine begins the
-  // download once that instance is ready.
+  // Prefer the lightweight authenticated primary-process handoff when
+  // Fluorine is already running. If no primary accepts it, start Fluorine
+  // normally with the URL; normal startup selects the last-used instance and
+  // CommandLine begins the download once that instance is ready.
   const QString wrapper =
       QString("#!/bin/sh\n"
               "url=$1\n"
@@ -563,123 +485,4 @@ void NxmHandlerLinux::unregisterHandler()
   for (const auto& scheme : UrlSchemes) {
     clearStalePortalChoice(scheme);
   }
-}
-
-bool NxmHandlerLinux::startListener()
-{
-  if (m_server != nullptr && m_server->isListening()) {
-    return true;
-  }
-
-  if (m_server == nullptr) {
-    m_server = new QLocalServer(this);
-    connect(m_server, &QLocalServer::newConnection, this,
-            &NxmHandlerLinux::onNewConnection);
-  } else {
-    m_server->close();
-  }
-
-  const QString path = socketPath();
-
-  // Ensure parent directory exists (XDG_RUNTIME_DIR may point to a
-  // non-existent path on some configurations).
-  const QDir parentDir = QFileInfo(path).dir();
-  if (!parentDir.exists()) {
-    QDir().mkpath(parentDir.absolutePath());
-  }
-
-  QLocalServer::removeServer(path);
-  if (QFileInfo::exists(path)) {
-    QFile::remove(path);
-  }
-
-  if (!m_server->listen(path)) {
-    log::error("failed to start nxm listener on '{}': {}", path,
-               m_server->errorString());
-    return false;
-  }
-
-  log::info("nxm listener started on '{}'", path);
-  return true;
-}
-
-void NxmHandlerLinux::onNewConnection()
-{
-  if (m_server == nullptr) {
-    return;
-  }
-
-  while (QLocalSocket* socket = m_server->nextPendingConnection()) {
-    connect(socket, &QLocalSocket::readyRead, this, [this, socket] {
-      processSocketData(socket);
-    });
-    connect(socket, &QLocalSocket::disconnected, socket, &QObject::deleteLater);
-  }
-}
-
-void NxmHandlerLinux::processSocketData(QLocalSocket* socket)
-{
-  // Drain all available lines before emitting anything. Slot handlers for
-  // nxmReceived/directDownloadReceived can show modal dialogs (e.g. the
-  // "Wrong Game" warning) that spin the event loop. That re-entry would
-  // process the disconnected → deleteLater queued for this socket and free
-  // it, leaving the canReadLine() loop iterating on a dangling pointer.
-  QStringList lines;
-  while (socket->canReadLine()) {
-    const QString line = QString::fromUtf8(socket->readLine()).trimmed();
-    if (!line.isEmpty()) {
-      lines.append(line);
-    }
-  }
-
-  for (const QString& line : lines) {
-    log::info("received link on socket: {}", line);
-
-    // Try NXM-style parse first (nxm:// or modl:// with /mods/ID/files/ID path).
-    const auto link = NxmLink::parse(line);
-    if (link) {
-      emit nxmReceived(*link);
-      continue;
-    }
-
-    // modl:// direct download: modl://GAME/?url=<encoded-download-url>
-    const QUrl parsed(line);
-    if (parsed.isValid() && parsed.scheme().compare("modl", Qt::CaseInsensitive) == 0) {
-      const QUrlQuery query(parsed);
-      const QString downloadUrl = query.queryItemValue("url", QUrl::FullyDecoded);
-      if (!downloadUrl.isEmpty()) {
-        const QString gameDomain = parsed.host().trimmed();
-        log::info("modl direct download for '{}': {}", gameDomain, downloadUrl);
-        emit directDownloadReceived(downloadUrl, gameDomain);
-        continue;
-      }
-    }
-
-    log::warn("received unrecognized url on socket: {}", line);
-  }
-}
-
-bool NxmHandlerLinux::sendToSocket(const QString& url)
-{
-  QLocalSocket socket;
-  socket.connectToServer(socketPath(), QIODevice::WriteOnly);
-  if (!socket.waitForConnected(1500)) {
-    return false;
-  }
-
-  QByteArray payload = url.toUtf8();
-  payload.append('\n');
-
-  if (socket.write(payload) != payload.size()) {
-    socket.abort();
-    return false;
-  }
-
-  if (!socket.waitForBytesWritten(1500)) {
-    socket.abort();
-    return false;
-  }
-
-  socket.disconnectFromServer();
-  return true;
 }

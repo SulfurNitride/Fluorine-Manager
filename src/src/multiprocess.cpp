@@ -93,6 +93,100 @@ bool sameSocket(const struct stat &left, const struct stat &right) {
          S_ISSOCK(right.st_mode);
 }
 
+MOMultiProcess::DeliveryResult deliverMessage(const QString &serverPath,
+                                              const QString &message,
+                                              int timeoutMs, int attempts,
+                                              QString *error) {
+  if (error != nullptr) {
+    error->clear();
+  }
+  const QByteArray frame = multiprocess_ipc::encodeMessage(message);
+  if (frame.isEmpty()) {
+    if (error != nullptr) {
+      *error = QStringLiteral("refusing to forward an empty or oversized command");
+    }
+    return MOMultiProcess::DeliveryResult::Rejected;
+  }
+
+  QLocalSocket socket;
+  bool connected = false;
+  for (int i = 0; i < attempts && !connected; ++i) {
+    if (i > 0) {
+      QThread::msleep(250);
+    }
+    socket.connectToServer(serverPath, QIODevice::ReadWrite);
+    connected = socket.waitForConnected(timeoutMs);
+  }
+
+  if (!connected) {
+    if (error != nullptr) {
+      *error = QStringLiteral("failed to connect to running process: %1")
+                   .arg(socket.errorString());
+    }
+    return MOMultiProcess::DeliveryResult::Unavailable;
+  }
+  if (!sameUserPeer(socket)) {
+    if (error != nullptr) {
+      *error = QStringLiteral("running process did not authenticate as this user");
+    }
+    socket.abort();
+    return MOMultiProcess::DeliveryResult::Rejected;
+  }
+
+  const qint64 written = socket.write(frame);
+  if (written != frame.size()) {
+    if (error != nullptr) {
+      *error = QStringLiteral("failed to communicate with running process: %1")
+                   .arg(socket.errorString());
+    }
+    socket.abort();
+    return MOMultiProcess::DeliveryResult::Unavailable;
+  }
+  while (socket.bytesToWrite() > 0) {
+    if (!socket.waitForBytesWritten(timeoutMs)) {
+      if (error != nullptr) {
+        *error = QStringLiteral(
+                     "running process did not receive the complete command in time: %1")
+                     .arg(socket.errorString());
+      }
+      // Bytes still buffered in this process cannot complete the framed
+      // message after abort, so retrying cannot duplicate an admitted frame.
+      socket.abort();
+      return MOMultiProcess::DeliveryResult::Unavailable;
+    }
+  }
+
+  QByteArray reply;
+  const qsizetype replySize = multiprocess_ipc::acceptedReply().size();
+  while (reply.size() < replySize) {
+    if (socket.bytesAvailable() == 0 &&
+        !socket.waitForReadyRead(timeoutMs)) {
+      if (error != nullptr) {
+        *error =
+            QStringLiteral("running process did not acknowledge the command: %1")
+                .arg(socket.errorString());
+      }
+      socket.abort();
+      return MOMultiProcess::DeliveryResult::Indeterminate;
+    }
+    reply.append(socket.readAll());
+  }
+
+  const bool accepted = multiprocess_ipc::isAcceptedReply(reply);
+  const bool rejected = reply == multiprocess_ipc::rejectedReply();
+  socket.abort();
+  if (!accepted && error != nullptr) {
+    *error = rejected
+                 ? QStringLiteral("running process rejected the forwarded command")
+                 : QStringLiteral("running process returned an invalid acknowledgement");
+  }
+  if (accepted) {
+    return MOMultiProcess::DeliveryResult::Accepted;
+  }
+  return rejected ? MOMultiProcess::DeliveryResult::Rejected
+                  : MOMultiProcess::DeliveryResult::Indeterminate;
+}
+
 } // namespace
 
 MOMultiProcess::MOMultiProcess(bool allowMultiple, QObject *parent)
@@ -114,6 +208,59 @@ void MOMultiProcess::setMessageHandler(
 MOMultiProcess::Endpoint MOMultiProcess::defaultEndpoint() {
   return {QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation),
           QStringLiteral("fluorine-manager-%1").arg(::geteuid())};
+}
+
+MOMultiProcess::DeliveryResult
+MOMultiProcess::trySendToPrimary(const QString &message, QString *error) {
+  return trySendToPrimary(message, defaultEndpoint(), error);
+}
+
+MOMultiProcess::DeliveryResult
+MOMultiProcess::trySendToPrimary(const QString &message,
+                                 const Endpoint &endpoint, QString *error) {
+  if (error != nullptr) {
+    error->clear();
+  }
+  QString endpointError;
+  if (endpoint.directory.isEmpty() || endpoint.key.isEmpty() ||
+      endpoint.key.contains('/') ||
+      !ownedPrivateDirectory(endpoint.directory, &endpointError)) {
+    if (endpointError.isEmpty()) {
+      endpointError = QStringLiteral("invalid local IPC endpoint");
+    }
+    if (error != nullptr) {
+      *error = endpointError;
+    }
+    return DeliveryResult::Unavailable;
+  }
+
+  const QString serverPath =
+      QDir(endpoint.directory).filePath(endpoint.key + QStringLiteral(".sock"));
+  struct stat state{};
+  const QByteArray encoded = encodedPath(serverPath);
+  if (::lstat(encoded.constData(), &state) != 0) {
+    if (error != nullptr) {
+      *error = errno == ENOENT
+                   ? QStringLiteral("no running primary process is available")
+                   : QStringLiteral("cannot inspect primary IPC endpoint: %1")
+                         .arg(QString::fromLocal8Bit(std::strerror(errno)));
+    }
+    return DeliveryResult::Unavailable;
+  }
+  if (!S_ISSOCK(state.st_mode) || state.st_uid != ::geteuid() ||
+      (state.st_mode & 0077) != 0) {
+    if (error != nullptr) {
+      *error = QStringLiteral("refusing an unsafe primary IPC endpoint");
+    }
+    return DeliveryResult::Rejected;
+  }
+
+  return deliverMessage(serverPath, message, 1500, 1, error);
+}
+
+bool MOMultiProcess::mayHaveDelivered(DeliveryResult result) noexcept {
+  return result == DeliveryResult::Accepted ||
+         result == DeliveryResult::Indeterminate;
 }
 
 void MOMultiProcess::initialize(bool allowMultiple) {
@@ -246,52 +393,16 @@ bool MOMultiProcess::sendMessage(const QString &message) {
     return false;
   }
 
-  const QByteArray frame = multiprocess_ipc::encodeMessage(message);
-  if (frame.isEmpty()) {
-    reportError(tr("refusing to forward an empty or oversized command"));
-    return false;
+  QString error;
+  const DeliveryResult result =
+      deliverMessage(m_ServerPath, message, ConnectionTimeoutMs, 2, &error);
+  if (result == DeliveryResult::Indeterminate) {
+    MOBase::log::warn(
+        "forwarded command was fully sent but not acknowledged; not retrying");
+  } else if (result != DeliveryResult::Accepted) {
+    reportError(tr("failed to forward command: %1").arg(error));
   }
-
-  QLocalSocket socket;
-  bool connected = false;
-  for (int i = 0; i < 2 && !connected; ++i) {
-    if (i > 0) {
-      QThread::msleep(250);
-    }
-    socket.connectToServer(m_ServerPath, QIODevice::ReadWrite);
-    connected = socket.waitForConnected(ConnectionTimeoutMs);
-  }
-
-  if (!connected || !sameUserPeer(socket)) {
-    reportError(tr("failed to connect securely to running process: %1")
-                    .arg(socket.errorString()));
-    return false;
-  }
-
-  if (socket.write(frame) != frame.size() ||
-      !socket.waitForBytesWritten(ConnectionTimeoutMs)) {
-    reportError(tr("failed to communicate with running process: %1")
-                    .arg(socket.errorString()));
-    return false;
-  }
-
-  QByteArray reply;
-  while (reply.size() < multiprocess_ipc::acceptedReply().size()) {
-    if (socket.bytesAvailable() == 0 &&
-        !socket.waitForReadyRead(ConnectionTimeoutMs)) {
-      reportError(tr("running process did not accept the forwarded command: %1")
-                      .arg(socket.errorString()));
-      return false;
-    }
-    reply.append(socket.readAll());
-  }
-
-  const bool accepted = multiprocess_ipc::isAcceptedReply(reply);
-  socket.abort();
-  if (!accepted) {
-    reportError(tr("running process rejected the forwarded command"));
-  }
-  return accepted;
+  return mayHaveDelivered(result);
 }
 
 void MOMultiProcess::acceptConnections() {

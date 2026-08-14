@@ -557,6 +557,7 @@ public slots:
   void modStatusChanged(unsigned int index);
   void modStatusChanged(QList<unsigned int> index);
   void requestDownload(const QUrl& url, QNetworkReply* reply);
+  void downloadRequestedExternalLink(const QString& url);
   void downloadRequestedNXM(const QString& url);
 
   void userInterfaceInitialized();

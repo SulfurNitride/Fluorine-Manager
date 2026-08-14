@@ -28,6 +28,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "multiprocess.h"
 #include "nexusinterface.h"
 #include "nxmaccessmanager.h"
+#include "nxmrequest.h"
 #include "organizercore.h"
 #include "sanitychecks.h"
 #include "settings.h"
@@ -667,9 +668,13 @@ bool MOApplication::enqueueExternalMessage(const QString& message)
     return false;
   }
 
-  const auto scope = isNxmLink(message)
-                         ? ExternalMessageQueue::Scope::AnyGeneration
-                         : ExternalMessageQueue::Scope::CurrentGeneration;
+  const bool nxmMessage = isNxmLink(message);
+  if (nxmMessage && !NxmRequest::parse(message)) {
+    log::warn("rejecting malformed external download link");
+    return false;
+  }
+  const auto scope = nxmMessage ? ExternalMessageQueue::Scope::AnyGeneration
+                                : ExternalMessageQueue::Scope::CurrentGeneration;
   if (!m_externalMessages.enqueue(message, scope)) {
     log::warn("rejecting external message: the application is not ready or its "
               "pending-message limit was reached");
@@ -763,9 +768,9 @@ void MOApplication::dispatchExternalMessage(const QString& message)
         // user was already warned
       }
     }
-  } else if (isNxmLink(message)) {
+  } else if (NxmRequest::parse(message)) {
     MessageDialog::showMessage(tr("Download started"), qApp->activeWindow(), false);
-    m_core->downloadRequestedNXM(message);
+    m_core->downloadRequestedExternalLink(message);
   } else {
     cl::CommandLine cl;
 

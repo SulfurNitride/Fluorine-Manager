@@ -24,6 +24,7 @@
 #include "modrepositoryfileinfo.h"
 #include "nexusinterface.h"
 #include "nxmaccessmanager.h"
+#include "nxmrequest.h"
 #include "plugincontainer.h"
 #include "previewdialog.h"
 #include "profile.h"
@@ -921,6 +922,24 @@ void OrganizerCore::downloadRequestedNXM(const QString& url)
   } else {
     m_DownloadManager.addNXMDownload(url);
   }
+}
+
+void OrganizerCore::downloadRequestedExternalLink(const QString& url)
+{
+  const auto request = NxmRequest::parse(url);
+  if (!request) {
+    log::warn("ignoring invalid external download link: {}", url);
+    return;
+  }
+
+  if (request->kind == NxmRequest::Kind::DirectDownload) {
+    log::debug("starting direct download from external link: {}",
+               request->target);
+    m_DownloadManager.startDownloadURLs(QStringList{request->target});
+    return;
+  }
+
+  downloadRequestedNXM(request->target);
 }
 
 void OrganizerCore::userInterfaceInitialized()
