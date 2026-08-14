@@ -18,6 +18,7 @@
  */
 
 #include "diagnosebasic.h"
+#include "recenterrorlog.h"
 
 #include <uibase/ifiletree.h>
 #include <uibase/imodinterface.h>
@@ -54,13 +55,13 @@ const unsigned int DiagnoseBasic::PROBLEM_NITPICKINSTALLED;
 const unsigned int DiagnoseBasic::PROBLEM_PROFILETWEAKS;
 const unsigned int DiagnoseBasic::PROBLEM_MISSINGMASTERS;
 const unsigned int DiagnoseBasic::PROBLEM_ALTERNATE;
-const unsigned int DiagnoseBasic::NUM_CONTEXT_ROWS;
 
 DiagnoseBasic::DiagnoseBasic() : m_MOInfo(nullptr) {}
 
 bool DiagnoseBasic::init(IOrganizer* moInfo)
 {
   m_MOInfo = moInfo;
+  m_LogPath = qApp->property("currentInterfaceLogPath").toString();
 
   m_MOInfo->modList()->onModStateChanged(
       [&](const std::map<QString, IModList::ModStates>& mods) {
@@ -118,7 +119,7 @@ QList<PluginSetting> DiagnoseBasic::settings() const
   return QList<PluginSetting>()
          << PluginSetting(
                 "check_errorlog",
-                tr("Warn when an error occurred last time an application was run"),
+                tr("Warn when the current Fluorine interface log reports an error"),
                 true)
          << PluginSetting("check_overwrite",
                           tr("Warn when there are files in the overwrite directory"),
@@ -150,51 +151,7 @@ QList<PluginSetting> DiagnoseBasic::settings() const
 
 bool DiagnoseBasic::errorReported() const
 {
-  QDir dir(qApp->property("dataPath").toString() + "/logs");
-  QFileInfoList files =
-      dir.entryInfoList(QStringList("ModOrganizer_??_??_??_??_??.log"), QDir::Files,
-                        QDir::Name | QDir::Reversed);
-
-  if (files.count() > 0) {
-    QString logFile = files.at(0).absoluteFilePath();
-    QFile file(logFile);
-    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-      char buffer[1024];
-      int line = 0;
-      qint64 lineLengths[NUM_CONTEXT_ROWS];
-      for (int i = 0; i < NUM_CONTEXT_ROWS; ++i) {
-        lineLengths[i] = 0;
-      }
-      while (!file.atEnd()) {
-        lineLengths[line % NUM_CONTEXT_ROWS] = file.readLine(buffer, 1024) + 1;
-        if (strncmp(buffer, "ERROR", 5) == 0) {
-          qint64 sumChars = 0;
-          for (int i = 0; i < NUM_CONTEXT_ROWS; ++i) {
-            sumChars += lineLengths[i];
-          }
-          file.seek(file.pos() - sumChars);
-          m_ErrorMessage = "";
-          for (int i = 0; i < 2 * NUM_CONTEXT_ROWS; ++i) {
-            file.readLine(buffer, 1024);
-            QString lineString = QString::fromUtf8(buffer);
-            if (lineString.startsWith("ERROR")) {
-              m_ErrorMessage += "<b>" + lineString + "</b>";
-            } else {
-              m_ErrorMessage += lineString;
-            }
-          }
-          return true;
-        }
-
-        // prevent this function from taking forever
-        if (line++ >= 50000) {
-          break;
-        }
-      }
-    }
-  }
-
-  return false;
+  return diagnose_basic::recentErrorContext(m_LogPath).has_value();
 }
 
 bool DiagnoseBasic::checkEmpty(QString const& path) const
@@ -694,7 +651,10 @@ QString DiagnoseBasic::fullDescription(unsigned int key) const
 {
   switch (key) {
   case PROBLEM_ERRORLOG:
-    return "<code>" + m_ErrorMessage.replace("\n", "<br>") + "</code>";
+    return "<code>" +
+           diagnose_basic::recentErrorContext(m_LogPath)
+               .value_or(tr("The current interface log is no longer available.")) +
+           "</code>";
   case PROBLEM_OVERWRITE:
     return tr(
         "There are currently files in your <span style=\"color: "

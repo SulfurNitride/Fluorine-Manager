@@ -505,7 +505,7 @@ class Cyberpunk2077Game(BasicGame):
                 ) = self._modlist_files.update_modlist("redmod")
                 modlist_param = f'-modlist="{modlist_path}"' if modlist else ""
                 args = f"{args[: m.start()]}{modlist_param}{args[m.end() :]}"
-                qInfo(f"Manual modlist deployment: replacing {m[0]}, new args = {args}")
+                qInfo("Manual modlist deployment: replaced the %modlist% placeholder")
                 self._check_redmod_result(
                     self._organizer.waitForApplication(
                         self._organizer.startApplication(app_path_str, [args], wd),

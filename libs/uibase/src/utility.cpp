@@ -485,7 +485,7 @@ namespace shell
 
   Result Open(const QUrl& url)
   {
-    log::debug("opening url '{}'", url.toString());
+    log::debug("opening url '{}'", log::safeUrlForLog(url));
 
     if (g_urlHandler.isEmpty()) {
       if (startDetachedHostProcess("xdg-open", {url.toString()})) {

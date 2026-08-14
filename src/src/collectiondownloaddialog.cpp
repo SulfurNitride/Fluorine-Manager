@@ -449,7 +449,8 @@ void CollectionDownloadDialog::loadThumbnails()
     }
     if (url.isEmpty()) continue;
 
-    MOBase::log::debug("[collections] thumbnail fetch: {}", url);
+    MOBase::log::debug("[collections] thumbnail fetch: {}",
+                       MOBase::log::safeUrlForLog(url));
 
     const QUrl qurl(url);
     QNetworkRequest req(qurl);
@@ -464,8 +465,8 @@ void CollectionDownloadDialog::loadThumbnails()
     connect(reply, &QNetworkReply::finished, this, [this, reply, slug]() {
       reply->deleteLater();
       if (reply->error() != QNetworkReply::NoError) {
-        MOBase::log::debug("[collections] thumbnail error ({}): {}",
-                           slug, reply->errorString());
+        MOBase::log::debug("[collections] thumbnail error ({}) network code {}",
+                           slug, reply->error());
         return;
       }
 
@@ -683,4 +684,3 @@ void CollectionDownloadDialog::onInstallFailed(QString reason)
   ui->openAfterCheck->setEnabled(false);
   setPage(PageDone);
 }
-

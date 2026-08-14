@@ -26,7 +26,6 @@
 
 #include "downloadmanager.h"
 #include "afterrunrefreshqueue.h"
-#include "envdump.h"
 #include "executableslist.h"
 #include "installationmanager.h"
 #include "modinfo.h"
@@ -433,18 +432,7 @@ public:
   void discardVFSStagingOnUnmount();
   void trackOverwriteMove(const QString& relativePath, const QString& modFolderPath);
 
-  void updateVFSParams(MOBase::log::Levels logLevel, env::CoreDumpTypes coreDumpType,
-                       const QString& coreDumpsPath, std::chrono::seconds spawnDelay,
-                       QString executableBlacklist, const QStringList& skipFileSuffixes,
-                       const QStringList& skipDirectories);
-
   void setLogLevel(MOBase::log::Levels level);
-
-  bool cycleDiagnostics();
-
-  static env::CoreDumpTypes getGlobalCoreDumpType();
-  static void setGlobalCoreDumpType(env::CoreDumpTypes type);
-  static std::wstring getGlobalCoreDumpPath();
 
   void showNotification(
       const QString& title, const QString& message,

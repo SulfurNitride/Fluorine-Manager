@@ -61,6 +61,13 @@ add_test(
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/test_cargo_license_collection.py
 )
+add_test(
+    NAME test_linux_crashdump
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_linux_crashdump.py
+            $<TARGET_FILE:organizer> ${CMAKE_SOURCE_DIR}
+)
+set_tests_properties(test_linux_crashdump PROPERTIES TIMEOUT 15)
 
 # ---------------------------------------------------------------------------
 # TES3 metadata and OpenMW Player stub parsing tests
@@ -910,6 +917,46 @@ add_test(NAME test_fluorineupdater COMMAND test_fluorineupdater)
 set_tests_properties(test_fluorineupdater PROPERTIES TIMEOUT 10)
 
 # ---------------------------------------------------------------------------
+# Secret-safe diagnostic logging and current interface-log diagnosis
+# ---------------------------------------------------------------------------
+add_executable(test_logredaction EXCLUDE_FROM_ALL
+    test_logredaction.cpp
+)
+set_target_properties(test_logredaction PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_link_libraries(test_logredaction PRIVATE
+    Qt6::Core
+    mo2::uibase
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_logredaction COMMAND test_logredaction)
+set_tests_properties(test_logredaction PROPERTIES TIMEOUT 10)
+
+add_executable(test_recenterrorlog EXCLUDE_FROM_ALL
+    test_recenterrorlog.cpp
+    ${CMAKE_SOURCE_DIR}/libs/diagnose_basic/src/recenterrorlog.cpp
+)
+set_target_properties(test_recenterrorlog PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_recenterrorlog PRIVATE
+    ${CMAKE_SOURCE_DIR}/libs/diagnose_basic/src
+)
+target_link_libraries(test_recenterrorlog PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_recenterrorlog COMMAND test_recenterrorlog)
+set_tests_properties(test_recenterrorlog PROPERTIES TIMEOUT 10)
+
+# ---------------------------------------------------------------------------
 # Serialized, recoverable bundle publication tests
 # ---------------------------------------------------------------------------
 add_test(NAME test_fluorine_publisher
@@ -923,7 +970,7 @@ set_tests_properties(test_fluorine_publisher PROPERTIES
 
 # Register a "fluorine-tests" umbrella target that builds every test exe.
 add_custom_target(fluorine-tests
-    DEPENDS test_esptk_tes3 test_bsatk_extraction
+    DEPENDS organizer test_esptk_tes3 test_bsatk_extraction
             test_plugincompatibility test_pluginregistrationpolicy
             test_settingsmigration test_processlifetime
             test_launchcoordination test_unixshutdown test_gamefeatureownership
@@ -942,4 +989,5 @@ add_custom_target(fluorine-tests
             test_stylesheetpath test_applicationappearance test_plugindatapath
             test_instancepathidentity test_legacyflatpakmigration
             test_commandlinearguments
-            test_nxmrequest test_fluorineupdater)
+            test_nxmrequest test_fluorineupdater
+            test_logredaction test_recenterrorlog)

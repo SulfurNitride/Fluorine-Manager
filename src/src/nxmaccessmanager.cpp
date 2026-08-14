@@ -294,8 +294,7 @@ void ValidationAttempt::onFinished()
 
   const auto doc       = QJsonDocument::fromJson(m_Reply->readAll());
   const auto headers   = m_Reply->rawHeaderPairs();
-  const auto httpError = m_Reply->errorString();
-
+  const auto httpError   = m_Reply->errorString();
   const QJsonObject data = doc.object();
 
   if (code != 200) {
@@ -402,8 +401,9 @@ void ValidationAttempt::onTimeout()
 void ValidationAttempt::setFailure(Result r, const QString& error)
 {
   if (r != Cancelled) {
-    // don't spam the log
-    log::error("nexus: {}", error);
+    // Preserve the detailed message for the UI without persisting a network
+    // backend string that may echo a capability-bearing request URL.
+    log::error("nexus: request validation failed");
   }
 
   cleanup();
@@ -771,15 +771,6 @@ NXMAccessManager::createRequest(QNetworkAccessManager::Operation operation,
     ;
   } else {
     return QNetworkAccessManager::createRequest(operation, request, device);
-  }
-}
-
-void NXMAccessManager::showCookies() const
-{
-  QUrl url(NexusV1BaseUrl + "/");
-  for (const QNetworkCookie& cookie : cookieJar()->cookiesForUrl(url)) {
-    log::debug("{} - {} (expires: {})", cookie.name().constData(),
-               cookie.value().constData(), cookie.expirationDate().toString());
   }
 }
 

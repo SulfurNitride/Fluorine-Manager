@@ -118,7 +118,8 @@ QByteArray httpGet(const QString& url, const SlrOperationTracker::Operation& ope
     outFile.close();
 
   if (operation.isCancellationRequested() || reply->error() != QNetworkReply::NoError) {
-    MOBase::log::warn("SLR download request failed: {} ({})", url, reply->errorString());
+    MOBase::log::warn("SLR download request {} failed with network error {}",
+                      MOBase::log::safeUrlForLog(url), reply->error());
     reply->deleteLater();
     if (!destFile.isEmpty())
       QFile::remove(destFile);

@@ -360,7 +360,8 @@ std::optional<int> CommandLine::runPostOrganizer(OrganizerCore& core)
       }
     }
   } else if (m_nxmLink) {
-    log::debug("starting download from command line: {}", *m_nxmLink);
+    log::debug("starting download from command line: {}",
+               log::safeUrlForLog(*m_nxmLink));
     core.downloadRequestedExternalLink(*m_nxmLink);
   } else if (m_executable) {
     const QString exeName = *m_executable;
@@ -682,6 +683,8 @@ po::options_description CrashDumpCommand::getVisibleOptions() const
 {
   po::options_description d;
 
+  // Retain the historical option so old shortcuts fail as an unsupported
+  // command instead of being reparsed as a bare executable invocation.
   d.add_options()("type", po::value<std::string>()->default_value("mini"),
                   "mini|data|full");
 
@@ -690,27 +693,17 @@ po::options_description CrashDumpCommand::getVisibleOptions() const
 
 Command::Meta CrashDumpCommand::meta() const
 {
-  return {"crashdump", "writes a crashdump for a running process of MO", "[options]",
-          ""};
+  return {"crashdump", "unsupported on Linux; use coredumpctl", "[options]", ""};
 }
 
 std::optional<int> CrashDumpCommand::runEarly()
 {
   env::Console const console;
-
-  const auto typeString = vm()["type"].as<std::string>();
-  const auto type       = env::coreDumpTypeFromString(typeString);
-
-  // dump
-  const auto b = env::coredumpOther(type);
-  if (!b) {
-    std::wcerr << L"\n>>>> a minidump file was not written\n\n";
-  }
-
-  std::wcerr << L"Press enter to continue...";
-  std::wcin.get();
-
-  return (b ? 0 : 1);
+  std::wcerr
+      << L"The 'crashdump' command is not supported on Linux. No process was "
+         L"signalled. Use 'coredumpctl list' and 'coredumpctl info' to inspect "
+         L"crashes collected by the host.\n";
+  return 1;
 }
 
 Command::Meta LaunchCommand::meta() const
@@ -954,7 +947,8 @@ std::optional<int> DownloadFileCommand::runPostOrganizer(OrganizerCore& core)
     source = QString::fromStdString(vm()["source"].as<std::string>());
   }
 
-  log::debug("starting direct download from command line: {}", url.toStdString());
+  log::debug("starting direct download from command line: {}",
+             log::safeUrlForLog(url));
   MessageDialog::showMessage(QObject::tr("Download started"), qApp->activeWindow(),
                              false);
   core.downloadManager()->startDownloadURLWithMeta(url, name, modName, version, source);

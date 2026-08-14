@@ -212,8 +212,6 @@ public:
   void setTokens(const NexusOAuthTokens& tokens);
   std::optional<NexusOAuthTokens> tokens() const;
 
-  void showCookies() const;
-
   void clearCookies();
 
   QString userAgent(const QString& subModule = QString()) const;

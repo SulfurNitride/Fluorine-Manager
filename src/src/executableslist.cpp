@@ -389,11 +389,11 @@ void ExecutablesList::dump() const
 
     log::debug(" . executable '{}'\n"
                "    binary: {}\n"
-               "    arguments: {}\n"
+               "    arguments: (redacted)\n"
                "    steam ID: {}\n"
                "    directory: {}\n"
                "    flags: {} ({})",
-               e.title(), e.binaryInfo().filePath(), e.arguments(), e.steamAppID(),
+               e.title(), e.binaryInfo().filePath(), e.steamAppID(),
                e.workingDirectory(), flags.join("|"), e.flags());
   }
 }

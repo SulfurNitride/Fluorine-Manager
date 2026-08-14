@@ -610,7 +610,7 @@ bool DownloadManager::addDownload(const QStringList& URLs, QString gameName, int
   }
 
   QUrl const preferredUrl = QUrl::fromEncoded(URLs.first().toLocal8Bit());
-  log::debug("selected download url: {}", preferredUrl.toString());
+  log::debug("selected download url: {}", log::safeUrlForLog(preferredUrl));
   QHttp2Configuration h2Conf;
   h2Conf.setSessionReceiveWindowSize(
       16777215);  // 16 MiB, based on Chrome and Firefox values
@@ -831,7 +831,7 @@ bool DownloadManager::startDownload(QNetworkReply* reply, DownloadInfo* newDownl
   if (!newDownload->m_Output.open(mode)) {
     logDownloadFileFailure("open", newDownload->m_Output);
     reportError(tr("failed to download %1: could not open output file %2: %3")
-                    .arg(startingReply->url().toString())
+                    .arg(log::safeUrlForLog(startingReply->url()))
                     .arg(newDownload->m_Output.fileName())
                     .arg(newDownload->m_Output.errorString()));
     if ((newDownload = reacquire()) == nullptr) {
@@ -1015,7 +1015,7 @@ void DownloadManager::addNXMDownload(const QString& url)
       break;
     }
   }
-  log::debug("add nxm download: {}", url);
+  log::debug("add nxm download: {}", log::safeUrlForLog(url));
   // The Nexus API game name to use for requests (may differ from foundGame's short name
   // for special domains like "site" that have no matching game plugin).
   QString apiGameName;
@@ -1370,7 +1370,7 @@ void DownloadManager::resumeDownloadInt(int index)
     if (info->m_State == STATE_ERROR) {
       info->m_CurrentUrl = (info->m_CurrentUrl + 1) % info->m_Urls.count();
     }
-    log::debug("request resume from url {}", info->currentURL());
+    log::debug("request resume from url {}", log::safeUrlForLog(info->currentURL()));
     QNetworkRequest request(QUrl::fromEncoded(info->currentURL().toLocal8Bit()));
     request.setHeader(QNetworkRequest::UserAgentHeader,
                       m_NexusInterface->getAccessManager()->userAgent());
@@ -2819,10 +2819,7 @@ void DownloadManager::downloadFinished(int index)
 void DownloadManager::downloadError(QNetworkReply::NetworkError error)
 {
   if (error != QNetworkReply::OperationCanceledError) {
-    QNetworkReply* reply = qobject_cast<QNetworkReply*>(sender());
-    log::warn("{} ({})",
-              reply != nullptr ? reply->errorString() : "Download error occured",
-              error);
+    log::warn("download failed with network error {}", error);
   }
 }
 

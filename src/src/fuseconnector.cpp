@@ -1789,15 +1789,6 @@ void FuseConnector::cleanupExternalMappings()
   m_externalDirs.clear();
 }
 
-void FuseConnector::updateParams(MOBase::log::Levels /*logLevel*/,
-                                 env::CoreDumpTypes /*coreDumpType*/,
-                                 const QString& /*crashDumpsPath*/,
-                                 std::chrono::seconds /*spawnDelay*/,
-                                 QString /*executableBlacklist*/,
-                                 const QStringList& /*skipFileSuffixes*/,
-                                 const QStringList& /*skipDirectories*/)
-{}
-
 void FuseConnector::updateForcedLibraries(
     const QList<MOBase::ExecutableForcedLoadSetting>& /*forced*/)
 {}

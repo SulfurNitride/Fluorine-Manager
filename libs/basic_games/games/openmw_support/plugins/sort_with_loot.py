@@ -1318,7 +1318,7 @@ class OpenMWSortWithLoot(mobase.IPluginTool, mobase.IPlugin):
             _DEFAULT_MASTERLIST_SHA256 if url == _DEFAULT_MASTERLIST_URL else None
         )
         if expected_sha256 is None:
-            qWarning(f"OpenMW LOOT: using unpinned advanced masterlist URL: {url}")
+            qWarning("OpenMW LOOT: using an unpinned advanced masterlist URL")
         try:
             cache_dir = Path(self._organizer.pluginDataPath()) / "openmw_loot"
             cache_dir.mkdir(parents=True, exist_ok=True)

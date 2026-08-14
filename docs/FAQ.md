@@ -6,6 +6,11 @@ For a portable instance that is `<instance>/logs`; global instances live below
 `~/.local/share/fluorine`. Prefix setup and dependency-installer diagnostics are
 stored separately in `~/.local/share/fluorine/logs`.
 
+Fluorine does not create or manage Linux crash dumps. If the host enables
+systemd-coredump, use `coredumpctl list` and `coredumpctl info` to inspect its
+records. Exported core files can contain the process's full memory, including
+private account or download data, so review and handle them as sensitive files.
+
 ## Does Removing an Instance Delete My Files?
 
 **Remove from list** does not delete instance content. It unregisters a portable

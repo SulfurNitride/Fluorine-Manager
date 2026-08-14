@@ -209,7 +209,7 @@ void BrowserDialog::unsupportedContent(QNetworkReply* reply)
 
 void BrowserDialog::downloadRequested(const QNetworkRequest& request)
 {
-  log::error("download request {} ignored", request.url().toString());
+  log::error("download request {} ignored", log::safeUrlForLog(request.url()));
 }
 
 void BrowserDialog::tabCloseRequested(int index)

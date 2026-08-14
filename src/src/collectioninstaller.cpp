@@ -171,7 +171,7 @@ void CollectionInstaller::downloadMod(int idx)
 
   // Direct URL download (non-Nexus sources: Google Drive, MediaFire, etc.).
   if (src.type == QLatin1String("direct") && !src.url.isEmpty()) {
-    emit log("  Direct download: " + src.url);
+    emit log("  Direct download: " + MOBase::log::safeUrlForLog(src.url));
     emit modStatus(idx, ModInstallResult::Downloading, {});
 
     QNetworkRequest req(QUrl(src.url));
@@ -184,7 +184,8 @@ void CollectionInstaller::downloadMod(int idx)
         m_results[idx].status = ModInstallResult::Failed;
         m_results[idx].error  = reply->errorString();
         emit modStatus(idx, ModInstallResult::Failed, reply->errorString());
-        emit log("  FAILED: " + reply->errorString());
+        emit log("  FAILED with network error " +
+                 QString::number(reply->error()));
         ++m_currentIdx;
         installNext();
         return;
@@ -250,7 +251,8 @@ void CollectionInstaller::downloadMod(int idx)
         m_results[idx].status = ModInstallResult::Failed;
         m_results[idx].error  = reply->errorString();
         emit modStatus(idx, ModInstallResult::Failed, reply->errorString());
-        emit log("  FAILED resolving download link: " + reply->errorString());
+        emit log("  FAILED resolving download link (network error " +
+                 QString::number(reply->error()) + ")");
         ++m_currentIdx;
         installNext();
         return;
@@ -297,7 +299,8 @@ void CollectionInstaller::downloadFromCdnUrl(int idx, const QString& cdnUrl)
       m_results[idx].status = ModInstallResult::Failed;
       m_results[idx].error  = reply->errorString();
       emit modStatus(idx, ModInstallResult::Failed, reply->errorString());
-      emit log("  FAILED downloading: " + reply->errorString());
+      emit log("  FAILED downloading (network error " +
+               QString::number(reply->error()) + ")");
       ++m_currentIdx;
       installNext();
       return;

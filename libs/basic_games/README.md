@@ -87,7 +87,7 @@ You can rename `modorganizer-basic_games-xxx` to whatever you want (e.g., `basic
 You can create a plugin by providing a python class in the `games` folder.
 
 **Note:** If your game plugin does not load properly, you should set the log level
-to debug and look at the `mo_interface.log` file.
+to debug and inspect the latest `logs/mo_interface_*.log` file.
 
 You need to create a class that inherits `BasicGame` and put it in a `game_XX.py` in `games`.
 Below is an example for The Witcher 3 (see also [games/game_witcher3.py](games/game_witcher3.py)):

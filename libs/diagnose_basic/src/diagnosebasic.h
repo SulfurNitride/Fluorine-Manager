@@ -77,8 +77,6 @@ private:
   static const unsigned int PROBLEM_MISSINGMASTERS   = 8;
   static const unsigned int PROBLEM_ALTERNATE        = 9;
 
-  static const unsigned int NUM_CONTEXT_ROWS = 5;
-
   static const QRegularExpression RE_LOG_FILE;
 
 private:
@@ -133,7 +131,7 @@ private:
 
 private:
   MOBase::IOrganizer* m_MOInfo;
-  mutable QString m_ErrorMessage;
+  QString m_LogPath;
   mutable QString m_NewestModlistBackup;
   mutable std::set<QString> m_MissingMasters;
   mutable std::map<QString, std::set<QString>> m_PluginChildren;

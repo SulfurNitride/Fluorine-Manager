@@ -13,7 +13,6 @@ public:
 
 private:
   void setLogLevel();
-  void setCrashDumpTypesBox();
 };
 
 #endif  // SETTINGSDIALOGDIAGNOSTICS_H

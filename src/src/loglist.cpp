@@ -420,6 +420,7 @@ bool setLogDirectory(const QString& dir)
   }
 
   log::getDefault().setFile(MOBase::log::File::single(logFile.toStdWString()));
+  qApp->setProperty("currentInterfaceLogPath", logFile);
 
   return true;
 }

@@ -138,8 +138,8 @@ void TutorialControl::startTutorial(const QString& tutorial)
     m_TutorialView->show();
     m_TutorialView->raise();
     if (!QMetaObject::invokeMethod(m_TutorialView->rootObject(), "init")) {
-      reportError(tr(
-          "Tutorial failed to start, please check \"mo_interface.log\" for details."));
+      reportError(tr("Tutorial failed to start. Check the latest interface log in "
+                     "the instance's logs folder for details."));
       m_TutorialView->close();
     }
   }

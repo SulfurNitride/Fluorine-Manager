@@ -236,8 +236,6 @@ private:
 
   void setCategoryListVisible(bool visible);
 
-  static bool errorReported(QString& logFile);
-
   static void setupNetworkProxy(bool activate);
   void activateProxy(bool activate);
 

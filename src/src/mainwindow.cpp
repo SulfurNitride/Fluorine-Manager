@@ -1119,37 +1119,6 @@ void MainWindow::updateProblemsButton()
   }
 }
 
-bool MainWindow::errorReported(QString& logFile)
-{
-  QDir const dir(qApp->property("dataPath").toString() + "/" +
-           QString::fromStdWString(AppConfig::logPath()));
-  QFileInfoList const files =
-      dir.entryInfoList(QStringList("ModOrganizer_??_??_??_??_??.log"), QDir::Files,
-                        QDir::Name | QDir::Reversed);
-
-  if (files.count() > 0) {
-    logFile = files.at(0).absoluteFilePath();
-    QFile file(logFile);
-    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-      char buffer[1024];
-      int line = 0;
-      while (!file.atEnd()) {
-        file.readLine(buffer, 1024);
-        if (strncmp(buffer, "ERROR", 5) == 0) {
-          return true;
-        }
-
-        // prevent this function from taking forever
-        if (line++ >= 50000) {
-          break;
-        }
-      }
-    }
-  }
-
-  return false;
-}
-
 QFuture<void> MainWindow::checkForProblemsAsync()
 {
   return QtConcurrent::run([this]() {
@@ -3321,7 +3290,6 @@ void MainWindow::on_actionSettings_triggered()
   const bool oldCheckForUpdates = settings.checkForUpdates();
   const bool oldOfflineMode     = settings.network().offlineMode();
   const QString oldUpdateChannel = settings.fluorineUpdateChannel();
-  const int oldMaxDumps         = settings.diagnostics().maxCoreDumps();
 
   const auto rollbackSettingsEdit = [&](const QString& context) {
     std::vector<bool> changedPluginStates;
@@ -3585,10 +3553,6 @@ void MainWindow::on_actionSettings_triggered()
   m_DownloadsTab->update();
 
   m_OrganizerCore.setLogLevel(settings.diagnostics().logLevel());
-
-  if (settings.diagnostics().maxCoreDumps() != oldMaxDumps) {
-    m_OrganizerCore.cycleDiagnostics();
-  }
 
   toggleMO2EndorseState();
 
@@ -4517,8 +4481,9 @@ void MainWindow::nxmRequestFailed(QString gameName, int modID, int,
       m_CategoryMigrationRequestId = -1;
       m_CategoryMigrationRequestGeneration = 0;
       m_HideCategoryReminderAfterImport = false;
-      log::warn("category migration import failed and remains pending: {}",
-                errorString);
+      log::warn("category migration import failed with network error {} and remains "
+                "pending",
+                errorCode);
     } else {
       log::debug("ignored failure from stale category migration request {}",
                  requestID);

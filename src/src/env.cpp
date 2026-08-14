@@ -1,5 +1,4 @@
 #include "env.h"
-#include "envdump.h"
 #include "envmetrics.h"
 #include "envmodule.h"
 #include "envsecurity.h"
@@ -18,12 +17,10 @@
 #include <QTimeZone>
 
 #include <climits>
-#include <csignal>
 #include <cstdlib>
 #include <cstring>
 #include <cerrno>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <unistd.h>
 
@@ -417,118 +414,6 @@ std::filesystem::path thisProcessPath()
 
   buf[len] = '\0';
   return std::filesystem::path(buf);
-}
-
-pid_t findOtherPid()
-{
-  std::clog << "looking for the other process...\n";
-
-  const pid_t thisPid = ::getpid();
-  std::clog << "this process id is " << thisPid << "\n";
-
-  const std::string targetName = "ModOrganizer";
-
-  for (const auto& entry : std::filesystem::directory_iterator("/proc")) {
-    if (!entry.is_directory()) {
-      continue;
-    }
-
-    const auto pidStr = entry.path().filename().string();
-
-    bool isNumber = true;
-    for (char const c : pidStr) {
-      if (!std::isdigit(static_cast<unsigned char>(c))) {
-        isNumber = false;
-        break;
-      }
-    }
-    if (!isNumber) {
-      continue;
-    }
-
-    pid_t const pid = std::stoi(pidStr);
-    if (pid == thisPid) {
-      continue;
-    }
-
-    std::ifstream commFile(entry.path() / "comm");
-    if (!commFile.is_open()) {
-      continue;
-    }
-
-    std::string comm;
-    std::getline(commFile, comm);
-
-    if (comm == targetName) {
-      std::clog << "found other process with pid " << pid << "\n";
-      return pid;
-    }
-  }
-
-  std::clog << "no process with this filename\n";
-  return 0;
-}
-
-CoreDumpTypes coreDumpTypeFromString(const std::string& s)
-{
-  if (s == "data")
-    return env::CoreDumpTypes::Data;
-  else if (s == "full")
-    return env::CoreDumpTypes::Full;
-  else
-    return env::CoreDumpTypes::Mini;
-}
-
-std::string toString(CoreDumpTypes type)
-{
-  switch (type) {
-  case CoreDumpTypes::Mini:
-    return "mini";
-
-  case CoreDumpTypes::Data:
-    return "data";
-
-  case CoreDumpTypes::Full:
-    return "full";
-
-  default:
-    return "?";
-  }
-}
-
-bool coredump(const char* dir, CoreDumpTypes type)
-{
-  std::clog << "coredump requested (type: " << toString(type) << ")\n";
-
-  if (dir) {
-    std::clog << "dump directory: " << dir << "\n";
-  }
-
-  // On Linux, abort() generates a core dump if ulimit -c allows it.
-  std::clog << "calling abort() to generate core dump\n";
-  std::abort();
-}
-
-bool coredumpOther(CoreDumpTypes type)
-{
-  std::clog << "creating core dump for a running process\n";
-
-  const auto pid = findOtherPid();
-  if (pid == 0) {
-    std::cerr << "no other process found\n";
-    return false;
-  }
-
-  std::clog << "found other process with pid " << pid << "\n";
-
-  if (::kill(pid, SIGABRT) != 0) {
-    std::cerr << "failed to send SIGABRT to process " << pid << ": "
-              << strerror(errno) << "\n";
-    return false;
-  }
-
-  std::clog << "sent SIGABRT to process " << pid << "\n";
-  return true;
 }
 
 }  // namespace env

@@ -1,7 +1,6 @@
 #ifndef FUSECONNECTOR_H
 #define FUSECONNECTOR_H
 
-#include "envdump.h"
 #include "vfs/mo2filesystem.h"
 #include "vfs/stagingpromotion.h"
 #include "vfs/trackedwrites.h"
@@ -68,10 +67,6 @@ public:
   void flushStagingLive();
 
   void updateMapping(const MappingType& mapping);
-  void updateParams(MOBase::log::Levels logLevel, env::CoreDumpTypes coreDumpType,
-                    const QString& crashDumpsPath, std::chrono::seconds spawnDelay,
-                    QString executableBlacklist, const QStringList& skipFileSuffixes,
-                    const QStringList& skipDirectories);
   void updateForcedLibraries(
       const QList<MOBase::ExecutableForcedLoadSetting>& forced);
 

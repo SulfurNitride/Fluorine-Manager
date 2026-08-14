@@ -66,14 +66,14 @@ QString makeDetails(const SpawnParameters& sp, int code, const QString& more = {
 
   return QString("Error %1%2: %3\n"
                  " . binary: '%4'\n"
-                 " . arguments: '%5'\n"
+                 " . arguments: %5 value(s) (redacted)\n"
                  " . cwd: '%6'%7\n"
                  " . stdout: %8, stderr: %9, hooked: %10")
       .arg(code)
       .arg(more.isEmpty() ? more : ", " + more)
       .arg(QString::fromUtf8(strerror(code)))
       .arg(sp.binary.absoluteFilePath())
-      .arg(sp.arguments)
+      .arg(sp.argumentList.size())
       .arg(sp.currentDirectory.absolutePath())
       .arg(cwdExists ? "" : " (not found)")
       .arg(sp.stdOut == -1 ? "no" : "yes")
@@ -171,21 +171,19 @@ QMessageBox::StandardButton confirmBlacklisted(QWidget* parent,
 namespace spawn
 {
 
-void logSpawning(const SpawnParameters& sp, const QString& realCmd)
+void logSpawning(const SpawnParameters& sp)
 {
   log::debug("spawning binary:\n"
              " . exe: '{}'\n"
-             " . args: '{}'\n"
+             " . args: {} value(s) (redacted)\n"
              " . cwd: '{}'\n"
              " . steam id: '{}'\n"
              " . hooked: {}\n"
              " . stdout: {}\n"
-             " . stderr: {}\n"
-             " . real cmd: '{}'",
-             sp.binary.absoluteFilePath(), sp.arguments,
+             " . stderr: {}",
+             sp.binary.absoluteFilePath(), sp.argumentList.size(),
              sp.currentDirectory.absolutePath(), sp.steamAppID, sp.hooked,
-             (sp.stdOut == -1 ? "no" : "yes"), (sp.stdErr == -1 ? "no" : "yes"),
-             realCmd);
+             (sp.stdOut == -1 ? "no" : "yes"), (sp.stdErr == -1 ? "no" : "yes"));
 }
 
 uint32_t parseSteamAppId(const QString& steamAppId)
@@ -403,7 +401,7 @@ int spawn(const SpawnParameters& sp,
     cwd = QFileInfo(bin).absolutePath();
   }
 
-  logSpawning(sp, bin + " " + sp.arguments);
+  logSpawning(sp);
 
   uint32_t steamAppId = parseSteamAppId(sp.steamAppID);
   ProtonLauncher launcher;

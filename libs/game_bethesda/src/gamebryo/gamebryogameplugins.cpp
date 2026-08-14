@@ -130,8 +130,8 @@ void GamebryoGamePlugins::writeList(const IPluginList* pluginList,
   if (invalidFileNames) {
     reportError(QObject::tr("Some of your plugins have invalid names! These "
                             "plugins can not be loaded by the game. Please see "
-                            "mo_interface.log for a list of affected plugins "
-                            "and rename them."));
+                            "the latest interface log in the instance's logs folder "
+                            "for a list of affected plugins and rename them."));
   }
 
   if (writtenCount == 0) {

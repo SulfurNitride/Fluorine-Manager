@@ -1,4 +1,5 @@
 #include "github.h"
+#include <uibase/log.h>
 #include <QEventLoop>
 #include <QJsonDocument>
 #include <QNetworkRequest>
@@ -167,8 +168,8 @@ void GitHub::onError(const Request& req, QNetworkReply::NetworkError error)
   // already logs a message
   if (error != QNetworkReply::OperationCanceledError) {
     qCritical().noquote().nospace()
-        << "Github: request for " << req.reply->url().toString() << " failed, "
-        << req.reply->errorString() << " (" << error << ")";
+        << "Github: request for " << MOBase::log::safeUrlForLog(req.reply->url())
+        << " failed with network error " << error;
   }
 
   req.timer->stop();
@@ -185,7 +186,8 @@ void GitHub::onError(const Request& req, QNetworkReply::NetworkError error)
 void GitHub::onTimeout(const Request& req)
 {
   qCritical().noquote().nospace()
-      << "Github: request for " << req.reply->url().toString() << " timed out";
+      << "Github: request for " << MOBase::log::safeUrlForLog(req.reply->url())
+      << " timed out";
 
   // don't delete the reply, abort will fire the error() handler above
   req.reply->abort();

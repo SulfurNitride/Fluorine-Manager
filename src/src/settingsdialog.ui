@@ -2061,7 +2061,7 @@ If you disable this feature, MO will only display official DLCs this way. Please
        <item>
         <widget class="QGroupBox" name="groupBox_4">
          <property name="title">
-          <string>Logs and Crashes</string>
+          <string>Logs</string>
          </property>
          <layout class="QFormLayout" name="formLayout_4">
           <property name="fieldGrowthPolicy">
@@ -2077,55 +2077,12 @@ If you disable this feature, MO will only display official DLCs this way. Please
           <item row="0" column="1">
            <widget class="QComboBox" name="logLevelBox">
             <property name="toolTip">
-             <string>Decides the amount of data printed to &quot;ModOrganizer.log&quot;</string>
+             <string>Decides the amount of data printed to the current mo_interface log.</string>
             </property>
             <property name="whatsThis">
              <string>
-                                    Decides the amount of data printed to &quot;ModOrganizer.log&quot;.
+                                    Decides the amount of data printed to the current mo_interface log.
                                     &quot;Debug&quot; produces very useful information for finding problems. There is usually no noteworthy performance impact but the file may become rather large. If this is a problem you may prefer the &quot;Info&quot; level for regular use. On the &quot;Error&quot; level the log file usually remains empty.
-                                </string>
-            </property>
-           </widget>
-          </item>
-          <item row="1" column="0">
-           <widget class="QLabel" name="label_27">
-            <property name="text">
-             <string>Crash Dumps</string>
-            </property>
-           </widget>
-          </item>
-          <item row="1" column="1">
-           <widget class="QComboBox" name="dumpsTypeBox">
-            <property name="toolTip">
-             <string>Decides which type of crash dumps are collected when injected processes crash.</string>
-            </property>
-            <property name="whatsThis">
-             <string>
-                                    Decides which type of crash dumps are collected when injected processes crash.
-                                    &quot;None&quot; Disables the generation of crash dumps by MO.
-                                    &quot;Mini&quot; Default level which generates small dumps (only stack traces).
-                                    &quot;Data&quot; Much larger dumps with additional information which may be need (also data segments).
-                                    &quot;Full&quot; Even larger dumps with a full memory dump of the process.
-                                </string>
-            </property>
-           </widget>
-          </item>
-          <item row="2" column="0">
-           <widget class="QLabel" name="label_28">
-            <property name="text">
-             <string>Max Dumps To Keep</string>
-            </property>
-           </widget>
-          </item>
-          <item row="2" column="1">
-           <widget class="QSpinBox" name="dumpsMaxEdit">
-            <property name="toolTip">
-             <string>Maximum number of crash dumps to keep on disk. Use 0 for unlimited.</string>
-            </property>
-            <property name="whatsThis">
-             <string>
-                                    Maximum number of crash dumps to keep on disk. Use 0 for unlimited.
-                                    Set &quot;Crash Dumps&quot; above to None to disable crash dump collection.
                                 </string>
             </property>
            </widget>
@@ -2140,10 +2097,9 @@ If you disable this feature, MO will only display official DLCs this way. Please
          </property>
          <property name="text">
           <string>
-                            Logs and crash dumps are stored under your current instance in the &lt;a href=&quot;LOGS_FULL_PATH&quot;&gt;LOGS_DIR&lt;/a&gt;
-                            and &lt;a href=&quot;DUMPS_FULL_PATH&quot;&gt;DUMPS_DIR&lt;/a&gt; folders.
-                            Sending logs and/or crash dumps to the developers can help investigate issues.
-                            It is recommended to compress large log and dmp files before sending.
+                            Session logs are stored under your current instance in the &lt;a href=&quot;LOGS_FULL_PATH&quot;&gt;LOGS_DIR&lt;/a&gt; folder.
+                            Linux crash records, when enabled by the host, are managed externally; use &lt;code&gt;coredumpctl list&lt;/code&gt; and &lt;code&gt;coredumpctl info&lt;/code&gt; to inspect them.
+                            Review logs for private information before sharing them.
                         </string>
          </property>
          <property name="wordWrap">

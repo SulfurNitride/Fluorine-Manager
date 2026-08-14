@@ -461,8 +461,9 @@ void wrapInTerminal(QString& program, QStringList& arguments)
     termArgs << "-e" << "bash" << "-c" << innerCmd;
   }
 
-  MOBase::log::info("Launching in terminal: {} {}", term,
-                     termArgs.join(' '));
+  MOBase::log::info(
+      "Launching in terminal: {} with {} argument(s) (values redacted)", term,
+      termArgs.size());
   program   = term;
   arguments = termArgs;
 }
@@ -1067,8 +1068,8 @@ bool ProtonLauncher::launchWithProton(
   }
 
   MOBase::log::info("Proton launch: '{}' run '{}'", protonScript, m_binary);
-  MOBase::log::info("Final command: '{}' {}", program,
-      arguments.join(" ").toStdString());
+  MOBase::log::info("Final command: '{}' with {} argument(s) (values redacted)",
+                    program, arguments.size());
 
   if (!m_workingDir.isEmpty()) {
     env.insert("PWD", m_workingDir);

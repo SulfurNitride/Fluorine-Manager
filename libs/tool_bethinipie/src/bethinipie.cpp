@@ -209,8 +209,9 @@ bool BethiniPie::ensureUpToDate() const
 
   if (!reply->isFinished() || reply->error() != QNetworkReply::NoError) {
     // Network error -- if we have a cached version, use it
-    QString err =
-        reply->isFinished() ? reply->errorString() : "request timed out";
+    QString err = reply->isFinished()
+                      ? QStringLiteral("network error %1").arg(reply->error())
+                      : QStringLiteral("request timed out");
     log::warn("BethINI Pie: failed to check for updates: {}", err);
     reply->deleteLater();
 
@@ -266,7 +267,8 @@ bool BethiniPie::ensureUpToDate() const
   }
 
   // Download with progress dialog
-  log::info("BethINI Pie: downloading update from {}", downloadUrl);
+  log::info("BethINI Pie: downloading update from {}",
+            log::safeUrlForLog(downloadUrl));
 
   QProgressDialog progress(tr("Downloading BethINI Pie..."), tr("Cancel"), 0, 100,
                            parentWidget());
@@ -295,7 +297,8 @@ bool BethiniPie::ensureUpToDate() const
   dlLoop.exec();
 
   if (dlReply->error() != QNetworkReply::NoError) {
-    log::error("BethINI Pie: download failed: {}", dlReply->errorString());
+    log::error("BethINI Pie: download failed with network error {}",
+               dlReply->error());
     dlReply->deleteLater();
     progress.close();
     return QFile::exists(executablePath());

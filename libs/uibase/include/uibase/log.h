@@ -8,6 +8,7 @@
 #include <QSize>
 #include <QString>
 #include <QStringView>
+#include <QUrl>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -29,6 +30,13 @@ class sink;
 
 namespace MOBase::log
 {
+
+// Returns a diagnostic-only summary of an external URL. Capability-bearing
+// components (userinfo, HTTP(S)/modl paths, unrecognized NXM paths, query, and
+// fragment) are never included. Invalid and unsupported URLs fail closed
+// rather than echoing the input into logs.
+QDLLEXPORT QString safeUrlForLog(const QUrl& url);
+QDLLEXPORT QString safeUrlForLog(const QString& url);
 
 enum Levels
 {

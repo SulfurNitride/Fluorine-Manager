@@ -20,7 +20,6 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #ifndef SETTINGS_H
 #define SETTINGS_H
 
-#include "envdump.h"
 #include "nexuscredentialstate.h"
 #include "nexusoauthtokens.h"
 #include "settingswritebarrier.h"
@@ -735,16 +734,6 @@ public:
   //
   MOBase::log::Levels logLevel() const;
   void setLogLevel(MOBase::log::Levels level);
-
-  // crash dump type for both MO and usvfs
-  //
-  env::CoreDumpTypes coreDumpType() const;
-  void setCoreDumpType(env::CoreDumpTypes type);
-
-  // maximum number of dump files keps, for both MO and usvfs
-  //
-  int maxCoreDumps() const;
-  void setMaxCoreDumps(int n);
 
   std::chrono::seconds spawnDelay() const;
   void setSpawnDelay(std::chrono::seconds t);

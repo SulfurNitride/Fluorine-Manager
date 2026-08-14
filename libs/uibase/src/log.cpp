@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <locale>
+#include <QRegularExpression>
 
 #ifdef _MSC_VER
 #pragma warning(push)
@@ -32,6 +33,59 @@ namespace MOBase::log
 
 namespace fs = std::filesystem;
 static std::unique_ptr<Logger> g_default;
+
+QString safeUrlForLog(const QUrl& url)
+{
+  if (!url.isValid() || url.isRelative()) {
+    return QStringLiteral("<redacted URL>");
+  }
+
+  const QString scheme = url.scheme().toLower();
+  if (scheme != QStringLiteral("http") && scheme != QStringLiteral("https") &&
+      scheme != QStringLiteral("nxm") && scheme != QStringLiteral("modl")) {
+    return QStringLiteral("<redacted URL>");
+  }
+
+  const QString host = url.host(QUrl::FullyEncoded);
+  if (host.isEmpty()) {
+    return QStringLiteral("<%1 URL redacted>").arg(scheme);
+  }
+
+  QString summary = scheme + QStringLiteral("://") + host;
+  if (url.port() >= 0) {
+    summary += QStringLiteral(":") + QString::number(url.port());
+  }
+
+  // Exact NXM repository file paths are useful identifiers and are not
+  // capabilities. Every modl path and every other NXM/HTTP(S) path can carry
+  // opaque tokens and therefore remains hidden.
+  if (scheme == QStringLiteral("nxm")) {
+    static const QRegularExpression repositoryPath(
+        QStringLiteral(R"(^/mods/([1-9][0-9]*)/files/([1-9][0-9]*)/?$)"));
+    const QString encodedPath = url.path(QUrl::FullyEncoded);
+    const auto match          = repositoryPath.match(encodedPath);
+    bool modIdValid           = false;
+    bool fileIdValid          = false;
+    const int modId           = match.captured(1).toInt(&modIdValid);
+    const int fileId          = match.captured(2).toInt(&fileIdValid);
+    if (match.hasMatch() && modIdValid && fileIdValid && modId > 0 && fileId > 0) {
+      summary += encodedPath;
+    } else if (!encodedPath.isEmpty() && encodedPath != QStringLiteral("/")) {
+      summary += QStringLiteral("/<redacted>");
+    }
+  } else if (scheme == QStringLiteral("modl") &&
+             !url.path(QUrl::FullyEncoded).isEmpty() &&
+             url.path(QUrl::FullyEncoded) != QStringLiteral("/")) {
+    summary += QStringLiteral("/<redacted>");
+  }
+
+  return summary;
+}
+
+QString safeUrlForLog(const QString& url)
+{
+  return safeUrlForLog(QUrl(url, QUrl::StrictMode));
+}
 
 spdlog::level::level_enum toSpdlog(Levels lv)
 {

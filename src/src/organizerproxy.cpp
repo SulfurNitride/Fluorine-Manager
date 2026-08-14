@@ -344,12 +344,12 @@ HANDLE OrganizerProxy::startApplication(const QString& exe, const QStringList& a
   runMutationIfAllowed([&] {
     log::debug("a plugin has requested to start an application:\n"
                " . executable: '{}'\n"
-               " . args: '{}'\n"
+               " . args: {} value(s) (redacted)\n"
                " . cwd: '{}'\n"
                " . profile: '{}'\n"
                " . overwrite: '{}'\n"
                " . ignore overwrite: {}",
-               exe, args.join(" "), cwd, profile, overwrite, ignoreOverwrite);
+               exe, args.size(), cwd, profile, overwrite, ignoreOverwrite);
 
     auto runner = m_Proxied->processRunner();
 

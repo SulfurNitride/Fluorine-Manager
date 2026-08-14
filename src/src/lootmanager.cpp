@@ -71,8 +71,8 @@ QByteArray httpGet(const QString& url, const int* cancelFlag,
   if (outFile.isOpen()) outFile.close();
 
   if (reply->error() != QNetworkReply::NoError) {
-    MOBase::log::warn("LOOT download request failed: {} ({})", url,
-                      reply->errorString());
+    MOBase::log::warn("LOOT download request {} failed with network error {}",
+                      MOBase::log::safeUrlForLog(url), reply->error());
     reply->deleteLater();
     if (!destFile.isEmpty()) QFile::remove(destFile);
     return {};

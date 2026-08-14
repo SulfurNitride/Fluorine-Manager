@@ -335,7 +335,8 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
     return 1;
   }
 
-  log::debug("command line: '{}'", QCoreApplication::arguments().join(' '));
+  log::debug("command line received ({} argument(s), values redacted)",
+             QCoreApplication::arguments().size() - 1);
 
 #ifndef GITID
 #define GITID "unknown"
@@ -384,8 +385,6 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
   if (!setStyleFile(m_settings->interface().styleName().value_or(""))) {
     m_settings->interface().setStyleName("");
   }
-
-  OrganizerCore::setGlobalCoreDumpType(m_settings->diagnostics().coreDumpType());
 
   tt.start("MOApplication::doOneRun() log and checks");
 

@@ -112,8 +112,6 @@
 using namespace MOShared;
 using namespace MOBase;
 
-static env::CoreDumpTypes g_coreDumpType = env::CoreDumpTypes::Mini;
-
 namespace
 {
 std::atomic<bool> s_slrUpdateCheckInProgress{false};
@@ -927,7 +925,7 @@ void OrganizerCore::startMOUpdate()
 
 void OrganizerCore::downloadRequestedNXM(const QString& url)
 {
-  log::debug("download requested: {}", url);
+  log::debug("download requested: {}", log::safeUrlForLog(url));
   if (nexusApi()) {
     m_PendingDownloads.append(url);
   } else {
@@ -939,13 +937,13 @@ void OrganizerCore::downloadRequestedExternalLink(const QString& url)
 {
   const auto request = NxmRequest::parse(url);
   if (!request) {
-    log::warn("ignoring invalid external download link: {}", url);
+    log::warn("ignoring invalid external download link: {}", log::safeUrlForLog(url));
     return;
   }
 
   if (request->kind == NxmRequest::Kind::DirectDownload) {
     log::debug("starting direct download from external link: {}",
-               request->target);
+               log::safeUrlForLog(request->target));
     m_DownloadManager.startDownloadURLs(QStringList{request->target});
     return;
   }
@@ -1044,8 +1042,7 @@ bool OrganizerCore::checkPathSymlinks()
 bool OrganizerCore::bootstrap()
 {
   const auto dirs = {m_Settings.paths().profiles(), m_Settings.paths().mods(),
-                     m_Settings.paths().downloads(), m_Settings.paths().overwrite(),
-                     QString::fromStdWString(getGlobalCoreDumpPath())};
+                     m_Settings.paths().downloads(), m_Settings.paths().overwrite()};
 
   for (auto&& dir : dirs) {
     if (!createDirectory(dir)) {
@@ -1055,20 +1052,6 @@ bool OrganizerCore::bootstrap()
 
   if (!checkPathSymlinks()) {
     return false;
-  }
-
-  if (!cycleDiagnostics()) {
-    return false;
-  }
-
-  // log if there are any dmp files
-  const auto hasCrashDumps = !QDir(QString::fromStdWString(getGlobalCoreDumpPath()))
-                                  .entryList({"*.dmp"}, QDir::Files)
-                                  .empty();
-
-  if (hasCrashDumps) {
-    log::debug("there are crash dumps in '{}'",
-               QString::fromStdWString(getGlobalCoreDumpPath()));
   }
 
   return true;
@@ -1367,65 +1350,10 @@ void OrganizerCore::discardVFSStagingOnUnmount()
   m_USVFS.discardStagingOnUnmount();
 }
 
-void OrganizerCore::updateVFSParams(log::Levels logLevel,
-                                    env::CoreDumpTypes coreDumpType,
-                                    const QString& crashDumpsPath,
-                                    std::chrono::seconds spawnDelay,
-                                    QString executableBlacklist,
-                                    const QStringList& skipFileSuffixes,
-                                    const QStringList& skipDirectories)
-{
-  setGlobalCoreDumpType(coreDumpType);
-
-  m_USVFS.updateParams(logLevel, coreDumpType, crashDumpsPath, spawnDelay,
-                       executableBlacklist, skipFileSuffixes, skipDirectories);
-}
-
 void OrganizerCore::setLogLevel(log::Levels level)
 {
   m_Settings.diagnostics().setLogLevel(level);
-
-  updateVFSParams(
-      m_Settings.diagnostics().logLevel(), m_Settings.diagnostics().coreDumpType(),
-      QString::fromStdWString(getGlobalCoreDumpPath()),
-      m_Settings.diagnostics().spawnDelay(), m_Settings.executablesBlacklist(),
-      m_Settings.skipFileSuffixes(), m_Settings.skipDirectories());
-
   log::getDefault().setLevel(m_Settings.diagnostics().logLevel());
-}
-
-bool OrganizerCore::cycleDiagnostics()
-{
-  const auto maxDumps = settings().diagnostics().maxCoreDumps();
-  const auto path     = QString::fromStdWString(getGlobalCoreDumpPath());
-
-  if (maxDumps > 0) {
-    removeOldFiles(path, "*.dmp", maxDumps, QDir::Time | QDir::Reversed);
-  }
-
-  return true;
-}
-
-env::CoreDumpTypes OrganizerCore::getGlobalCoreDumpType()
-{
-  return g_coreDumpType;
-}
-
-void OrganizerCore::setGlobalCoreDumpType(env::CoreDumpTypes type)
-{
-  g_coreDumpType = type;
-}
-
-std::wstring OrganizerCore::getGlobalCoreDumpPath()
-{
-  if (qApp) {
-    const auto dp = qApp->property("dataPath");
-    if (!dp.isNull()) {
-      return dp.toString().toStdWString() + L"/" + AppConfig::dumpsDir();
-    }
-  }
-
-  return {};
 }
 
 void OrganizerCore::setCurrentProfile(const QString& profileName)
@@ -4327,7 +4255,6 @@ void OrganizerCore::startAfterRunRefreshBatch(
     refreshESPList(true);
     savePluginList();
   }
-  cycleDiagnostics();
 }
 
 void OrganizerCore::completeAfterRunRefresh(std::uint64_t generation)

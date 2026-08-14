@@ -2411,7 +2411,8 @@ void NexusSettings::dump()
 
   QSettings handler(R"(HKEY_CURRENT_USER\Software\Classes\nxm\)",
                     QSettings::NativeFormat);
-  log::debug(" . primary: {}", handler.value("shell/open/command/Default").toString());
+  log::debug(" . primary handler configured: {}",
+             !handler.value("shell/open/command/Default").toString().isEmpty());
 
   const auto noregister = getOptional<bool>(s, "General", "noregister");
 
@@ -2431,7 +2432,9 @@ void NexusSettings::dump()
     log::debug(" . handler:");
     log::debug("    . games:      {}", games.toString());
     log::debug("    . executable: {}", executable.toString());
-    log::debug("    . arguments:  {}", arguments.toString());
+    log::debug("    . arguments:  {}", arguments.toString().isEmpty()
+                                                 ? "(none)"
+                                                 : "(redacted)");
   });
 }
 
@@ -2745,27 +2748,6 @@ log::Levels DiagnosticsSettings::logLevel() const
 void DiagnosticsSettings::setLogLevel(log::Levels level)
 {
   set(m_Settings, "Settings", "log_level", level);
-}
-
-env::CoreDumpTypes DiagnosticsSettings::coreDumpType() const
-{
-  return get<env::CoreDumpTypes>(m_Settings, "Settings", "crash_dumps_type",
-                                 env::CoreDumpTypes::Mini);
-}
-
-void DiagnosticsSettings::setCoreDumpType(env::CoreDumpTypes type)
-{
-  set(m_Settings, "Settings", "crash_dumps_type", type);
-}
-
-int DiagnosticsSettings::maxCoreDumps() const
-{
-  return get<int>(m_Settings, "Settings", "crash_dumps_max", 5);
-}
-
-void DiagnosticsSettings::setMaxCoreDumps(int n)
-{
-  set(m_Settings, "Settings", "crash_dumps_max", n);
 }
 
 std::chrono::seconds DiagnosticsSettings::spawnDelay() const

@@ -2322,7 +2322,8 @@ bool PrefixSetupRunner::downloadFile(const QString& url, const QString& destPath
     } else if (writeFailed) {
       emit logMessage(QStringLiteral("Failed while writing: %1").arg(destPath));
     } else {
-      emit logMessage(QStringLiteral("Download failed: %1").arg(reply->errorString()));
+      emit logMessage(
+          QStringLiteral("Download failed with network error %1").arg(reply->error()));
     }
     file.cancelWriting();
     reply->deleteLater();
