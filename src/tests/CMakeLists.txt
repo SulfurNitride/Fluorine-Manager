@@ -796,6 +796,29 @@ target_link_libraries(test_instancepathidentity PRIVATE
 add_test(NAME test_instancepathidentity COMMAND test_instancepathidentity)
 
 # ---------------------------------------------------------------------------
+# Restartable migration from historical Flatpak layouts
+# ---------------------------------------------------------------------------
+add_executable(test_legacyflatpakmigration EXCLUDE_FROM_ALL
+    test_legacyflatpakmigration.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/legacyflatpakmigration.cpp
+)
+set_target_properties(test_legacyflatpakmigration PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_legacyflatpakmigration PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_legacyflatpakmigration PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_legacyflatpakmigration COMMAND test_legacyflatpakmigration)
+set_tests_properties(test_legacyflatpakmigration PROPERTIES TIMEOUT 10)
+
+# ---------------------------------------------------------------------------
 # Lossless Unix argv decoding and structured command forwarding
 # ---------------------------------------------------------------------------
 add_executable(test_commandlinearguments EXCLUDE_FROM_ALL
@@ -897,5 +920,6 @@ add_custom_target(fluorine-tests
             test_vfs_catalog test_vfs_index
             test_staging_promotion test_python_module_switch
             test_stylesheetpath test_applicationappearance test_plugindatapath
-            test_instancepathidentity test_commandlinearguments
+            test_instancepathidentity test_legacyflatpakmigration
+            test_commandlinearguments
             test_nxmrequest test_fluorineupdater)

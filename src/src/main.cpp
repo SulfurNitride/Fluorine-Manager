@@ -3,6 +3,7 @@
 #include "env.h"
 #include "fluorinepaths.h"
 #include "instancemanager.h"
+#include "legacyflatpakmigration.h"
 #include "loglist.h"
 #include "moapplication.h"
 #include "multiprocess.h"
@@ -167,8 +168,17 @@ int runApplication(int argc, char* argv[], const QStringList& arguments,
     return termination.exitCode();
   }
 
-  fluorineMigrateDataDir();
-
+  const auto migration =
+      LegacyFlatpakMigration::migrate(LegacyFlatpakMigration::defaultPaths());
+  for (const QString& diagnostic : migration.diagnostics) {
+    std::fprintf(stderr, "[fluorine] Flatpak migration: %s\n",
+                 diagnostic.toUtf8().constData());
+  }
+  if (!migration.attentionReport.isEmpty()) {
+    std::fprintf(stderr,
+                 "[fluorine] Flatpak migration requires attention; details: %s\n",
+                 migration.attentionReport.toUtf8().constData());
+  }
   initLogging();
 
   // must be after logging
@@ -228,6 +238,36 @@ int runApplication(int argc, char* argv[], const QStringList& arguments,
     requestTermination();
     return termination.exitCode();
   };
+
+  if (auto r = terminationExit()) {
+    return *r;
+  }
+  if (migration.status == LegacyFlatpakMigration::Status::Attention ||
+      migration.status == LegacyFlatpakMigration::Status::Failed ||
+      !migration.diagnostics.isEmpty() ||
+      !migration.attentionReport.isEmpty()) {
+    QString details = migration.diagnostics.join(QStringLiteral("\n\n"));
+    if (!migration.attentionReport.isEmpty()) {
+      details += QStringLiteral("\n\nDetails were saved to:\n%1")
+                     .arg(migration.attentionReport);
+    }
+    if (migration.status == LegacyFlatpakMigration::Status::Failed) {
+      QMessageBox::critical(
+          nullptr, QObject::tr("Flatpak data migration blocked"),
+          QObject::tr("Fluorine cannot safely finish importing legacy Flatpak "
+                      "data. No ambiguous data was overwritten.\n\n%1")
+              .arg(details));
+      return termination.requested() ? termination.exitCode() : 1;
+    }
+    QMessageBox::warning(
+        nullptr, QObject::tr("Legacy Flatpak data retained"),
+        QObject::tr("Fluorine preserved legacy data that needs attention. The "
+                    "native installation can continue.\n\n%1")
+            .arg(details));
+    if (auto r = terminationExit()) {
+      return *r;
+    }
+  }
 
   if (auto r = cl.runPostApplication(app)) {
     return *r;

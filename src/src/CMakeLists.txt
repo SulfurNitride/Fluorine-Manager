@@ -72,6 +72,7 @@ list(APPEND ORGANIZER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/externalmessagequeue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fluorineconfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fluorinepaths.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/legacyflatpakmigration.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/instancepathidentity.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lootmanager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/multiprocessprotocol.cpp
@@ -88,6 +89,7 @@ list(APPEND ORGANIZER_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/externalmessagequeue.h
     ${CMAKE_CURRENT_SOURCE_DIR}/fluorineconfig.h
     ${CMAKE_CURRENT_SOURCE_DIR}/fluorinepaths.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/legacyflatpakmigration.h
     ${CMAKE_CURRENT_SOURCE_DIR}/instancepathidentity.h
     ${CMAKE_CURRENT_SOURCE_DIR}/lootmanager.h
     ${CMAKE_CURRENT_SOURCE_DIR}/multiprocessprotocol.h

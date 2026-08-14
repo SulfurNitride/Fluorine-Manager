@@ -10,8 +10,4 @@ QString fluorineDataDir();
 /// Created on demand by the cache writer.
 QString fluorineVfsCacheDir();
 
-/// One-time migration from ~/.var/app/com.fluorine.manager/ to
-/// ~/.local/share/fluorine/. Call before initLogging().
-void fluorineMigrateDataDir();
-
 #endif  // FLUORINEPATHS_H
