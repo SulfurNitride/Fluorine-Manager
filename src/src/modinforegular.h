@@ -180,6 +180,7 @@ public:
   void setRepository(const QString& repository) override
   {
     m_Repository = repository;
+    m_MetaInfoChanged = true;
   }
 
   /**
@@ -431,7 +432,8 @@ public:
    * @brief stores meta information back to disk
    */
   void saveMeta() override;
-  void suppressWritesForFailedRollback() override;
+  bool flushMetaForTransaction(QString& error) override;
+  void retireMetadataWriter() override;
 
   void readMeta() override;
 
@@ -487,6 +489,12 @@ private:
   QString m_Repository;
   QString m_CustomURL;
   bool m_HasCustomURL;
+  bool m_WritesSuppressed{false};
+#ifdef Q_OS_LINUX
+  quint64 m_PathDevice{0};
+  quint64 m_PathInode{0};
+  bool m_PathIdentityCaptured{false};
+#endif
 
   // Game name for the mod, can be different from the actual game running in MO2
   // e.g., for Skyrim / Skyrim SE.

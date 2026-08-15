@@ -18,7 +18,7 @@
 #include "iuserinterface.h"
 #include "launchlifecycle.h"
 #include "messagedialog.h"
-#include "metainiutils.h"
+#include "modinstallationtransaction.h"
 #include "modlistsortproxy.h"
 #include "modrepositoryfileinfo.h"
 #include "nexusinterface.h"
@@ -635,6 +635,15 @@ OrganizerCore::OrganizerCore(Settings& settings)
 
   m_InstallationManager.setModsDirectory(m_Settings.paths().mods());
   m_InstallationManager.setDownloadDirectory(m_Settings.paths().downloads());
+  m_InstallationManager.setCustomInstallerLifecycle(
+      [this](QString& error) { return beginCustomInstaller(error); },
+      [this](bool success, const QString& repository,
+             QString& replacedInstallationFile, bool& filesystemChanged,
+             QString& error) {
+        return finishCustomInstaller(success, repository,
+                                     replacedInstallationFile,
+                                     filesystemChanged, error);
+      });
 
   connect(&m_DownloadManager, SIGNAL(downloadSpeed(QString, int)), this,
           SLOT(downloadSpeed(QString, int)));
@@ -1618,37 +1627,233 @@ MOBase::IPluginGame* OrganizerCore::getGame(const QString& name) const
   return nullptr;
 }
 
+bool OrganizerCore::beginCustomInstaller(QString& error)
+{
+  if (m_CustomInstallerActive) {
+    error = tr("Another custom mod installation is already active.");
+    return false;
+  }
+  clearCustomInstallationState();
+  m_CustomInstallerActive = true;
+  return true;
+}
+
+void OrganizerCore::clearCustomInstallationState(bool keepLifecycleActive)
+{
+  m_CustomInstallationTransaction.reset();
+  m_CustomInstallationMod.reset();
+  m_CustomPreviousMod.reset();
+  m_CustomReplacedInstallationFile.clear();
+  m_CustomBackupRequested = false;
+  m_CustomInstallerActive = keepLifecycleActive;
+}
+
+bool OrganizerCore::finishCustomInstaller(bool success, const QString& repository,
+                                           QString& replacedInstallationFile,
+                                           bool& filesystemChanged,
+                                           QString& error)
+{
+  replacedInstallationFile.clear();
+  filesystemChanged = false;
+  if (!m_CustomInstallerActive) {
+    return true;
+  }
+  if (!m_CustomInstallationTransaction) {
+    clearCustomInstallationState();
+    return true;
+  }
+
+  if (!success) {
+    ModInfo::forget(m_CustomInstallationMod);
+    clearCustomInstallationState();
+    return true;
+  }
+
+  QString stagedMetaPath;
+  if (!ModInstallationTransaction::prepareStagedMetadata(
+          m_CustomInstallationTransaction->stagePath(), stagedMetaPath, error)) {
+    ModInfo::forget(m_CustomInstallationMod);
+    clearCustomInstallationState();
+    return false;
+  }
+  if (m_CustomInstallationMod) {
+    if (!repository.isEmpty()) {
+      m_CustomInstallationMod->setRepository(repository);
+    }
+    if (!m_CustomInstallationMod->flushMetaForTransaction(error)) {
+      ModInfo::forget(m_CustomInstallationMod);
+      clearCustomInstallationState();
+      return false;
+    }
+  }
+  {
+    QSettings stagedSettings(stagedMetaPath, QSettings::IniFormat);
+    stagedSettings.sync();
+    if (stagedSettings.status() != QSettings::NoError ||
+        (!repository.isEmpty() &&
+         stagedSettings.value(QStringLiteral("repository")).toString() !=
+             repository)) {
+      error = tr("Could not durably publish custom installer metadata: %1")
+                  .arg(stagedMetaPath);
+      ModInfo::forget(m_CustomInstallationMod);
+      clearCustomInstallationState();
+      return false;
+    }
+  }
+
+  ModInfo::forget(m_CustomInstallationMod);
+  m_CustomInstallationMod.reset();
+
+  if (m_CustomPreviousMod &&
+      !m_CustomPreviousMod->flushMetaForTransaction(error)) {
+    clearCustomInstallationState();
+    return false;
+  }
+
+  if (m_CustomBackupRequested) {
+    const QString backupDirectory = InstallationManager::generateBackupName(
+        m_CustomInstallationTransaction->targetPath());
+    if (backupDirectory.isEmpty() ||
+        !copyDir(m_CustomInstallationTransaction->targetPath(), backupDirectory,
+                 false)) {
+      error = tr("Failed to create a complete backup before publishing the mod.");
+      clearCustomInstallationState();
+      return false;
+    }
+  }
+
+  const auto publication = m_CustomInstallationTransaction->publish();
+  filesystemChanged = publication.filesystemChanged();
+  if (publication.status !=
+      ModInstallationTransaction::PublishStatus::Failure) {
+    if (m_CustomPreviousMod) {
+      m_CustomPreviousMod->retireMetadataWriter();
+    }
+  }
+  if (!publication) {
+    error = publication.error;
+    if (!publication.residue.isEmpty()) {
+      log::error("custom mod publication retained a recovery generation at {}",
+                 publication.residue);
+    }
+    clearCustomInstallationState();
+    updateModInfoFromDisc();
+    return false;
+  }
+  if (!publication.error.isEmpty()) {
+    log::warn("custom mod publication committed with a durability warning: {}",
+              publication.error);
+  }
+  if (!publication.residue.isEmpty()) {
+    log::warn("custom mod publication left an old generation at {}",
+              publication.residue);
+  }
+
+  replacedInstallationFile = m_CustomReplacedInstallationFile;
+  clearCustomInstallationState();
+  updateModInfoFromDisc();
+  return true;
+}
+
 MOBase::IModInterface* OrganizerCore::createMod(GuessedValue<QString>& name)
 {
-  auto result = m_InstallationManager.testOverwrite(name);
-  if (!result) {
+  const bool standalone = !m_CustomInstallerActive;
+  if (standalone) {
+    QString lifecycleError;
+    if (!beginCustomInstaller(lifecycleError)) {
+      reportError(lifecycleError);
+      return nullptr;
+    }
+  } else if (m_CustomInstallationTransaction) {
+    reportError(tr("A custom installer may create only one mod per installation."));
     return nullptr;
   }
 
   m_InstallationManager.setModsDirectory(m_Settings.paths().mods());
+  auto result = m_InstallationManager.testOverwrite(name);
+  if (!result) {
+    clearCustomInstallationState(!standalone);
+    return nullptr;
+  }
 
-  QString const targetDirectory =
-      QDir::fromNativeSeparators(m_Settings.paths().mods()).append("/").append(name);
+  QString transactionError;
+  const auto mode = result.replaced()
+                        ? ModInstallationTransaction::Mode::Replace
+                        : (result.merged()
+                               ? ModInstallationTransaction::Mode::Merge
+                               : ModInstallationTransaction::Mode::New);
+  if (mode != ModInstallationTransaction::Mode::New) {
+    const unsigned int idx = ModInfo::getIndex(name);
+    if (idx != UINT_MAX) {
+      const ModInfo::Ptr liveMod = ModInfo::getByIndex(idx);
+      QString flushError;
+      if (!liveMod->flushMetaForTransaction(flushError)) {
+        reportError(flushError);
+        clearCustomInstallationState(!standalone);
+        return nullptr;
+      }
+      m_CustomPreviousMod = liveMod;
+      if (result.replaced()) {
+        m_CustomReplacedInstallationFile = liveMod->installationFile();
+      }
+    }
+  }
+  m_CustomInstallationTransaction = ModInstallationTransaction::begin(
+      m_Settings.paths().mods(), name, mode, transactionError,
+      result.targetGeneration());
+  if (!m_CustomInstallationTransaction) {
+    reportError(transactionError);
+    clearCustomInstallationState(!standalone);
+    return nullptr;
+  }
+
+  m_CustomBackupRequested = result.backupRequested();
+
+  const QString targetDirectory = m_CustomInstallationTransaction->stagePath();
 
   const QString metaPath = targetDirectory + "/meta.ini";
-  MetaIniUtils::normalizeMetaIniCase(metaPath);
-  QSettings settingsFile(metaPath, QSettings::IniFormat);
-
-  if (!result.merged()) {
-    settingsFile.setValue("modid", 0);
-    settingsFile.setValue("version", "");
-    settingsFile.setValue("newestVersion", "");
-    settingsFile.setValue("category", 0);
-    settingsFile.setValue("installationFile", "");
+  if (mode != ModInstallationTransaction::Mode::Merge) {
+    QSettings settingsFile(metaPath, QSettings::IniFormat);
+    if (mode == ModInstallationTransaction::Mode::New) {
+      settingsFile.setValue("modid", 0);
+      settingsFile.setValue("version", "");
+      settingsFile.setValue("newestVersion", "");
+      settingsFile.setValue("category", 0);
+      settingsFile.setValue("installationFile", "");
+    }
 
     settingsFile.remove("installedFiles");
     settingsFile.beginWriteArray("installedFiles", 0);
     settingsFile.endArray();
+    settingsFile.sync();
+    if (settingsFile.status() != QSettings::NoError) {
+      reportError(tr("Could not initialize staged mod metadata: %1").arg(metaPath));
+      clearCustomInstallationState(!standalone);
+      return nullptr;
+    }
   }
 
-  // shouldn't this use the existing mod in case of a merge? also, this does not
-  // refresh the indices in the ModInfo structure
-  return ModInfo::createFrom(QDir(targetDirectory), *this).data();
+  m_CustomInstallationMod = ModInfo::createFrom(QDir(targetDirectory), *this);
+  if (!standalone) {
+    return m_CustomInstallationMod.data();
+  }
+
+  QString replacedInstallationFile;
+  QString publicationError;
+  bool filesystemChanged = false;
+  if (!finishCustomInstaller(true, {}, replacedInstallationFile,
+                             filesystemChanged, publicationError)) {
+    reportError(publicationError);
+    if (filesystemChanged) {
+      refresh(false);
+    }
+    return nullptr;
+  }
+  if (!replacedInstallationFile.isEmpty()) {
+    m_InstallationManager.notifyModReplaced(replacedInstallationFile);
+  }
+  const unsigned int idx = ModInfo::getIndex(name);
+  return idx == UINT_MAX ? nullptr : ModInfo::getByIndex(idx).data();
 }
 
 void OrganizerCore::modDataChanged(MOBase::IModInterface*)
@@ -1791,6 +1996,11 @@ OrganizerCore::doInstall(const QString& archivePath, GuessedValue<QString> modNa
     emit modInstalled(modName);
     return {modIndex, modInfo};
   } else {
+    if (result.filesystemChanged()) {
+      log::error("mod installation publication was uncertain; refreshing the mod "
+                 "inventory before continuing");
+      refresh(false);
+    }
     if (result.result() == MOBase::IPluginInstaller::RESULT_CATEGORYREQUESTED) {
       CategoriesDialog dialog(qApp->activeWindow());
 
@@ -1806,11 +2016,7 @@ OrganizerCore::doInstall(const QString& archivePath, GuessedValue<QString> modNa
             qApp->activeWindow(), tr("Extraction cancelled"),
             tr("The installation was cancelled while extracting files. "
                "If this was prior to a FOMOD setup, this warning may be "
-               "ignored. "
-               "However, if this was during installation, the mod will likely "
-               "be "
-               "missing "
-               "files."),
+               "ignored. No staged mod changes were published."),
             QMessageBox::Ok);
         refresh();
       }

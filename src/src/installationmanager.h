@@ -31,6 +31,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <QProgressDialog>
 
 #include <map>
+#include <functional>
 #include <memory>
 #include <set>
 
@@ -53,10 +54,13 @@ public:
   //
   QString name() const { return m_name; }
   bool backupCreated() const { return m_backup; }
+  bool backupRequested() const { return m_backupRequested; }
   bool merged() const { return m_merged; }
   bool replaced() const { return m_replaced; }
   bool hasIniTweaks() const { return m_iniTweaks; }
   bool mergedOrReplaced() const { return merged() || replaced(); }
+  QString targetGeneration() const { return m_targetGeneration; }
+  bool filesystemChanged() const { return m_filesystemChanged; }
 
   // check if the installation was a success
   //
@@ -75,11 +79,14 @@ private:
   MOBase::IPluginInstaller::EInstallResult m_result;
 
   QString m_name;
+  QString m_targetGeneration;
 
   bool m_iniTweaks{false};
   bool m_backup{false};
+  bool m_backupRequested{false};
   bool m_merged{false};
   bool m_replaced{false};
+  bool m_filesystemChanged{false};
 };
 
 class InstallationManager : public QObject, public MOBase::IInstallationManager
@@ -132,6 +139,13 @@ public:
    *
    */
   void setPluginContainer(const PluginContainer* pluginContainer);
+
+  using CustomInstallerBegin = std::function<bool(QString&)>;
+  using CustomInstallerFinish =
+      std::function<bool(bool, const QString&, QString&, bool&, QString&)>;
+  void setCustomInstallerLifecycle(CustomInstallerBegin begin,
+                                   CustomInstallerFinish finish);
+  void notifyModReplaced(const QString& fileName) { emit modReplaced(fileName); }
 
   /**
    * @brief update the directory where downloads are stored
@@ -349,6 +363,8 @@ private:
   const PluginContainer* m_PluginContainer;
 
   bool m_IsRunning{false};
+  int m_InstallDepth{0};
+  bool m_NestedFilesystemChanged{false};
 
   QWidget* m_ParentWidget{nullptr};
 
@@ -365,6 +381,8 @@ private:
   std::map<std::shared_ptr<const MOBase::FileTreeEntry>, QString> m_CreatedFiles;
   std::set<QString> m_TempFilesToDelete;
   std::unique_ptr<QTemporaryDir> m_TempExtractionDirectory;
+  CustomInstallerBegin m_CustomInstallerBegin;
+  CustomInstallerFinish m_CustomInstallerFinish;
 };
 
 #endif  // INSTALLATIONMANAGER_H

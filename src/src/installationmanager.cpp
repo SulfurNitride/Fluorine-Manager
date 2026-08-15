@@ -17,7 +17,10 @@ You should have received a copy of the GNU General Public License
 along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#include <algorithm>
+#include <limits>
 #include <tuple>
+#include <utility>
 
 #include "installationmanager.h"
 
@@ -27,6 +30,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "iplugininstallersimple.h"
 #include "messagedialog.h"
 #include "metainiutils.h"
+#include "modinstallationtransaction.h"
 #include "modinfo.h"
 #include "nexusinterface.h"
 #include "queryoverwritedialog.h"
@@ -47,6 +51,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <QLibrary>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QTextDocument>
@@ -74,12 +79,73 @@ QString storeMetaPath(const QString& value)
 
   return QDir::fromNativeSeparators(value);
 }
+
+bool copyCreatedFileToStage(
+    const std::shared_ptr<const MOBase::FileTreeEntry>& entry,
+    const QString& source, const QString& stageRoot, QString& error)
+{
+  QString relative = entry->path("/").replace('\\', '/');
+  const QStringList components = relative.split('/', Qt::KeepEmptyParts);
+  if (relative.isEmpty() || QDir::isAbsolutePath(relative) ||
+      MOBase::isWindowsDrivePath(relative) || relative.contains(QChar::Null) ||
+      std::any_of(components.cbegin(), components.cend(), [](const QString& component) {
+        return component.isEmpty() || component == QStringLiteral(".") ||
+               component == QStringLiteral("..");
+      })) {
+    error = QObject::tr("Installer generated an unsafe output path: %1").arg(relative);
+    return false;
+  }
+
+  const QFileInfo sourceInfo(source);
+  if (!sourceInfo.exists() || !sourceInfo.isFile() || sourceInfo.isSymLink()) {
+    error = QObject::tr("Installer-generated source is not an ordinary file: %1")
+                .arg(source);
+    return false;
+  }
+
+  QString destination;
+  if (!ModInstallationTransaction::prepareStagedFile(
+          stageRoot, components.join('/'), true, destination, error)) {
+    return false;
+  }
+  const QString fromRoot = QDir(stageRoot).relativeFilePath(destination);
+  if (fromRoot.isEmpty() || fromRoot == QStringLiteral("..") ||
+      fromRoot.startsWith(QStringLiteral("../")) || QDir::isAbsolutePath(fromRoot)) {
+    error = QObject::tr("Installer-generated output escapes the mod stage: %1")
+                .arg(relative);
+    return false;
+  }
+
+  const QFileInfo destinationInfo(destination);
+  if (destinationInfo.exists() || destinationInfo.isSymLink()) {
+    if (!destinationInfo.isFile() || destinationInfo.isSymLink() ||
+        !QFile::remove(destination)) {
+      error = QObject::tr("Could not replace staged installer output: %1")
+                  .arg(destination);
+      return false;
+    }
+  }
+
+  if (!QFile::copy(source, destination)) {
+    error = QObject::tr("Could not copy installer output to the mod stage: %1")
+                .arg(destination);
+    return false;
+  }
+  return true;
+}
 }  // namespace
 
 InstallationResult::InstallationResult(IPluginInstaller::EInstallResult result)
     : m_result(result)
 
 {}
+
+void InstallationManager::setCustomInstallerLifecycle(
+    CustomInstallerBegin begin, CustomInstallerFinish finish)
+{
+  m_CustomInstallerBegin  = std::move(begin);
+  m_CustomInstallerFinish = std::move(finish);
+}
 
 template <typename T>
 static T resolveFunction(QLibrary& lib, const char* name)
@@ -385,33 +451,56 @@ InstallationManager::installArchive(GuessedValue<QString>& modName,
   // don't know why I did this and it causes a problem if this is called by the bundle
   // installer and the bundled installer adds additional names that then end up being
   // used, because the caller will then not have the right name.
-  return install(archiveName, modName, modId).result();
+  const InstallationResult nested = install(archiveName, modName, modId);
+  m_NestedFilesystemChanged =
+      m_NestedFilesystemChanged || nested.filesystemChanged();
+  return nested.result();
 }
 
 QString InstallationManager::generateBackupName(const QString& directoryName)
 {
-  QString backupName = directoryName + "_backup";
-  if (QDir(backupName).exists()) {
-    int idx      = 2;
-    QString temp = backupName + QString::number(idx);
-    while (QDir(temp).exists()) {
-      ++idx;
-      temp = backupName + QString::number(idx);
+  const QFileInfo source(directoryName);
+  const QDir parent = source.absoluteDir();
+  const QString base = source.fileName() + QStringLiteral("_backup");
+  const QFileInfoList entries = parent.entryInfoList(
+      QDir::NoDotAndDotDot | QDir::AllEntries | QDir::Hidden | QDir::System);
+  auto occupied = [&](const QString& leaf) {
+    return std::any_of(entries.cbegin(), entries.cend(), [&](const QFileInfo& entry) {
+      return entry.fileName().compare(leaf, Qt::CaseInsensitive) == 0;
+    });
+  };
+
+  QString leaf = base;
+  for (int index = 2; occupied(leaf); ++index) {
+    leaf = base + QString::number(index);
+    if (index == std::numeric_limits<int>::max()) {
+      return {};
     }
-    backupName = temp;
   }
-  return backupName;
+  return parent.filePath(leaf);
 }
 
 InstallationResult InstallationManager::testOverwrite(GuessedValue<QString>& modName)
 {
-  QString targetDirectory =
-      QDir::fromNativeSeparators(m_ModsDirectory + "/" + modName);
-
   // this is only returned on success
   InstallationResult result{IPluginInstaller::RESULT_SUCCESS};
 
-  while (QDir(targetDirectory).exists()) {
+  while (true) {
+    ModInstallationTransaction::Target target;
+    QString targetError;
+    if (!ModInstallationTransaction::inspectTarget(m_ModsDirectory, modName, target,
+                                                   targetError)) {
+      reportError(targetError);
+      return {IPluginInstaller::RESULT_FAILED};
+    }
+    if (!target.exists) {
+      return result;
+    }
+    if (target.name != QString(modName)) {
+      modName.update(target.name, GUESS_USER);
+    }
+    result.m_targetGeneration = target.generation;
+
     Settings& settings(Settings::instance());
 
     const bool backup = settings.keepBackupOnInstall();
@@ -422,17 +511,9 @@ InstallationResult InstallationManager::testOverwrite(GuessedValue<QString>& mod
     if (overwriteDialog.exec()) {
       settings.setKeepBackupOnInstall(overwriteDialog.backup());
 
-      if (overwriteDialog.backup()) {
-        QString const backupDirectory = generateBackupName(targetDirectory);
-        if (!copyDir(targetDirectory, backupDirectory, false)) {
-          reportError(tr("Failed to create backup"));
-          return {IPluginInstaller::RESULT_FAILED};
-        }
-      }
-
       result.m_merged   = overwriteDialog.action() == QueryOverwriteDialog::ACT_MERGE;
       result.m_replaced = overwriteDialog.action() == QueryOverwriteDialog::ACT_REPLACE;
-      result.m_backup   = overwriteDialog.backup();
+      result.m_backupRequested = overwriteDialog.backup();
 
       if (overwriteDialog.action() == QueryOverwriteDialog::ACT_RENAME) {
         bool ok      = false;
@@ -443,40 +524,9 @@ InstallationResult InstallationManager::testOverwrite(GuessedValue<QString>& mod
           if (!ensureValidModName(modName)) {
             return {IPluginInstaller::RESULT_FAILED};
           }
-          targetDirectory = QDir::fromNativeSeparators(m_ModsDirectory) + "/" + modName;
+          result = InstallationResult{IPluginInstaller::RESULT_SUCCESS};
         }
       } else if (overwriteDialog.action() == QueryOverwriteDialog::ACT_REPLACE) {
-        unsigned int const idx = ModInfo::getIndex(modName);
-        if (idx != UINT_MAX) {
-          auto modInfo = ModInfo::getByIndex(idx);
-          // mark the old install file as uninstalled
-          emit modReplaced(modInfo->installationFile());
-        }
-        // save original settings like categories. Because it makes sense
-        QString metaFilename = targetDirectory + "/meta.ini";
-        QFile settingsFile(metaFilename);
-        QByteArray originalSettings;
-        if (settingsFile.open(QIODevice::ReadOnly)) {
-          originalSettings = settingsFile.readAll();
-          settingsFile.close();
-        }
-
-        // remove the directory with all content, then recreate it empty
-        shellDelete(QStringList(targetDirectory));
-        if (!QDir().mkdir(targetDirectory)) {
-          // The retry exists because Windows can keep a directory around for a
-          // moment after delete. Linux doesn't have that problem; the sleep is
-          // kept for safety in case the underlying filesystem is slow.
-          QThread::msleep(100);
-          QDir().mkdir(targetDirectory);
-        }
-        // restore the saved settings
-        if (settingsFile.open(QIODevice::WriteOnly)) {
-          settingsFile.write(originalSettings);
-          settingsFile.close();
-        } else {
-          log::error("failed to restore original settings: {}", metaFilename);
-        }
         return result;
       } else if (overwriteDialog.action() == QueryOverwriteDialog::ACT_MERGE) {
         return result;
@@ -488,10 +538,6 @@ InstallationResult InstallationManager::testOverwrite(GuessedValue<QString>& mod
       return {IPluginInstaller::RESULT_CANCELED};
     }
   }
-
-  QDir().mkdir(targetDirectory);
-
-  return result;
 }
 
 bool InstallationManager::ensureValidModName(GuessedValue<QString>& name) const
@@ -517,7 +563,6 @@ InstallationResult InstallationManager::doInstall(ModInstallationInfo& info)
     return {IPluginInstaller::RESULT_FAILED};
   }
 
-  bool const merge = false;
   // determine target directory
   InstallationResult result = testOverwrite(info.modName);
   if (!result) {
@@ -526,8 +571,37 @@ InstallationResult InstallationManager::doInstall(ModInstallationInfo& info)
 
   result.m_name = info.modName;
 
-  QString const targetDirectory =
-      QDir(m_ModsDirectory + "/" + info.modName).canonicalPath();
+  const bool merge = result.merged();
+  const auto mode = result.replaced()
+                        ? ModInstallationTransaction::Mode::Replace
+                        : (merge ? ModInstallationTransaction::Mode::Merge
+                                 : ModInstallationTransaction::Mode::New);
+  QString replacedInstallationFile;
+  ModInfo::Ptr previousLiveMod;
+  if (mode != ModInstallationTransaction::Mode::New) {
+    const unsigned int idx = ModInfo::getIndex(info.modName);
+    if (idx != UINT_MAX) {
+      previousLiveMod = ModInfo::getByIndex(idx);
+      QString flushError;
+      if (!previousLiveMod->flushMetaForTransaction(flushError)) {
+        reportError(flushError);
+        return {IPluginInstaller::RESULT_FAILED};
+      }
+      if (result.replaced()) {
+        replacedInstallationFile = previousLiveMod->installationFile();
+      }
+    }
+  }
+  QString transactionError;
+  auto transaction = ModInstallationTransaction::begin(
+      m_ModsDirectory, info.modName, mode, transactionError,
+      result.m_targetGeneration);
+  if (!transaction) {
+    reportError(transactionError);
+    return {IPluginInstaller::RESULT_FAILED};
+  }
+
+  const QString targetDirectory = transaction->stagePath();
   QString targetDirectoryNative = QDir::toNativeSeparators(targetDirectory);
 
   log::debug("installing to \"{}\"", targetDirectoryNative);
@@ -537,64 +611,117 @@ InstallationResult InstallationManager::doInstall(ModInstallationInfo& info)
 
   // Copy the created files:
   for (auto& p : m_CreatedFiles) {
-    QString destPath =
-        QDir::cleanPath(targetDirectory + QDir::separator() + p.first->path());
-    log::debug("Moving {} to {}.", p.second, destPath);
-
-    // We need to remove the path if it exists:
-    if (QFile::exists(destPath)) {
-      QFile::remove(destPath);
+    QString createdFileError;
+    if (!copyCreatedFileToStage(p.first, p.second, targetDirectory,
+                                createdFileError)) {
+      reportError(createdFileError);
+      return {IPluginInstaller::RESULT_FAILED};
     }
-
-    QDir const dir = QFileInfo(destPath).absoluteDir();
-    if (!dir.exists()) {
-      dir.mkpath(".");
-    }
-
-    QFile::copy(p.second, destPath);
   }
 
-  const QString metaPath = targetDirectory + "/meta.ini";
+  QString metaPath;
+  QString metadataError;
+  if (!ModInstallationTransaction::prepareStagedMetadata(
+          targetDirectory, metaPath, metadataError)) {
+    reportError(metadataError);
+    return {IPluginInstaller::RESULT_FAILED};
+  }
   MetaIniUtils::normalizeMetaIniCase(metaPath);
-  QSettings settingsFile(metaPath, QSettings::IniFormat);
+  {
+    QSettings settingsFile(metaPath, QSettings::IniFormat);
+    if (settingsFile.status() != QSettings::NoError) {
+      reportError(tr("Could not read staged mod metadata: %1").arg(metaPath));
+      return {IPluginInstaller::RESULT_FAILED};
+    }
 
-  // overwrite settings only if they are actually are available or haven't been set
-  // before
-  if ((info.gameName != "") || !settingsFile.contains("gameName")) {
-    settingsFile.setValue("gameName", info.gameName);
-  }
-  if ((info.modID != 0) || !settingsFile.contains("modid")) {
-    settingsFile.setValue("modid", info.modID);
-  }
-  if (!settingsFile.contains("version") ||
-      (!info.version.isEmpty() &&
-       (!merge || (VersionInfo(info.version) >=
-                   VersionInfo(settingsFile.value("version").toString()))))) {
-    settingsFile.setValue("version", info.version);
-  }
-  if (!info.newestVersion.isEmpty() || !settingsFile.contains("newestVersion")) {
-    settingsFile.setValue("newestVersion", info.newestVersion);
-  }
-  // issue #51 used to overwrite the manually set categories
-  if (!settingsFile.contains("category")) {
-    settingsFile.setValue("category", QString::number(info.categoryID));
-  }
-  settingsFile.setValue("nexusFileStatus", info.fileCategoryID);
-  settingsFile.setValue("installationFile", storeMetaPath(m_CurrentFile));
-  settingsFile.setValue("repository", info.repository);
-  settingsFile.setValue("author", info.author);
-  settingsFile.setValue("uploader", info.uploader);
-  settingsFile.setValue("uploaderUrl", info.uploaderUrl);
+    // overwrite settings only if they are actually are available or haven't been set
+    // before
+    if ((info.gameName != "") || !settingsFile.contains("gameName")) {
+      settingsFile.setValue("gameName", info.gameName);
+    }
+    if ((info.modID != 0) || !settingsFile.contains("modid")) {
+      settingsFile.setValue("modid", info.modID);
+    }
+    if (!settingsFile.contains("version") ||
+        (!info.version.isEmpty() &&
+         (!merge || (VersionInfo(info.version) >=
+                     VersionInfo(settingsFile.value("version").toString()))))) {
+      settingsFile.setValue("version", info.version);
+    }
+    if (!info.newestVersion.isEmpty() || !settingsFile.contains("newestVersion")) {
+      settingsFile.setValue("newestVersion", info.newestVersion);
+    }
+    // issue #51 used to overwrite the manually set categories
+    if (!settingsFile.contains("category")) {
+      settingsFile.setValue("category", QString::number(info.categoryID));
+    }
+    settingsFile.setValue("nexusFileStatus", info.fileCategoryID);
+    settingsFile.setValue("installationFile", storeMetaPath(m_CurrentFile));
+    settingsFile.setValue("repository", info.repository);
+    settingsFile.setValue("author", info.author);
+    settingsFile.setValue("uploader", info.uploader);
+    settingsFile.setValue("uploaderUrl", info.uploaderUrl);
 
-  if (!merge) {
-    // this does not clear the list we have in memory but the mod is going to have to be
-    // re-read anyway btw.: installedFiles were written with beginWriteArray but we can
-    // still clear it with beginGroup. nice
-    settingsFile.beginGroup("installedFiles");
-    settingsFile.remove("");
-    settingsFile.endGroup();
+    if (!merge) {
+      // this does not clear the list we have in memory but the mod is going to have to
+      // be re-read anyway btw.: installedFiles were written with beginWriteArray but
+      // we can still clear it with beginGroup. nice
+      settingsFile.beginGroup("installedFiles");
+      settingsFile.remove("");
+      settingsFile.endGroup();
+    }
+    settingsFile.sync();
+    if (settingsFile.status() != QSettings::NoError) {
+      reportError(tr("Could not publish staged mod metadata: %1").arg(metaPath));
+      return {IPluginInstaller::RESULT_FAILED};
+    }
   }
 
+  if (previousLiveMod) {
+    QString flushError;
+    if (!previousLiveMod->flushMetaForTransaction(flushError)) {
+      reportError(flushError);
+      return {IPluginInstaller::RESULT_FAILED};
+    }
+  }
+
+  if (result.backupRequested()) {
+    const QString backupDirectory = generateBackupName(transaction->targetPath());
+    if (backupDirectory.isEmpty() ||
+        !copyDir(transaction->targetPath(), backupDirectory, false)) {
+      reportError(tr("Failed to create backup"));
+      return {IPluginInstaller::RESULT_FAILED};
+    }
+    result.m_backup = true;
+  }
+
+  const auto publication = transaction->publish();
+  if (publication.status !=
+          ModInstallationTransaction::PublishStatus::Failure &&
+      previousLiveMod) {
+    previousLiveMod->retireMetadataWriter();
+  }
+  if (!publication) {
+    reportError(publication.error);
+    if (!publication.residue.isEmpty()) {
+      log::error("mod installation recovery generation retained at {}",
+                 publication.residue);
+    }
+    result.m_result = IPluginInstaller::RESULT_FAILED;
+    result.m_filesystemChanged = publication.filesystemChanged();
+    return result;
+  }
+  if (!publication.error.isEmpty()) {
+    log::warn("mod installation committed with a durability warning: {}",
+              publication.error);
+  }
+  if (!publication.residue.isEmpty()) {
+    log::warn("mod installation succeeded; old generation remains at {}",
+              publication.residue);
+  }
+  if (result.replaced() && !replacedInstallationFile.isEmpty()) {
+    emit modReplaced(replacedInstallationFile);
+  }
   return result;
 }
 
@@ -666,10 +793,16 @@ InstallationResult InstallationManager::install(const QString& fileName,
                                                 GuessedValue<QString>& modName,
                                                 int modID)
 {
+  const bool outermost = m_InstallDepth == 0;
+  ++m_InstallDepth;
   m_IsRunning = true;
   ON_BLOCK_EXIT([this]() {
-    m_IsRunning = false;
+    --m_InstallDepth;
+    m_IsRunning = m_InstallDepth != 0;
   });
+  if (outermost) {
+    m_NestedFilesystemChanged = false;
+  }
 
   QFileInfo const fileInfo(fileName);
   if (!getSupportedExtensions().contains(fileInfo.suffix(), Qt::CaseInsensitive)) {
@@ -876,12 +1009,46 @@ InstallationResult InstallationManager::install(const QString& fileName,
               installerCustom->isArchiveSupported(fileName)))) {
           std::set<QString> const installerExt = installerCustom->supportedExtensions();
           if (installerExt.contains(fileInfo.suffix())) {
-            installResult.m_result =
-                installerCustom->install(modName, gameName, fileName, version, modID);
-            unsigned int const idx = ModInfo::getIndex(modName);
-            if (idx != UINT_MAX) {
-              ModInfo::Ptr const info = ModInfo::getByIndex(idx);
-              info->setRepository(repository);
+            QString lifecycleError;
+            if (m_CustomInstallerBegin && !m_CustomInstallerBegin(lifecycleError)) {
+              reportError(lifecycleError);
+              installResult.m_result = IPluginInstaller::RESULT_FAILED;
+              return installResult;
+            }
+
+            bool lifecycleFinished = false;
+            auto cancelLifecycle    = qScopeGuard([&] {
+              if (!lifecycleFinished && m_CustomInstallerFinish) {
+                QString ignoredReplacement;
+                bool ignoredFilesystemChange = false;
+                QString ignoredError;
+                m_CustomInstallerFinish(false, repository, ignoredReplacement,
+                                        ignoredFilesystemChange, ignoredError);
+              }
+            });
+            installResult.m_result = installerCustom->install(
+                modName, gameName, fileName, version, modID);
+            installResult.m_filesystemChanged =
+                installResult.m_filesystemChanged || m_NestedFilesystemChanged;
+
+            const bool installerSucceeded =
+                installResult.result() == IPluginInstaller::RESULT_SUCCESS ||
+                installResult.result() == IPluginInstaller::RESULT_SUCCESSCANCEL;
+            QString replacedInstallationFile;
+            bool customFilesystemChanged = false;
+            if (m_CustomInstallerFinish &&
+                !m_CustomInstallerFinish(installerSucceeded, repository,
+                                         replacedInstallationFile,
+                                         customFilesystemChanged,
+                                         lifecycleError)) {
+              reportError(lifecycleError);
+              installResult.m_result = IPluginInstaller::RESULT_FAILED;
+            }
+            installResult.m_filesystemChanged =
+                installResult.m_filesystemChanged || customFilesystemChanged;
+            lifecycleFinished = true;
+            if (!replacedInstallationFile.isEmpty()) {
+              emit modReplaced(replacedInstallationFile);
             }
           }
         }
@@ -889,6 +1056,9 @@ InstallationResult InstallationManager::install(const QString& fileName,
     } catch (const IncompatibilityException& e) {
       log::error("plugin \"{}\" incompatible: {}", installer->name(), e.what());
     }
+
+    installResult.m_filesystemChanged =
+        installResult.m_filesystemChanged || m_NestedFilesystemChanged;
 
     // act upon the installation result. at this point the files have already been
     // extracted to the correct location
@@ -923,6 +1093,9 @@ InstallationResult InstallationManager::install(const QString& fileName,
            "This is likely due to a corrupted or incompatible download or unrecognized "
            "archive format."));
   }
+
+  installResult.m_filesystemChanged =
+      installResult.m_filesystemChanged || m_NestedFilesystemChanged;
 
   return installResult;
 }

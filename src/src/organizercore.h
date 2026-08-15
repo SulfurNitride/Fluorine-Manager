@@ -48,6 +48,7 @@ class IUserInterface;
 class GameFeatures;
 class PluginContainer;
 class DirectoryRefresher;
+class ModInstallationTransaction;
 
 #include <atomic>
 #include <cstdint>
@@ -614,6 +615,11 @@ private:
                                                   MOBase::GuessedValue<QString> modName,
                                                   ModInfo::Ptr currentMod, int priority,
                                                   bool reinstallation);
+  bool beginCustomInstaller(QString& error);
+  bool finishCustomInstaller(bool success, const QString& repository,
+                             QString& replacedInstallationFile,
+                             bool& filesystemChanged, QString& error);
+  void clearCustomInstallationState(bool keepLifecycleActive = false);
 
   [[nodiscard]] bool saveCurrentProfile();
   void storeSettings();
@@ -706,6 +712,12 @@ private:
 
   DownloadManager m_DownloadManager;
   InstallationManager m_InstallationManager;
+  bool m_CustomInstallerActive{false};
+  std::unique_ptr<ModInstallationTransaction> m_CustomInstallationTransaction;
+  ModInfo::Ptr m_CustomInstallationMod;
+  ModInfo::Ptr m_CustomPreviousMod;
+  QString m_CustomReplacedInstallationFile;
+  bool m_CustomBackupRequested{false};
 
   QThread m_RefresherThread;
 

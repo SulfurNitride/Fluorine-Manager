@@ -1430,6 +1430,32 @@ target_link_libraries(test_copydir PRIVATE
 add_test(NAME test_copydir COMMAND test_copydir)
 set_tests_properties(test_copydir PROPERTIES TIMEOUT 10)
 
+add_executable(test_modinstallationtransaction EXCLUDE_FROM_ALL
+    test_modinstallationtransaction.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/modinstallationtransaction.cpp
+)
+set_target_properties(test_modinstallationtransaction PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_modinstallationtransaction PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_modinstallationtransaction PRIVATE
+    Qt6::Core
+    mo2::uibase
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_modinstallationtransaction COMMAND test_modinstallationtransaction)
+set_tests_properties(test_modinstallationtransaction PROPERTIES TIMEOUT 10)
+
+add_test(NAME test_mod_installation_surface
+    COMMAND ${Python3_EXECUTABLE} -B
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_mod_installation_surface.py -v
+)
+
 add_executable(test_instanceunregister EXCLUDE_FROM_ALL
     test_instanceunregister.cpp
     ${CMAKE_SOURCE_DIR}/src/src/instanceunregister.cpp
@@ -1654,7 +1680,8 @@ add_custom_target(fluorine-tests
             test_registry test_wineregistryfile
             test_protondxvkconfig test_gamebryoiniseeder test_texteditorsave
             test_profilemodlistrename test_profilerename
-            test_profilelegacymigration test_copydir test_instanceunregister
+            test_profilelegacymigration test_copydir
+            test_modinstallationtransaction test_instanceunregister
             test_profiletweakmerge test_pandorapreviousoutput
             test_morrowindpluginlistwriter test_winepluginlistsync
             test_winesavedeployment test_winesavetargetresolver

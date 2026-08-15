@@ -483,7 +483,10 @@ OMODFrameworkWrapper::EInstallResult OMODFrameworkWrapper::install(MOBase::Guess
           if (MOBase::shellMove(data + "/*.*", modInterface->absolutePath(), true, mParentWidget))
             MOBase::log::debug("Installed mod files.");
           else
+          {
             MOBase::log::error("Error while installing mod files.");
+            return EInstallResult::RESULT_FAILED;
+          }
           QFile::remove(data);
         }
         if (!plugins.isNull())
@@ -494,7 +497,10 @@ OMODFrameworkWrapper::EInstallResult OMODFrameworkWrapper::install(MOBase::Guess
           if (MOBase::shellMove(plugins + "/*.*", modInterface->absolutePath(), true, mParentWidget))
             MOBase::log::debug("Installed mod plugins.");
           else
+          {
             MOBase::log::error("Error while installing mod plugins.");
+            return EInstallResult::RESULT_FAILED;
+          }
           QFile::remove(plugins);
         }
       }

@@ -80,6 +80,7 @@ list(APPEND ORGANIZER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/instanceunregister.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lootmanager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/multiprocessprotocol.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modinstallationtransaction.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nexuscachedirectory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pandorapreviousoutput.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nxmhandlerintegration.cpp
@@ -115,6 +116,7 @@ list(APPEND ORGANIZER_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/instancepathidentity.h
     ${CMAKE_CURRENT_SOURCE_DIR}/lootmanager.h
     ${CMAKE_CURRENT_SOURCE_DIR}/multiprocessprotocol.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/modinstallationtransaction.h
     ${CMAKE_CURRENT_SOURCE_DIR}/nexuscachedirectory.h
     ${CMAKE_CURRENT_SOURCE_DIR}/nxmhandlerintegration.h
     ${CMAKE_CURRENT_SOURCE_DIR}/nxmrequest.h

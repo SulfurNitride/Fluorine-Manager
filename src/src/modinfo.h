@@ -831,9 +831,16 @@ public:  // Methods after this do not come from IModInterface:
    */
   virtual void saveMeta() {}
 
-  // Prevent destructor-time metadata persistence after an incomplete Settings
-  // rollback has put the process into fail-stop shutdown.
-  virtual void suppressWritesForFailedRollback() {}
+  // Flush a live mod's metadata before replacing its directory generation.
+  virtual bool flushMetaForTransaction(QString&)
+  {
+    saveMeta();
+    return true;
+  }
+
+  // Prevent a retained ModInfo for a retired directory generation from writing
+  // through the same pathname into its replacement.
+  virtual void retireMetadataWriter() {}
 
   /**
    * @brief Sets whether this mod uses a custom url.
@@ -1046,6 +1053,7 @@ protected:
    * @return pointer to the info-structure of the newly created/added mod.
    */
   static ModInfo::Ptr createFrom(const QDir& dir, OrganizerCore& core);
+  static bool forget(const ModInfo::Ptr& mod);
 
   /**
    * @brief Create a new "foreign-managed" mod from a tuple of plugin and archives.

@@ -100,6 +100,18 @@ ModInfo::Ptr ModInfo::createFrom(const QDir& dir, OrganizerCore& core)
   return result;
 }
 
+bool ModInfo::forget(const ModInfo::Ptr& mod)
+{
+  QMutexLocker const locker(&s_Mutex);
+  const auto found = std::find(s_Collection.begin(), s_Collection.end(), mod);
+  if (found == s_Collection.end()) {
+    return false;
+  }
+  s_Collection.erase(found);
+  updateIndices();
+  return true;
+}
+
 ModInfo::Ptr ModInfo::createFromPlugin(const QString& modName, const QString& espName,
                                        const QStringList& bsaNames,
                                        ModInfo::EModType modType, OrganizerCore& core)

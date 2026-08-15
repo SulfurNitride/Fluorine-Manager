@@ -13,10 +13,15 @@
 
 #include <QApplication>
 #include <QDirIterator>
+#include <QFile>
 #include <QSettings>
 #include <QTimeZone>
 
 #include <sstream>
+
+#ifdef Q_OS_LINUX
+#include <sys/stat.h>
+#endif
 
 using namespace MOBase;
 using namespace MOShared;
@@ -63,6 +68,16 @@ ModInfoRegular::ModInfoRegular(const QDir& path, OrganizerCore& core)
       m_GameName(core.managedGame()->gameShortName()),
       m_NexusBridge(&core.pluginContainer())
 {
+#ifdef Q_OS_LINUX
+  struct stat directoryStatus {};
+  const QByteArray encodedPath = QFile::encodeName(m_Path);
+  if (::lstat(encodedPath.constData(), &directoryStatus) == 0 &&
+      S_ISDIR(directoryStatus.st_mode)) {
+    m_PathDevice           = static_cast<quint64>(directoryStatus.st_dev);
+    m_PathInode            = static_cast<quint64>(directoryStatus.st_ino);
+    m_PathIdentityCaptured = true;
+  }
+#endif
   m_CreationTime = QFileInfo(path.absolutePath()).birthTime();
   // read out the meta-file for information
   readMeta();
@@ -90,7 +105,7 @@ ModInfoRegular::ModInfoRegular(const QDir& path, OrganizerCore& core)
 
 ModInfoRegular::~ModInfoRegular()
 {
-  if (metaWriteBarrier().suppressed()) {
+  if (m_WritesSuppressed || metaWriteBarrier().suppressed()) {
     return;
   }
 
@@ -279,11 +294,30 @@ void ModInfoRegular::readMeta()
 
 void ModInfoRegular::saveMeta()
 {
+  if (m_WritesSuppressed) {
+    return;
+  }
   metaWriteBarrier().runIfAllowed([this] { saveMetaImpl(); });
 }
 
 void ModInfoRegular::saveMetaImpl()
 {
+#ifdef Q_OS_LINUX
+  if (m_PathIdentityCaptured) {
+    struct stat directoryStatus {};
+    const QByteArray encodedPath = QFile::encodeName(m_Path);
+    if (::lstat(encodedPath.constData(), &directoryStatus) != 0 ||
+        !S_ISDIR(directoryStatus.st_mode) ||
+        static_cast<quint64>(directoryStatus.st_dev) != m_PathDevice ||
+        static_cast<quint64>(directoryStatus.st_ino) != m_PathInode) {
+      m_WritesSuppressed = true;
+      log::warn("refusing to save stale mod metadata after directory generation "
+                "changed: {}",
+                m_Path);
+      return;
+    }
+  }
+#endif
   // only write meta data if the mod directory exists
   if (m_MetaInfoChanged && QFile::exists(absolutePath())) {
     const QString metaPath = absolutePath().append("/meta.ini");
@@ -365,9 +399,20 @@ void ModInfoRegular::saveMetaImpl()
   }
 }
 
-void ModInfoRegular::suppressWritesForFailedRollback()
+bool ModInfoRegular::flushMetaForTransaction(QString& error)
 {
-  suppressAllWritesForFailedRollback();
+  saveMeta();
+  if (m_WritesSuppressed || m_MetaInfoChanged) {
+    error = tr("Could not durably save metadata for mod '%1' during installation.")
+                .arg(m_Name);
+    return false;
+  }
+  return true;
+}
+
+void ModInfoRegular::retireMetadataWriter()
+{
+  m_WritesSuppressed = true;
 }
 
 bool ModInfoRegular::updateAvailable() const
