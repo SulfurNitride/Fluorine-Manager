@@ -425,11 +425,11 @@ QString GameGamebryo::localAppFolder()
   // The organizer publishes the selected instance's immutable Wine user
   // profile before plugin discovery. A missing context is an unavailable
   // runtime, never permission to scan arbitrary Steam/Bottles prefixes or
-  // create directories as a side effect of a path query.
+  // create directories as a side effect of a path query. It is also expected
+  // while games are being discovered and for native instances, so this query
+  // must not diagnose the absence as a launch failure.
   const QString userProfile = runtimeWineUserProfile();
   if (userProfile.isEmpty()) {
-    MOBase::log::warn(
-        "localAppFolder: selected instance has no valid Wine runtime context");
     return {};
   }
   return QDir(userProfile).filePath("AppData/Local");
@@ -628,10 +628,9 @@ QString GameGamebryo::determineMyGamesPath(const QString& gameName,
   }
 #else
   Q_UNUSED(createIfMissing);
+  Q_UNUSED(gameName);
   const QString userProfile = runtimeWineUserProfile();
   if (userProfile.isEmpty()) {
-    MOBase::log::debug("determineMyGamesPath: no selected Wine runtime for '{}'",
-                       gameName);
     return {};
   }
   return pattern.arg(QDir(userProfile).filePath("Documents"));

@@ -122,6 +122,7 @@ class WineRuntimeSurfaceTest(unittest.TestCase):
             self.assertIn("runtimeWineUserProfile", body)
             self.assertNotIn("compatdata", body)
             self.assertNotIn("mkpath", body)
+            self.assertNotIn("MOBase::log::", body)
         self.assertNotIn("readFluorinePrefixPath", source)
         self.assertIn("if (appData.isEmpty())", function_body(
             source, "MappingType GameGamebryo::mappings"
