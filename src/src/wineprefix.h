@@ -7,6 +7,7 @@
 #include <QStringList>
 
 #include "wineprofileinisync.h"
+#include "wineregistryfile.h"
 
 class WinePrefix
 {
@@ -91,6 +92,12 @@ public:
   QString readHklmValue(const QString& subKey, const QString& valueName) const;
   bool writeHklmValue(const QString& subKey, const QString& valueName,
                       const QString& value) const;
+
+  bool readHklmValues(QList<WineRegistryFile::Query>& queries,
+                      QString* error = nullptr) const;
+  bool writeHklmValues(const QList<WineRegistryFile::Update>& updates,
+                       QString* error = nullptr) const;
+  bool pruneExtraDrives(QStringList& removed, QString* error = nullptr) const;
 
 private:
   QString m_prefixPath;

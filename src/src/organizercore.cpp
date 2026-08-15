@@ -3038,12 +3038,20 @@ bool OrganizerCore::checkGameRegistryKey()
     return true;  // unknown game, nothing to check
   }
 
-  auto cfg = FluorineConfig::load();
-  if (!cfg || cfg->prefix_path.isEmpty()) {
+  const QString configuredPrefix =
+      resolveWinePrefixPath(m_Settings, managedGame());
+  if (configuredPrefix.isEmpty()) {
     return true;  // no prefix configured
   }
 
-  WinePrefix const prefix(cfg->prefix_path);
+  const QString preparedPrefix = QFileInfo(configuredPrefix).canonicalFilePath();
+  if (preparedPrefix.isEmpty()) {
+    log::error("Cannot verify the game registry because Wine prefix '{}' has no "
+               "stable physical identity",
+               configuredPrefix);
+    return false;
+  }
+  WinePrefix const prefix(preparedPrefix);
   if (!prefix.isValid()) {
     return true;  // prefix doesn't exist yet
   }
@@ -3064,11 +3072,14 @@ bool OrganizerCore::checkGameRegistryKey()
   if (!winePath.endsWith('\\'))
     winePath += '\\';
 
-  // Read the current registry value (check both normal and Wow6432Node)
-  QString registryPath = prefix.readHklmValue(subKey, valueName);
-  if (registryPath.isEmpty()) {
-    const QString wow64Key = "Software\\Wow6432Node\\" + subKey.mid(9);
-    registryPath           = prefix.readHklmValue(wow64Key, valueName);
+  const QString wow64Key =
+      QStringLiteral("Software\\Wow6432Node\\") + subKey.mid(9);
+  QList<WineRegistryFile::Query> registryValues{
+      {subKey, valueName}, {wow64Key, valueName}};
+  QString registryError;
+  if (!prefix.readHklmValues(registryValues, &registryError)) {
+    log::error("Cannot verify the game registry: {}", registryError);
+    return false;
   }
 
   // Normalize trailing separators before comparing — Steam writes paths with
@@ -3079,9 +3090,16 @@ bool OrganizerCore::checkGameRegistryKey()
     return s;
   };
 
-  if (registryPath.isEmpty() ||
-      stripTrailingSep(registryPath)
-              .compare(stripTrailingSep(winePath), Qt::CaseInsensitive) != 0) {
+  const auto matchesManagedPath = [&](const WineRegistryFile::Query& query) {
+    return query.present &&
+           stripTrailingSep(query.value)
+                   .compare(stripTrailingSep(winePath), Qt::CaseInsensitive) == 0;
+  };
+  if (!matchesManagedPath(registryValues[0]) ||
+      !matchesManagedPath(registryValues[1])) {
+    const QString registryPath = registryValues[0].present
+                                     ? registryValues[0].value
+                                     : registryValues[1].value;
     const QString displayRegPath =
         registryPath.isEmpty() ? tr("<not set>") : registryPath;
 
@@ -3101,13 +3119,15 @@ bool OrganizerCore::checkGameRegistryKey()
         QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel, QMessageBox::Yes);
 
     if (answer == QMessageBox::Yes) {
-      if (!prefix.writeHklmValue(subKey, valueName, winePath)) {
-        log::error("Failed to update game registry key");
+      const QList<WineRegistryFile::Update> updates{
+          {subKey, valueName, winePath, true, registryValues[0].present,
+           registryValues[0].value},
+          {wow64Key, valueName, winePath, true, registryValues[1].present,
+           registryValues[1].value}};
+      if (!prefix.writeHklmValues(updates, &registryError)) {
+        log::error("Failed to update game registry keys: {}", registryError);
+        return false;
       }
-      // Also update the Wow6432Node copy (32-bit registry view)
-      const QString wow64Key =
-          "Software\\Wow6432Node\\" + subKey.mid(9);  // skip "Software\\"
-      prefix.writeHklmValue(wow64Key, valueName, winePath);
     } else if (answer == QMessageBox::Cancel) {
       return false;  // cancel launch
     }
@@ -3447,6 +3467,22 @@ bool OrganizerCore::beforeRun(
       }
       WinePrefix const prefix(preparedPrefixPath);
       if (prefix.isValid()) {
+        if (useProton) {
+          QStringList prunedDrives;
+          QString pruneError;
+          if (!prefix.pruneExtraDrives(prunedDrives, &pruneError)) {
+            log::error("Refusing Wine launch because drive mappings could not "
+                       "be normalized: {}",
+                       pruneError);
+            return false;
+          }
+          if (!prunedDrives.isEmpty()) {
+            log::info("Pruned stale Wine drive mappings from prefix '{}': {}",
+                      preparedPrefixPath,
+                      prunedDrives.join(QStringLiteral(", ")));
+          }
+        }
+
         const QString dataDirName      = resolveWineDataDirName(managedGame());
         const QString appDataLocal     = prefix.appdataLocal();
         const QString pluginsTargetDir = QDir(appDataLocal).filePath(dataDirName);

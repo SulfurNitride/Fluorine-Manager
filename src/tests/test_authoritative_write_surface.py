@@ -116,6 +116,47 @@ class AuthoritativeWriteSurfaceTests(unittest.TestCase):
                              (ROOT / relative).read_text(encoding="utf-8"),
                              relative)
 
+    def test_ini_and_wine_registry_publishers_share_transactional_boundaries(self):
+        registry = (ROOT / "libs/uibase/src/registry.cpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("TransactionalWriteFile transaction(fileName)", registry)
+        self.assertIn("transaction.readOriginal", registry)
+        self.assertIn("transaction.replaceWith", registry)
+        self.assertNotIn("QIODevice::Truncate", registry)
+
+        wine_registry = (ROOT / "src/src/wineregistryfile.cpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("TransactionalWriteFile transaction(path)", wine_registry)
+        self.assertIn("removeDriveMappings", wine_registry)
+        self.assertNotIn("QIODevice::Truncate", wine_registry)
+
+        prefix = (ROOT / "src/src/wineprefix.cpp").read_text(encoding="utf-8")
+        self.assertIn("WineSaveDeployment::leasePathFor", prefix)
+        self.assertIn("WineSaveDeployment::hasPersistedSessionLease", prefix)
+        self.assertIn("WineRegistryFile::removeDriveMappings", prefix)
+
+        organizer = (ROOT / "src/src/organizercore.cpp").read_text(
+            encoding="utf-8"
+        )
+        check = organizer[organizer.index("bool OrganizerCore::checkGameRegistryKey"):
+                          organizer.index("bool OrganizerCore::beforeRun")]
+        self.assertIn("readHklmValues", check)
+        self.assertIn("writeHklmValues", check)
+        self.assertEqual(check.count("writeHklmValues"), 1)
+        before = organizer[organizer.index("bool OrganizerCore::beforeRun"):]
+        self.assertIn("prefix.pruneExtraDrives", before)
+        self.assertLess(before.index("prefix.pruneExtraDrives"),
+                        before.index("WineSaveDeployment::beginSessionLease"))
+        self.assertIn("compareExisting", (
+            ROOT / "src/src/wineregistryfile.h"
+        ).read_text(encoding="utf-8"))
+
+        spawn = (ROOT / "src/src/spawn.cpp").read_text(encoding="utf-8")
+        self.assertNotIn("pruneDriveRegistry", spawn)
+        self.assertNotIn("pruneExtraDrives(prefixPath)", spawn)
+
 
 if __name__ == "__main__":
     unittest.main()

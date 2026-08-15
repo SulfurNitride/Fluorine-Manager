@@ -1170,6 +1170,43 @@ target_link_libraries(test_transactionalwritefile PRIVATE
 add_test(NAME test_transactionalwritefile COMMAND test_transactionalwritefile)
 set_tests_properties(test_transactionalwritefile PROPERTIES TIMEOUT 15)
 
+add_executable(test_registry EXCLUDE_FROM_ALL
+    test_registry.cpp
+)
+set_target_properties(test_registry PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_link_libraries(test_registry PRIVATE
+    Qt6::Core
+    mo2::uibase
+    GTest::gtest
+)
+add_test(NAME test_registry COMMAND test_registry)
+set_tests_properties(test_registry PROPERTIES TIMEOUT 15)
+
+add_executable(test_wineregistryfile EXCLUDE_FROM_ALL
+    test_wineregistryfile.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/wineregistryfile.cpp
+)
+set_target_properties(test_wineregistryfile PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_wineregistryfile PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_wineregistryfile PRIVATE
+    Qt6::Core
+    mo2::uibase
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_wineregistryfile COMMAND test_wineregistryfile)
+set_tests_properties(test_wineregistryfile PROPERTIES TIMEOUT 15)
+
 add_executable(test_profilemodlistrename EXCLUDE_FROM_ALL
     test_profilemodlistrename.cpp
     ${CMAKE_SOURCE_DIR}/src/src/profilemodlistrename.cpp
@@ -1305,6 +1342,7 @@ add_custom_target(fluorine-tests
             test_problemcheckrunner test_persistentcookiejar
             test_instancegeneralsettings test_downloadmetadatapolicy
             test_downloadwritelifecycle test_nexuscachedirectory
-            test_transactionalwritefile test_profilemodlistrename
+            test_transactionalwritefile test_registry test_wineregistryfile
+            test_profilemodlistrename
             test_morrowindpluginlistwriter test_winepluginlistsync
             test_winesavedeployment)

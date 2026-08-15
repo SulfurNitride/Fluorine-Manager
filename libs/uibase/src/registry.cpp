@@ -15,126 +15,322 @@ You should have received a copy of the GNU General Public License
 along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include <uibase/registry.h>
-#include <uibase/log.h>
-#include <uibase/report.h>
 #include <QApplication>
-#include <QFile>
+#include <QByteArray>
 #include <QFileInfo>
 #include <QList>
 #include <QMessageBox>
 #include <QString>
-#include <QTextStream>
+#include <uibase/log.h>
+#include <uibase/registry.h>
+#include <uibase/report.h>
+#include <uibase/transactionalwritefile.h>
+
+#include <optional>
 
 namespace MOBase
 {
 
-// Line-by-line INI writer that preserves the file format.
-// Unlike QSettings::IniFormat, this does NOT interpret backslashes as
-// line continuations, does NOT URL-encode spaces in key names, and does
-// NOT reorder keys. It only modifies the target key=value pair and
-// leaves everything else untouched.
-static bool writeIniValueDirect(const QString& section, const QString& key,
-                                const QString& value, const QString& fileName)
+namespace
 {
-  QStringList lines;
-  bool fileExists = QFileInfo::exists(fileName);
+enum class MutationStatus
+{
+  Success,
+  ReadOnly,
+  Failure,
+};
 
-  if (fileExists) {
-    QFile file(fileName);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-      return false;
+enum class PermissionPolicy
+{
+  RespectReadOnly,
+  PreserveReadOnly,
+  MakeWritable,
+};
+
+struct MutationResult
+{
+  MutationStatus status{MutationStatus::Failure};
+  QString error;
+};
+
+struct IniLine
+{
+  QByteArray content;
+  QByteArray ending;
+};
+
+QList<IniLine> splitLines(QByteArrayView bytes)
+{
+  QList<IniLine> result;
+  qsizetype start = 0;
+  for (qsizetype index = 0; index < bytes.size(); ++index)
+  {
+    if (bytes[index] != '\r' && bytes[index] != '\n')
+    {
+      continue;
     }
-    QTextStream in(&file);
-    while (!in.atEnd()) {
-      lines.append(in.readLine());
+    const qsizetype endingStart = index;
+    if (bytes[index] == '\r' && index + 1 < bytes.size() && bytes[index + 1] == '\n')
+    {
+      ++index;
     }
-    file.close();
+    result.append({QByteArray(bytes.sliced(start, endingStart - start)),
+                   QByteArray(bytes.sliced(endingStart, index - endingStart + 1))});
+    start = index + 1;
+  }
+  if (start < bytes.size())
+  {
+    result.append({QByteArray(bytes.sliced(start)), {}});
+  }
+  return result;
+}
+
+QByteArray joinLines(const QList<IniLine>& lines)
+{
+  QByteArray result;
+  for (const IniLine& line : lines)
+  {
+    result += line.content;
+    result += line.ending;
+  }
+  return result;
+}
+
+QByteArray defaultEnding(const QList<IniLine>& lines)
+{
+  for (const IniLine& line : lines)
+  {
+    if (!line.ending.isEmpty())
+    {
+      return line.ending;
+    }
+  }
+  return QByteArrayLiteral("\n");
+}
+
+QByteArray normalizedForMatch(const IniLine& line, int index)
+{
+  QByteArray value = line.content.trimmed();
+  if (index == 0 && value.startsWith("\xEF\xBB\xBF"))
+  {
+    value.remove(0, 3);
+    value = value.trimmed();
+  }
+  return value;
+}
+
+bool containsSyntaxControl(const QString& value)
+{
+  return value.contains('\0') || value.contains('\r') || value.contains('\n');
+}
+
+bool hasWriteBits(QFileDevice::Permissions permissions)
+{
+  return permissions.testAnyFlags(
+      QFileDevice::WriteOwner | QFileDevice::WriteUser |
+      QFileDevice::WriteGroup | QFileDevice::WriteOther);
+}
+
+MutationResult mutateIni(const QString& section, const QString& key,
+                         const std::optional<QString>& value,
+                         const QString& fileName,
+                         PermissionPolicy permissionPolicy)
+{
+  if (section.trimmed().isEmpty() || key.trimmed().isEmpty() ||
+      section != section.trimmed() || key != key.trimmed() ||
+      section.contains('[') || section.contains(']') || key.contains('=') ||
+      containsSyntaxControl(section) || containsSyntaxControl(key) ||
+      (value.has_value() && containsSyntaxControl(*value)))
+  {
+    return {MutationStatus::Failure,
+            QObject::tr("Refusing invalid INI section, key, or value.")};
   }
 
-  // Find the target section and key
-  QString sectionHeader = "[" + section + "]";
+  TransactionalWriteFile transaction(fileName);
+  QByteArray original;
+  bool present = false;
+  if (!transaction.readOriginal(original, present))
+  {
+    return {MutationStatus::Failure, transaction.errorString()};
+  }
+  QFileDevice::Permissions originalPermissions;
+  if (!transaction.readPermissions(originalPermissions))
+  {
+    return {MutationStatus::Failure, transaction.errorString()};
+  }
+  if (!present && !value.has_value())
+  {
+    return {MutationStatus::Success, {}};
+  }
+
+  QList<IniLine> lines = splitLines(original);
+  const bool originallyEmpty = original.isEmpty();
+  const bool hadFinalEnding =
+      !original.isEmpty() && (original.endsWith('\r') || original.endsWith('\n'));
+  const QByteArray ending = defaultEnding(lines);
+  const QByteArray sectionHeader =
+      QByteArrayLiteral("[") + section.toUtf8() + QByteArrayLiteral("]");
+  const QByteArray encodedKey = key.toUtf8();
+
   int sectionStart = -1;
-  int sectionEnd   = lines.size();  // end of file if section is last
-  int keyLine      = -1;
-
-  for (int i = 0; i < lines.size(); ++i) {
-    QString trimmed = lines[i].trimmed();
-    if (trimmed.compare(sectionHeader, Qt::CaseInsensitive) == 0) {
-      sectionStart = i;
-      // Find end of this section (next section header or EOF)
-      for (int j = i + 1; j < lines.size(); ++j) {
-        QString t = lines[j].trimmed();
-        if (t.startsWith('[') && t.endsWith(']')) {
-          sectionEnd = j;
-          break;
-        }
-      }
-      break;
+  int sectionEnd = lines.size();
+  int keyLine = -1;
+  for (int index = 0; index < lines.size(); ++index)
+  {
+    const QByteArray trimmed = normalizedForMatch(lines[index], index);
+    if (QString::fromUtf8(trimmed).compare(QString::fromUtf8(sectionHeader),
+                                           Qt::CaseInsensitive) != 0)
+    {
+      continue;
     }
+    sectionStart = index;
+    for (int next = index + 1; next < lines.size(); ++next)
+    {
+      const QByteArray candidate = normalizedForMatch(lines[next], next);
+      if (candidate.startsWith('[') && candidate.endsWith(']'))
+      {
+        sectionEnd = next;
+        break;
+      }
+    }
+    break;
   }
 
-  if (sectionStart >= 0) {
-    // Section found, look for the key within it
-    for (int i = sectionStart + 1; i < sectionEnd; ++i) {
-      QString trimmed = lines[i].trimmed();
-      // Skip comments and empty lines
-      if (trimmed.isEmpty() || trimmed.startsWith(';') || trimmed.startsWith('#')) {
+  if (sectionStart >= 0)
+  {
+    for (int index = sectionStart + 1; index < sectionEnd; ++index)
+    {
+      const QByteArray trimmed = normalizedForMatch(lines[index], index);
+      if (trimmed.isEmpty() || trimmed.startsWith(';') || trimmed.startsWith('#'))
+      {
         continue;
       }
-      int eqPos = trimmed.indexOf('=');
-      if (eqPos > 0) {
-        QString existingKey = trimmed.left(eqPos).trimmed();
-        if (existingKey.compare(key, Qt::CaseInsensitive) == 0) {
-          keyLine = i;
-          break;
-        }
+      const qsizetype equals = trimmed.indexOf('=');
+      if (equals <= 0)
+      {
+        continue;
+      }
+      if (QString::fromUtf8(trimmed.left(equals).trimmed())
+              .compare(key, Qt::CaseInsensitive) == 0)
+      {
+        keyLine = index;
+        break;
       }
     }
-
-    if (keyLine >= 0) {
-      // Key found, replace the line preserving indentation
-      QString original = lines[keyLine];
-      int eqPos        = original.indexOf('=');
-      // Preserve everything up to and including '='
-      lines[keyLine] = original.left(eqPos + 1) + value;
-    } else {
-      // Key not found in section, insert it after the section header
-      lines.insert(sectionStart + 1, key + "=" + value);
-    }
-  } else {
-    // Section not found, append it
-    if (!lines.isEmpty() && !lines.last().trimmed().isEmpty()) {
-      lines.append("");  // blank line before new section
-    }
-    lines.append(sectionHeader);
-    lines.append(key + "=" + value);
   }
 
-  // Write back
-  QFile outFile(fileName);
-  if (!outFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-    return false;
+  if (!value.has_value())
+  {
+    if (keyLine < 0)
+    {
+      return {MutationStatus::Success, {}};
+    }
+    lines.removeAt(keyLine);
   }
-  QTextStream out(&outFile);
-  for (int i = 0; i < lines.size(); ++i) {
-    out << lines[i];
-    if (i < lines.size() - 1) {
-      out << '\n';
+  else if (keyLine >= 0)
+  {
+    const qsizetype equals = lines[keyLine].content.indexOf('=');
+    if (equals < 0)
+    {
+      return {MutationStatus::Failure,
+              QObject::tr("INI key changed while it was parsed.")};
+    }
+    lines[keyLine].content = lines[keyLine].content.left(equals + 1) + value->toUtf8();
+  }
+  else if (sectionStart >= 0)
+  {
+    if (lines[sectionStart].ending.isEmpty())
+    {
+      lines[sectionStart].ending = ending;
+    }
+    const bool insertsAtEnd = sectionStart + 1 == lines.size();
+    lines.insert(sectionStart + 1,
+                 {encodedKey + '=' + value->toUtf8(),
+                  insertsAtEnd && !hadFinalEnding ? QByteArray{} : ending});
+  }
+  else
+  {
+    if (!lines.isEmpty())
+    {
+      if (lines.last().ending.isEmpty())
+      {
+        lines.last().ending = ending;
+      }
+      if (!lines.last().content.trimmed().isEmpty())
+      {
+        lines.append({{}, ending});
+      }
+    }
+    lines.append({sectionHeader, ending});
+    lines.append({encodedKey + '=' + value->toUtf8(),
+                  originallyEmpty || hadFinalEnding ? ending : QByteArray{}});
+  }
+
+  if (!lines.isEmpty() && !originallyEmpty)
+  {
+    if (hadFinalEnding && lines.last().ending.isEmpty())
+    {
+      lines.last().ending = ending;
+    }
+    else if (!hadFinalEnding)
+    {
+      lines.last().ending.clear();
     }
   }
-  // Preserve trailing newline if original had one, or add one
-  out << '\n';
-  outFile.close();
 
-  return true;
+  const QByteArray replacement = joinLines(lines);
+  if (replacement == original)
+  {
+    return {MutationStatus::Success, {}};
+  }
+  if (present && !hasWriteBits(originalPermissions) &&
+      permissionPolicy == PermissionPolicy::RespectReadOnly)
+  {
+    return {MutationStatus::ReadOnly, {}};
+  }
+  if (permissionPolicy == PermissionPolicy::MakeWritable)
+  {
+    const QFileDevice::Permissions permissions =
+        originalPermissions | QFileDevice::WriteUser | QFileDevice::WriteOwner;
+    if (!transaction.setPermissions(permissions))
+    {
+      return {MutationStatus::Failure, transaction.errorString()};
+    }
+  }
+  else if (permissionPolicy == PermissionPolicy::PreserveReadOnly && present &&
+           !transaction.setPermissions(originalPermissions))
+  {
+    return {MutationStatus::Failure, transaction.errorString()};
+  }
+  if (!transaction.replaceWith(replacement))
+  {
+    return {MutationStatus::Failure, transaction.errorString()};
+  }
+  return {MutationStatus::Success, {}};
 }
+
+MutationResult writeIniValueDirect(const QString& section, const QString& key,
+                                   const QString& value, const QString& fileName,
+                                   PermissionPolicy permissionPolicy)
+{
+  return mutateIni(section, key, value, fileName, permissionPolicy);
+}
+
+} // namespace
 
 bool WriteRegistryValue(const QString& appName, const QString& keyName,
                         const QString& value, const QString& fileName)
 {
-  if (writeIniValueDirect(appName, keyName, value, fileName)) {
+  MutationResult mutation = writeIniValueDirect(
+      appName, keyName, value, fileName, PermissionPolicy::RespectReadOnly);
+  if (mutation.status == MutationStatus::Success)
+  {
     return true;
+  }
+  if (mutation.status == MutationStatus::Failure)
+  {
+    log::error("Could not update INI '{}': {}", fileName, mutation.error);
+    return false;
   }
 
   // Write failed, check if the file is read-only
@@ -156,19 +352,18 @@ bool WriteRegistryValue(const QString& appName, const QString& keyName,
           .remember("clearReadOnly", fileInfo.fileName())
           .exec();
 
-  if (result & (QMessageBox::Yes | QMessageBox::Ignore)) {
-    // Make the file writable
-    QFile file(fileName);
-    file.setPermissions(file.permissions() | QFile::WriteUser | QFile::WriteOwner);
+  if (result & (QMessageBox::Yes | QMessageBox::Ignore))
+  {
+    mutation = writeIniValueDirect(
+        appName, keyName, value, fileName,
+        result == QMessageBox::Yes ? PermissionPolicy::MakeWritable
+                                   : PermissionPolicy::PreserveReadOnly);
 
-    bool ok = writeIniValueDirect(appName, keyName, value, fileName);
-
-    if (result == QMessageBox::Ignore) {
-      // Set back to read-only
-      file.setPermissions(file.permissions() & ~(QFile::WriteUser | QFile::WriteOwner));
+    if (mutation.status != MutationStatus::Success && !mutation.error.isEmpty())
+    {
+      log::error("Could not update INI '{}': {}", fileName, mutation.error);
     }
-
-    return ok;
+    return mutation.status == MutationStatus::Success;
   }
 
   return false;
@@ -177,82 +372,14 @@ bool WriteRegistryValue(const QString& appName, const QString& keyName,
 bool RemoveRegistryValue(const QString& section, const QString& key,
                          const QString& fileName)
 {
-  if (!QFileInfo::exists(fileName)) {
-    return true;  // nothing to remove
+  const MutationResult mutation =
+      mutateIni(section, key, std::nullopt, fileName,
+                PermissionPolicy::RespectReadOnly);
+  if (mutation.status != MutationStatus::Success && !mutation.error.isEmpty())
+  {
+    log::error("Could not remove INI value from '{}': {}", fileName, mutation.error);
   }
-
-  QFile file(fileName);
-  if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-    return false;
-  }
-  QStringList lines;
-  QTextStream in(&file);
-  while (!in.atEnd()) {
-    lines.append(in.readLine());
-  }
-  file.close();
-
-  const QString sectionHeader = "[" + section + "]";
-  int sectionStart = -1;
-  int sectionEnd   = lines.size();
-
-  for (int i = 0; i < lines.size(); ++i) {
-    QString trimmed = lines[i].trimmed();
-    if (trimmed.compare(sectionHeader, Qt::CaseInsensitive) == 0) {
-      sectionStart = i;
-      for (int j = i + 1; j < lines.size(); ++j) {
-        QString t = lines[j].trimmed();
-        if (t.startsWith('[') && t.endsWith(']')) {
-          sectionEnd = j;
-          break;
-        }
-      }
-      break;
-    }
-  }
-
-  if (sectionStart < 0) {
-    return true;  // section not found, nothing to remove
-  }
-
-  // Find and remove the key line
-  bool found = false;
-  for (int i = sectionStart + 1; i < sectionEnd; ++i) {
-    QString trimmed = lines[i].trimmed();
-    if (trimmed.isEmpty() || trimmed.startsWith(';') || trimmed.startsWith('#')) {
-      continue;
-    }
-    int eqPos = trimmed.indexOf('=');
-    if (eqPos > 0) {
-      QString existingKey = trimmed.left(eqPos).trimmed();
-      if (existingKey.compare(key, Qt::CaseInsensitive) == 0) {
-        lines.removeAt(i);
-        found = true;
-        break;
-      }
-    }
-  }
-
-  if (!found) {
-    return true;  // key not found, nothing to remove
-  }
-
-  // Write back
-  QFile outFile(fileName);
-  if (!outFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-    return false;
-  }
-  QTextStream out(&outFile);
-  for (int i = 0; i < lines.size(); ++i) {
-    out << lines[i];
-    if (i < lines.size() - 1) {
-      out << '\n';
-    }
-  }
-  out << '\n';
-  outFile.close();
-
-  return true;
+  return mutation.status == MutationStatus::Success;
 }
 
 #ifdef _WIN32
@@ -260,11 +387,9 @@ bool WriteRegistryValue(const wchar_t* appName, const wchar_t* keyName,
                         const wchar_t* value, const wchar_t* fileName)
 {
   return WriteRegistryValue(
-    QString::fromWCharArray(appName),
-    QString::fromWCharArray(keyName),
-    QString::fromWCharArray(value),
-    QString::fromWCharArray(fileName));
+      QString::fromWCharArray(appName), QString::fromWCharArray(keyName),
+      QString::fromWCharArray(value), QString::fromWCharArray(fileName));
 }
 #endif
 
-}  // namespace MOBase
+} // namespace MOBase

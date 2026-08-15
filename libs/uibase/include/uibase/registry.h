@@ -24,7 +24,8 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 namespace MOBase
 {
 
-// On Linux, writes INI values using QSettings instead of WritePrivateProfileString
+// Atomically updates one Bethesda-style INI value without normalizing the
+// surrounding bytes or interpreting backslashes.
 QDLLEXPORT bool WriteRegistryValue(const QString& appName, const QString& keyName,
                                    const QString& value, const QString& fileName);
 
@@ -40,6 +41,6 @@ QDLLEXPORT bool WriteRegistryValue(const wchar_t* appName, const wchar_t* keyNam
                                    const wchar_t* value, const wchar_t* fileName);
 #endif
 
-}  // namespace MOBase
+} // namespace MOBase
 
-#endif  // REGISTRY_H
+#endif // REGISTRY_H
