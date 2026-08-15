@@ -10,14 +10,185 @@
 #include <QSaveFile>
 #include <QStandardPaths>
 #include <QThread>
+#include <QUuid>
 #include <uibase/log.h>
 
+#include <cerrno>
 #include <csignal>
+#include <cstring>
 #include <sys/types.h>
+
+#ifdef Q_OS_UNIX
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace
 {
 constexpr auto PrefixOwnershipMarker = ".fluorine-managed-prefix";
+constexpr char PrefixOwnershipMarkerBytes[] = "Fluorine Manager managed prefix\n";
+
+enum class MarkerStatus
+{
+  Missing,
+  Exact,
+  Invalid,
+};
+
+#ifdef Q_OS_UNIX
+bool sameIdentity(const struct stat& left, const struct stat& right)
+{
+  return left.st_dev == right.st_dev && left.st_ino == right.st_ino;
+}
+
+int openDirectoryNoFollow(const QString& path, bool createMissing)
+{
+  const QString absolute = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+  if (absolute.isEmpty() || absolute == QStringLiteral("/")) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  int current = ::open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (current < 0) {
+    return -1;
+  }
+  const QStringList components = absolute.split('/', Qt::SkipEmptyParts);
+  for (const QString& component : components) {
+    const QByteArray encoded = QFile::encodeName(component);
+    int next =
+        ::openat(current, encoded.constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (next < 0 && errno == ENOENT && createMissing) {
+      if (::mkdirat(current, encoded.constData(), 0700) != 0 && errno != EEXIST) {
+        ::close(current);
+        return -1;
+      }
+      next =
+          ::openat(current, encoded.constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    }
+    if (next < 0) {
+      ::close(current);
+      return -1;
+    }
+    ::close(current);
+    current = next;
+  }
+  return current;
+}
+
+bool liveDirectoryMatches(int retained, const QString& path)
+{
+  const int live = openDirectoryNoFollow(path, false);
+  if (live < 0) {
+    return false;
+  }
+  struct stat retainedStatus{};
+  struct stat liveStatus{};
+  const bool matches = ::fstat(retained, &retainedStatus) == 0 && ::fstat(live, &liveStatus) == 0 &&
+                       sameIdentity(retainedStatus, liveStatus);
+  ::close(live);
+  return matches;
+}
+
+MarkerStatus markerStatusAt(int directory)
+{
+  const int marker =
+      ::openat(directory, PrefixOwnershipMarker, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+  if (marker < 0) {
+    return errno == ENOENT ? MarkerStatus::Missing : MarkerStatus::Invalid;
+  }
+
+  struct stat status{};
+  const qsizetype expectedSize = static_cast<qsizetype>(sizeof(PrefixOwnershipMarkerBytes) - 1);
+  if (::fstat(marker, &status) != 0 || !S_ISREG(status.st_mode) || status.st_uid != ::geteuid() ||
+      status.st_size != expectedSize) {
+    ::close(marker);
+    return MarkerStatus::Invalid;
+  }
+
+  QByteArray contents(expectedSize, Qt::Uninitialized);
+  qsizetype offset = 0;
+  while (offset < contents.size()) {
+    const ssize_t count = ::read(marker, contents.data() + offset, contents.size() - offset);
+    if (count < 0 && errno == EINTR) {
+      continue;
+    }
+    if (count <= 0) {
+      ::close(marker);
+      return MarkerStatus::Invalid;
+    }
+    offset += count;
+  }
+  char extra             = 0;
+  const ssize_t trailing = ::read(marker, &extra, 1);
+  ::close(marker);
+  const bool exact =
+      trailing == 0 && contents == QByteArray(PrefixOwnershipMarkerBytes, expectedSize);
+  return exact ? MarkerStatus::Exact : MarkerStatus::Invalid;
+}
+
+bool writeExactMarkerAt(int directory)
+{
+  const QString temporaryName = QStringLiteral(".fluorine-managed-prefix.tmp.%1")
+                                    .arg(QUuid::createUuid().toString(QUuid::Id128));
+  const QByteArray encodedTemporary = QFile::encodeName(temporaryName);
+  const int marker                  = ::openat(directory, encodedTemporary.constData(),
+                                               O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+  if (marker < 0) {
+    return false;
+  }
+
+  const char* contents = PrefixOwnershipMarkerBytes;
+  const qsizetype size = sizeof(PrefixOwnershipMarkerBytes) - 1;
+  qsizetype offset     = 0;
+  while (offset < size) {
+    const ssize_t count = ::write(marker, contents + offset, size - offset);
+    if (count < 0 && errno == EINTR) {
+      continue;
+    }
+    if (count <= 0) {
+      ::close(marker);
+      ::unlinkat(directory, encodedTemporary.constData(), 0);
+      return false;
+    }
+    offset += count;
+  }
+  const bool fileDurable = ::fsync(marker) == 0;
+  const bool closed      = ::close(marker) == 0;
+  if (!fileDurable || !closed) {
+    ::unlinkat(directory, encodedTemporary.constData(), 0);
+    return false;
+  }
+
+  if (::linkat(directory, encodedTemporary.constData(), directory, PrefixOwnershipMarker, 0) != 0) {
+    const int failureCode = errno;
+    ::unlinkat(directory, encodedTemporary.constData(), 0);
+    return failureCode == EEXIST && markerStatusAt(directory) == MarkerStatus::Exact &&
+           ::fsync(directory) == 0;
+  }
+  const bool temporaryRemoved = ::unlinkat(directory, encodedTemporary.constData(), 0) == 0;
+  const bool directoryDurable = ::fsync(directory) == 0;
+  return temporaryRemoved && directoryDurable && markerStatusAt(directory) == MarkerStatus::Exact;
+}
+#else
+MarkerStatus markerStatusAtPath(const QString& markerPath)
+{
+  const QFileInfo markerInfo(markerPath);
+  if (!markerInfo.exists() && !markerInfo.isSymLink()) {
+    return MarkerStatus::Missing;
+  }
+  if (!markerInfo.isFile() || markerInfo.isSymLink()) {
+    return MarkerStatus::Invalid;
+  }
+  QFile marker(markerPath);
+  if (!marker.open(QIODevice::ReadOnly)) {
+    return MarkerStatus::Invalid;
+  }
+  return marker.readAll() == QByteArray(PrefixOwnershipMarkerBytes) ? MarkerStatus::Exact
+                                                                    : MarkerStatus::Invalid;
+}
+#endif
 
 QString fluorineConfigPath()
 {
@@ -132,29 +303,79 @@ QString FluorineConfig::compatDataPath() const
 bool FluorineConfig::markPrefixOwned() const
 {
   const QString compatData = compatDataPath();
-  if (compatData.isEmpty() || QFileInfo(compatData).isSymLink() ||
-      !QDir().mkpath(compatData)) {
+  if (compatData.isEmpty()) {
     return false;
   }
 
-  QFile marker(QDir(compatData).filePath(QString::fromLatin1(PrefixOwnershipMarker)));
-  if (!marker.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+#ifdef Q_OS_UNIX
+  const int directory = openDirectoryNoFollow(compatData, true);
+  if (directory < 0) {
     return false;
   }
-  return marker.write("Fluorine Manager managed prefix\n") >= 0;
+  const MarkerStatus status = markerStatusAt(directory);
+  const bool marked         = status == MarkerStatus::Exact
+                                  ? ::fsync(directory) == 0
+                                  : status == MarkerStatus::Missing && writeExactMarkerAt(directory);
+  const bool live           = liveDirectoryMatches(directory, compatData);
+  ::close(directory);
+  return marked && live;
+#else
+  const QFileInfo compatInfo(compatData);
+  if (compatInfo.isSymLink() || (!compatInfo.exists() && !QDir().mkpath(compatData)) ||
+      QFileInfo(compatData).canonicalFilePath() !=
+          QDir::cleanPath(QFileInfo(compatData).absoluteFilePath())) {
+    return false;
+  }
+  const QString markerPath  = QDir(compatData).filePath(QString::fromLatin1(PrefixOwnershipMarker));
+  const MarkerStatus status = markerStatusAtPath(markerPath);
+  if (status == MarkerStatus::Exact) {
+    return true;
+  }
+  if (status != MarkerStatus::Missing) {
+    return false;
+  }
+  QSaveFile marker(markerPath);
+  marker.setDirectWriteFallback(false);
+  const QByteArray contents(PrefixOwnershipMarkerBytes);
+  return marker.open(QIODevice::WriteOnly) &&
+         marker.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                               QFileDevice::ReadUser | QFileDevice::WriteUser) &&
+         marker.write(contents) == contents.size() && marker.flush() && marker.commit() &&
+         markerStatusAtPath(markerPath) == MarkerStatus::Exact;
+#endif
 }
 
 bool FluorineConfig::canDestroyPrefix() const
 {
   const QString compatData = compatDataPath();
-  if (compatData.isEmpty() || QFileInfo(compatData).isSymLink() ||
-      QFileInfo(prefix_path).isSymLink()) {
+  if (compatData.isEmpty() || QFileInfo(prefix_path).isSymLink()) {
     return false;
   }
 
-  const QFileInfo marker(
-      QDir(compatData).filePath(QString::fromLatin1(PrefixOwnershipMarker)));
-  if (marker.isFile() && !marker.isSymLink()) {
+#ifdef Q_OS_UNIX
+  const int directory = openDirectoryNoFollow(compatData, false);
+  if (directory < 0) {
+    return false;
+  }
+  const MarkerStatus marker = markerStatusAt(directory);
+  const bool live           = liveDirectoryMatches(directory, compatData);
+  ::close(directory);
+  if (!live || marker == MarkerStatus::Invalid) {
+    return false;
+  }
+#else
+  const QFileInfo compatInfo(compatData);
+  if (!compatInfo.isDir() || compatInfo.isSymLink() ||
+      compatInfo.canonicalFilePath() != QDir::cleanPath(compatInfo.absoluteFilePath())) {
+    return false;
+  }
+  const MarkerStatus marker =
+      markerStatusAtPath(QDir(compatData).filePath(QString::fromLatin1(PrefixOwnershipMarker)));
+  if (marker == MarkerStatus::Invalid) {
+    return false;
+  }
+#endif
+  if (marker == MarkerStatus::Exact) {
     return true;
   }
 

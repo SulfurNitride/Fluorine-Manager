@@ -6,6 +6,11 @@
 #include <QTemporaryDir>
 #include <gtest/gtest.h>
 
+#ifdef Q_OS_UNIX
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 namespace
 {
 FluorineConfig makePrefix(const QString& root)
@@ -54,6 +59,45 @@ TEST(FluorineConfigOwnership, AcceptsMarkedManagedPrefix)
   EXPECT_TRUE(config.canDestroyPrefix());
   EXPECT_TRUE(QFile::exists(
       QDir(config.compatDataPath()).filePath(".fluorine-managed-prefix")));
+  QFile marker(QDir(config.compatDataPath()).filePath(".fluorine-managed-prefix"));
+  ASSERT_TRUE(marker.open(QIODevice::ReadOnly));
+  EXPECT_EQ(marker.readAll(), "Fluorine Manager managed prefix\n");
+#ifdef Q_OS_UNIX
+  struct stat status{};
+  ASSERT_EQ(::stat(QFile::encodeName(marker.fileName()).constData(), &status), 0);
+  EXPECT_EQ(status.st_mode & 0777, 0600);
+#endif
+}
+
+TEST(FluorineConfigOwnership, RefusesAndPreservesCollidingMarker)
+{
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const FluorineConfig config = makePrefix(QDir(temporary.path()).filePath("managed"));
+  const QString markerPath    = QDir(config.compatDataPath()).filePath(".fluorine-managed-prefix");
+  QFile marker(markerPath);
+  ASSERT_TRUE(marker.open(QIODevice::WriteOnly));
+  ASSERT_EQ(marker.write("unrelated marker\n"), 17);
+  marker.close();
+
+  EXPECT_FALSE(config.canDestroyPrefix());
+  EXPECT_FALSE(config.markPrefixOwned());
+  ASSERT_TRUE(marker.open(QIODevice::ReadOnly));
+  EXPECT_EQ(marker.readAll(), "unrelated marker\n");
+}
+
+TEST(FluorineConfigOwnership, RefusesShortOwnershipMarker)
+{
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const FluorineConfig config = makePrefix(QDir(temporary.path()).filePath("managed"));
+  QFile marker(QDir(config.compatDataPath()).filePath(".fluorine-managed-prefix"));
+  ASSERT_TRUE(marker.open(QIODevice::WriteOnly));
+  ASSERT_EQ(marker.write("Fluorine"), 8);
+  marker.close();
+
+  EXPECT_FALSE(config.canDestroyPrefix());
+  EXPECT_FALSE(config.markPrefixOwned());
 }
 
 TEST(FluorineConfigOwnership, DirectRootRecreationRestoresOwnershipMarker)
@@ -162,6 +206,45 @@ TEST(FluorineConfigOwnership, RefusesSymlinkedCompatibilityRoot)
   EXPECT_FALSE(config.markPrefixOwned());
   EXPECT_FALSE(config.canDestroyPrefix());
 }
+
+#ifdef Q_OS_UNIX
+TEST(FluorineConfigOwnership, RefusesSymlinkedMarker)
+{
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const FluorineConfig config = makePrefix(QDir(temporary.path()).filePath("managed"));
+  const QString outside       = temporary.filePath("outside-marker");
+  QFile marker(outside);
+  ASSERT_TRUE(marker.open(QIODevice::WriteOnly));
+  ASSERT_EQ(marker.write("Fluorine Manager managed prefix\n"), 32);
+  marker.close();
+  const QString markerPath = QDir(config.compatDataPath()).filePath(".fluorine-managed-prefix");
+  ASSERT_EQ(
+      ::symlink(QFile::encodeName(outside).constData(), QFile::encodeName(markerPath).constData()),
+      0);
+
+  EXPECT_FALSE(config.canDestroyPrefix());
+  EXPECT_FALSE(config.markPrefixOwned());
+  EXPECT_TRUE(QFileInfo(markerPath).isSymLink());
+}
+
+TEST(FluorineConfigOwnership, RefusesSymlinkedAncestorWithoutCreatingResidue)
+{
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const QString outside = temporary.filePath("outside");
+  ASSERT_TRUE(QDir().mkpath(outside));
+  const QString alias = temporary.filePath("alias");
+  ASSERT_EQ(::symlink(QFile::encodeName(outside).constData(), QFile::encodeName(alias).constData()),
+            0);
+
+  FluorineConfig config;
+  config.prefix_path = QDir(alias).filePath("managed/pfx");
+  EXPECT_FALSE(config.markPrefixOwned());
+  EXPECT_FALSE(config.canDestroyPrefix());
+  EXPECT_FALSE(QFileInfo::exists(QDir(outside).filePath("managed")));
+}
+#endif
 
 TEST(FluorineConfigOwnership, RefusesSymlinkedPfxInsideMarkedRoot)
 {
