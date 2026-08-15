@@ -88,6 +88,15 @@ set_tests_properties(test_winesave_surface PROPERTIES
     TIMEOUT 10
 )
 add_test(
+    NAME test_profile_rename_surface
+    COMMAND ${Python3_EXECUTABLE} -m unittest -v
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_profile_rename_surface.py
+)
+set_tests_properties(test_profile_rename_surface PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    TIMEOUT 10
+)
+add_test(
     NAME test_desktop_entry
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/test_desktop_entry.py
@@ -1228,6 +1237,26 @@ target_link_libraries(test_profilemodlistrename PRIVATE
 add_test(NAME test_profilemodlistrename COMMAND test_profilemodlistrename)
 set_tests_properties(test_profilemodlistrename PROPERTIES TIMEOUT 10)
 
+add_executable(test_profilerename EXCLUDE_FROM_ALL
+    test_profilerename.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/profilerename.cpp
+)
+set_target_properties(test_profilerename PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_profilerename PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_profilerename PRIVATE
+    Qt6::Core
+    mo2::uibase
+    GTest::gtest
+)
+add_test(NAME test_profilerename COMMAND test_profilerename)
+set_tests_properties(test_profilerename PROPERTIES TIMEOUT 10)
+
 add_executable(test_morrowindpluginlistwriter EXCLUDE_FROM_ALL
     test_morrowindpluginlistwriter.cpp
     ${CMAKE_SOURCE_DIR}/libs/game_bethesda/src/games/morrowind/morrowindpluginlistwriter.cpp
@@ -1364,6 +1393,6 @@ add_custom_target(fluorine-tests
             test_instancegeneralsettings test_downloadmetadatapolicy
             test_downloadwritelifecycle test_nexuscachedirectory
             test_transactionalwritefile test_registry test_wineregistryfile
-            test_profilemodlistrename
+            test_profilemodlistrename test_profilerename
             test_morrowindpluginlistwriter test_winepluginlistsync
             test_winesavedeployment test_winesavetargetresolver)

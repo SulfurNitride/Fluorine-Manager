@@ -22,7 +22,10 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <QObject>
 
+#include "processlaunchcontext.h"
 #include "tutorabledialog.h"
+
+#include <optional>
 
 class QListWidget;
 class QListWidgetItem;
@@ -70,6 +73,8 @@ public:
    * @todo the notion of a fail state makes little sense in the current dialog
    **/
   bool failed() const { return m_FailState; }
+  bool fatalFailure() const { return m_FatalFailure; }
+  QString fatalFailureDetail() const { return m_FatalFailureDetail; }
 
   // if the dialog was closed with the 'select' button, returns the name of the
   // selected profile; if the dialog was closed with 'cancel', returns empty
@@ -129,9 +134,13 @@ private slots:
 
 private:
   Ui::ProfilesDialog* ui;
+  OrganizerCore& m_Organizer;
   GameFeatures& m_GameFeatures;
   QListWidget* m_ProfilesList;
   bool m_FailState;
+  bool m_FatalFailure;
+  QString m_FatalFailureDetail;
+  std::optional<ProcessLaunchContextTracker::ConfigurationLease> m_FatalLease;
   MOBase::IPluginGame const* m_Game;
   QString m_ActiveProfileName;
   std::optional<QString> m_Selected;

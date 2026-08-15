@@ -42,6 +42,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <QWhatsThis>
 
 #include <exception>
+#include <utility>
 
 using namespace MOBase;
 using namespace MOShared;
@@ -51,7 +52,8 @@ Q_DECLARE_METATYPE(Profile::Ptr)
 ProfilesDialog::ProfilesDialog(const QString& profileName, OrganizerCore& organizer,
                                QWidget* parent)
     : TutorableDialog("Profiles", parent), ui(new Ui::ProfilesDialog),
-      m_GameFeatures(organizer.gameFeatures()), m_FailState(false),
+      m_Organizer(organizer), m_GameFeatures(organizer.gameFeatures()),
+      m_FailState(false), m_FatalFailure(false),
       m_Game(organizer.managedGame()), m_ActiveProfileName("")
 {
   ui->setupUi(this);
@@ -302,12 +304,41 @@ void ProfilesDialog::on_renameButton_clicked()
     }
   }
 
-  ui->profilesList->currentItem()->setText(name);
-
   QString oldName = currentProfile->name();
-  currentProfile->rename(name);
+  if (name == oldName) {
+    return;
+  }
 
-  emit profileRenamed(currentProfile.get(), oldName, name);
+  QString error;
+  bool restartRequired = false;
+  {
+    auto configurationLease =
+        m_Organizer.tryAcquireQuiescentConfigurationLease();
+    if (!configurationLease) {
+      QMessageBox::information(
+          this, tr("Unable to rename profile"),
+          tr("A program is running or another configuration transaction is "
+             "active. Close it and try again."));
+      return;
+    }
+
+    if (currentProfile->tryRename(name, &error, &restartRequired)) {
+      ui->profilesList->currentItem()->setText(currentProfile->name());
+      emit profileRenamed(currentProfile.get(), oldName, currentProfile->name());
+      return;
+    }
+    if (restartRequired) {
+      m_FatalFailure = true;
+      m_FatalFailureDetail = error;
+      m_FatalLease.emplace(std::move(configurationLease));
+      close();
+      return;
+    }
+  }
+
+  QMessageBox::warning(
+      this, tr("Unable to rename profile"),
+      error.isEmpty() ? tr("The profile could not be renamed.") : error);
 }
 
 void ProfilesDialog::on_invalidationBox_stateChanged(int state)

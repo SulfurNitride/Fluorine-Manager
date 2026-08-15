@@ -335,6 +335,7 @@ public:
 
   using ConfigurationLease = ProcessLaunchContextTracker::ConfigurationLease;
   ConfigurationLease tryAcquireConfigurationLease();
+  ConfigurationLease tryAcquireQuiescentConfigurationLease();
 
   void abandonProcessLaunch(const QString& launchToken);
 

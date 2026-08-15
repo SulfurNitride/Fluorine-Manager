@@ -23,6 +23,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "game_features.h"
 #include "modinfo.h"
 #include "modinfoforeign.h"
+#include "profilerename.h"
 #include "registry.h"
 #include "settings.h"
 #include "settingswritebarrier.h"
@@ -68,8 +69,9 @@ using namespace MOShared;
 
 namespace
 {
-SettingsWriteBarrier g_ProfileWriteBarrier;
-std::mutex g_ProfileSettingsMutex;
+SettingsWriteBarrier g_ProfileWriteBarrier(
+    SettingsWriteBarrier::Concurrency::Serialized);
+std::recursive_mutex g_ProfileSettingsMutex;
 std::unordered_set<QSettings*> g_ProfileSettings;
 
 void registerProfileSettings(QSettings* settings)
@@ -1182,14 +1184,77 @@ QString Profile::savePath() const
 
 void Profile::rename(const QString& newName)
 {
+  QString error;
+  if (!tryRename(newName, &error)) {
+    log::error("failed to rename profile '{}': {}", name(), error);
+  }
+}
+
+bool Profile::tryRename(const QString& newName, QString* error,
+                        bool* restartRequired)
+{
+  if (restartRequired != nullptr) {
+    *restartRequired = false;
+  }
   auto writeLease = g_ProfileWriteBarrier.enterIfAllowed();
   if (!writeLease) {
-    return;
+    if (error != nullptr) {
+      *error = tr("Profile writes are currently disabled.");
+    }
+    return false;
   }
 
-  QDir profileDir(Settings::instance().paths().profiles());
-  profileDir.rename(name(), newName);
-  m_Directory.setPath(profileDir.absoluteFilePath(newName));
+  const std::lock_guard settingsLock(g_ProfileSettingsMutex);
+  if (!g_ProfileSettings.contains(m_Settings)) {
+    if (error != nullptr) {
+      *error = tr("The profile settings backend is not registered.");
+    }
+    return false;
+  }
+
+  const QString settingsPath =
+      QDir::cleanPath(QFileInfo(m_Settings->fileName()).absoluteFilePath());
+  for (auto* settings : g_ProfileSettings) {
+    if (settings != m_Settings && settings != nullptr &&
+        QDir::cleanPath(QFileInfo(settings->fileName()).absoluteFilePath()) ==
+            settingsPath) {
+      if (error != nullptr) {
+        *error = tr("Another component is still using this profile. Close it and "
+                    "try again.");
+      }
+      return false;
+    }
+  }
+
+  auto result = ProfileRename::apply(m_Directory, *m_Settings, newName);
+  if (!result.succeeded()) {
+    if (error != nullptr) {
+      *error = result.error;
+    }
+    log::error("failed to rename profile from {} to {}: {}", result.sourcePath,
+               result.targetPath, result.error);
+    if (result.status == ProfileRename::Status::RollbackFailed) {
+      if (restartRequired != nullptr) {
+        *restartRequired = true;
+      }
+      suppressWritesForFailedRollback();
+    }
+    return false;
+  }
+
+  if (result.status == ProfileRename::Status::NoChange) {
+    return true;
+  }
+
+  auto* previousSettings = m_Settings;
+  auto* replacement      = result.replacementSettings.release();
+  auto registration      = g_ProfileSettings.extract(previousSettings);
+  registration.value()   = replacement;
+  g_ProfileSettings.insert(std::move(registration));
+  m_Settings = replacement;
+  m_Directory.setPath(result.targetPath);
+  delete previousSettings;
+  return true;
 }
 
 QString keyName(const QString& section, const QString& name)

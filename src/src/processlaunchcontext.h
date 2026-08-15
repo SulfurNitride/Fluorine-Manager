@@ -135,6 +135,18 @@ public:
     return ConfigurationLease(this);
   }
 
+  ConfigurationLease tryAcquireQuiescentConfigurationLease()
+  {
+    std::lock_guard lock(m_Mutex);
+    if (m_ReservationsSuppressed.load(std::memory_order_acquire) ||
+        m_ConfigurationLeaseActive || !m_Launches.isEmpty()) {
+      return {};
+    }
+
+    m_ConfigurationLeaseActive = true;
+    return ConfigurationLease(this);
+  }
+
   void suppressNewReservations() noexcept
   {
     // A reservation already inside the short critical section may finish and

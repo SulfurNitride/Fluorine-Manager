@@ -2053,6 +2053,14 @@ void MainWindow::on_profileBox_currentIndexChanged(int index)
     // show the dialog
     ProfilesDialog dlg(previousName, m_OrganizerCore, this);
     dlg.exec();
+    if (dlg.fatalFailure()) {
+      failStopAfterSettingsRollback(
+          tr("Profile rename incomplete"),
+          dlg.fatalFailureDetail().isEmpty()
+              ? tr("The profile rename could not be rolled back. Fluorine Manager "
+                   "must close to prevent further profile changes.")
+              : dlg.fatalFailureDetail());
+    }
 
     // check if the user clicked 'select' to select another profile
     std::optional<QString> newSelection = dlg.selectedProfile();
@@ -2067,6 +2075,14 @@ void MainWindow::on_profileBox_currentIndexChanged(int index)
     while (!refreshProfiles(false)) {
       ProfilesDialog dlg(previousName, m_OrganizerCore, this);
       dlg.exec();
+      if (dlg.fatalFailure()) {
+        failStopAfterSettingsRollback(
+            tr("Profile rename incomplete"),
+            dlg.fatalFailureDetail().isEmpty()
+                ? tr("The profile rename could not be rolled back. Fluorine Manager "
+                     "must close to prevent further profile changes.")
+                : dlg.fatalFailureDetail());
+      }
       newSelection = dlg.selectedProfile();
     }
 
@@ -2850,6 +2866,14 @@ void MainWindow::on_actionAdd_Profile_triggered()
     // active profile directory is locked
     m_SavesTab->stopMonitorSaves();
     profilesDialog.exec();
+    if (profilesDialog.fatalFailure()) {
+      failStopAfterSettingsRollback(
+          tr("Profile rename incomplete"),
+          profilesDialog.fatalFailureDetail().isEmpty()
+              ? tr("The profile rename could not be rolled back. Fluorine Manager "
+                   "must close to prevent further profile changes.")
+              : profilesDialog.fatalFailureDetail());
+    }
     m_SavesTab->refreshSaveList();  // since the save list may now be outdated we have
                                     // to refresh it completely
 

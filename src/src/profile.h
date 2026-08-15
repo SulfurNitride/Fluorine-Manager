@@ -234,6 +234,8 @@ public:
    * @param newName new name of profile
    */
   void rename(const QString& newName);
+  bool tryRename(const QString& newName, QString* error = nullptr,
+                 bool* restartRequired = nullptr);
 
   /**
    * @brief create the ini file to be used by the game

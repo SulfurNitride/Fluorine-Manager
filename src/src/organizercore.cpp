@@ -4152,6 +4152,11 @@ OrganizerCore::ConfigurationLease OrganizerCore::tryAcquireConfigurationLease()
   return m_ProcessLaunchContext.tryAcquireConfigurationLease();
 }
 
+OrganizerCore::ConfigurationLease OrganizerCore::tryAcquireQuiescentConfigurationLease()
+{
+  return m_ProcessLaunchContext.tryAcquireQuiescentConfigurationLease();
+}
+
 void OrganizerCore::abandonProcessLaunch(const QString& launchToken)
 {
   m_ProcessLaunchContext.abandon(launchToken);

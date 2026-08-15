@@ -310,6 +310,23 @@ TEST(ProcessLaunchContextTrackerTest, FailStopRejectsConfigurationLease)
   EXPECT_FALSE(context.tryAcquireConfigurationLease());
 }
 
+TEST(ProcessLaunchContextTrackerTest, QuiescentLeaseRequiresNoActiveLaunches)
+{
+  ProcessLaunchContextTracker context;
+  ASSERT_TRUE(context.reserve(QStringLiteral("running"),
+                              QStringLiteral("Override"), false));
+  EXPECT_FALSE(context.tryAcquireQuiescentConfigurationLease());
+  context.abandon(QStringLiteral("running"));
+
+  auto configuration = context.tryAcquireQuiescentConfigurationLease();
+  ASSERT_TRUE(configuration);
+  EXPECT_FALSE(context.reserve(QStringLiteral("during-rename"),
+                               QStringLiteral("Override"), false));
+  EXPECT_FALSE(context.tryAcquireConfigurationLease());
+  configuration = {};
+  EXPECT_TRUE(context.tryAcquireQuiescentConfigurationLease());
+}
+
 TEST(ProcessLaunchContextTrackerTest, FailStopRejectsNewLaunchesButAllowsCleanup)
 {
   ProcessLaunchContextTracker context;

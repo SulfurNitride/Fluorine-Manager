@@ -84,6 +84,7 @@ list(APPEND ORGANIZER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/prefixsetupdialog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/prefixsetuprunner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profilemodlistrename.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/profilerename.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/protonlauncher.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/runtimelock.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/settingsdialogproton.cpp
@@ -112,6 +113,7 @@ list(APPEND ORGANIZER_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/prefixsetupdialog.h
     ${CMAKE_CURRENT_SOURCE_DIR}/prefixsetuprunner.h
     ${CMAKE_CURRENT_SOURCE_DIR}/profilemodlistrename.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/profilerename.h
     ${CMAKE_CURRENT_SOURCE_DIR}/protonlauncher.h
     ${CMAKE_CURRENT_SOURCE_DIR}/runtimelock.h
     ${CMAKE_CURRENT_SOURCE_DIR}/settingsdialogproton.h
