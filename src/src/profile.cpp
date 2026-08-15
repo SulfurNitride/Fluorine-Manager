@@ -23,6 +23,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "game_features.h"
 #include "modinfo.h"
 #include "modinfoforeign.h"
+#include "profilelegacymigration.h"
 #include "profilerename.h"
 #include "profiletweakmerge.h"
 #include "settings.h"
@@ -259,19 +260,71 @@ Profile::~Profile()
 
 void Profile::findProfileSettings()
 {
+  auto writeLease = g_ProfileWriteBarrier.enterIfAllowed();
+  if (!writeLease) {
+    throw std::runtime_error("profile migration rejected during fail-stop");
+  }
+
+  constexpr auto localSavesIntent = "LegacyMigration/LocalSaves";
+  constexpr auto localInisIntent  = "LegacyMigration/LocalSettings";
+  constexpr auto savesToBackup    = "saves-to-backup";
+  constexpr auto backupToSaves    = "backup-to-saves";
+  constexpr auto iniBackupToLive  = "ini-backup-to-live";
+
+  auto migrate = [&](const QString& intentKey, const QString& operation,
+                     const QString& source, const QString& destination,
+                     ProfileLegacyMigration::EntryKind kind,
+                     const QString& finalSetting, const QVariant& finalValue) {
+    const auto result = ProfileLegacyMigration::migrate(
+        *m_Settings, m_Directory.absolutePath(), intentKey, operation, source,
+        destination, kind, finalSetting, finalValue);
+    if (!result.succeeded()) {
+      throw std::runtime_error(
+          tr("Legacy profile migration failed: %1").arg(result.error).toStdString());
+    }
+  };
+
   if (setting("", "LocalSaves") == QVariant()) {
-    if (m_Directory.exists("saves")) {
-      if (!Settings::instance().profileLocalSaves()) {
-        m_Directory.rename("saves", "_saves");
-        storeSetting("", "LocalSaves", false);
-      } else {
-        storeSetting("", "LocalSaves", true);
-      }
+    const QString pending =
+        ProfileLegacyMigration::pendingOperation(*m_Settings, localSavesIntent);
+    if (pending == savesToBackup) {
+      migrate(localSavesIntent, savesToBackup, "saves", "_saves",
+              ProfileLegacyMigration::EntryKind::Directory, "LocalSaves", false);
+    } else if (pending == backupToSaves) {
+      migrate(localSavesIntent, backupToSaves, "_saves", "saves",
+              ProfileLegacyMigration::EntryKind::Directory, "LocalSaves", true);
+    } else if (!pending.isEmpty()) {
+      throw std::runtime_error(
+          tr("The pending local-save migration record is invalid.").toStdString());
     } else {
-      if (m_Directory.exists("_saves")) {
-        if (Settings::instance().profileLocalSaves()) {
-          m_Directory.rename("_saves", "saves");
+      const QFileInfo saves(m_Directory.absoluteFilePath("saves"));
+      const QFileInfo backup(m_Directory.absoluteFilePath("_saves"));
+      const bool savesPresent  = saves.exists() || saves.isSymLink();
+      const bool backupPresent = backup.exists() || backup.isSymLink();
+      if (savesPresent && backupPresent) {
+        throw std::runtime_error(
+            tr("Both the profile save directory and its legacy backup exist: %1 and %2")
+                .arg(saves.absoluteFilePath(), backup.absoluteFilePath())
+                .toStdString());
+      }
+      if ((savesPresent && (saves.isSymLink() || !saves.isDir())) ||
+          (backupPresent && (backup.isSymLink() || !backup.isDir()))) {
+        throw std::runtime_error(
+            tr("The profile save migration path is not an ordinary directory.")
+                .toStdString());
+      }
+
+      if (savesPresent) {
+        if (!Settings::instance().profileLocalSaves()) {
+          migrate(localSavesIntent, savesToBackup, "saves", "_saves",
+                  ProfileLegacyMigration::EntryKind::Directory, "LocalSaves", false);
+        } else {
           storeSetting("", "LocalSaves", true);
+        }
+      } else if (backupPresent) {
+        if (Settings::instance().profileLocalSaves()) {
+          migrate(localSavesIntent, backupToSaves, "_saves", "saves",
+                  ProfileLegacyMigration::EntryKind::Directory, "LocalSaves", true);
         } else {
           storeSetting("", "LocalSaves", false);
         }
@@ -282,10 +335,27 @@ void Profile::findProfileSettings()
   }
 
   if (setting("", "LocalSettings") == QVariant()) {
-    QString backupFile = getIniFileName() + "_";
-    if (m_Directory.exists(backupFile)) {
-      storeSetting("", "LocalSettings", true);
-      m_Directory.rename(backupFile, getIniFileName());
+    const QString liveIni = QFileInfo(getIniFileName()).fileName();
+    const QString backup  = liveIni.isEmpty() ? QString{} : liveIni + "_";
+    const QString pending =
+        ProfileLegacyMigration::pendingOperation(*m_Settings, localInisIntent);
+    if (pending == iniBackupToLive && !liveIni.isEmpty()) {
+      migrate(localInisIntent, iniBackupToLive, backup, liveIni,
+              ProfileLegacyMigration::EntryKind::File, "LocalSettings", true);
+    } else if (!pending.isEmpty()) {
+      throw std::runtime_error(
+          tr("The pending local-settings migration record is invalid.").toStdString());
+    } else if (!backup.isEmpty()) {
+      const QFileInfo backupInfo(m_Directory.absoluteFilePath(backup));
+      if (backupInfo.exists() || backupInfo.isSymLink()) {
+        migrate(localInisIntent, iniBackupToLive, backup, liveIni,
+                ProfileLegacyMigration::EntryKind::File, "LocalSettings", true);
+      } else if (Settings::instance().profileLocalInis()) {
+        storeSetting("", "LocalSettings", true);
+        enableLocalSettings(true);
+      } else {
+        storeSetting("", "LocalSettings", false);
+      }
     } else if (Settings::instance().profileLocalInis()) {
       storeSetting("", "LocalSettings", true);
       enableLocalSettings(true);

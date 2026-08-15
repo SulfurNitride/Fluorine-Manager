@@ -1360,6 +1360,35 @@ target_link_libraries(test_profilerename PRIVATE
 add_test(NAME test_profilerename COMMAND test_profilerename)
 set_tests_properties(test_profilerename PROPERTIES TIMEOUT 10)
 
+add_executable(test_profilelegacymigration EXCLUDE_FROM_ALL
+    test_profilelegacymigration.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/profilelegacymigration.cpp
+)
+set_target_properties(test_profilelegacymigration PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_profilelegacymigration PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_profilelegacymigration PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_profilelegacymigration COMMAND test_profilelegacymigration)
+set_tests_properties(test_profilelegacymigration PROPERTIES TIMEOUT 10)
+
+add_test(NAME test_profile_legacy_migration_surface
+    COMMAND ${Python3_EXECUTABLE} -m unittest -v
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_profile_legacy_migration_surface.py
+)
+set_tests_properties(test_profile_legacy_migration_surface PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    TIMEOUT 10
+)
+
 add_executable(test_instanceunregister EXCLUDE_FROM_ALL
     test_instanceunregister.cpp
     ${CMAKE_SOURCE_DIR}/src/src/instanceunregister.cpp
@@ -1582,7 +1611,8 @@ add_custom_target(fluorine-tests
             test_downloadwritelifecycle test_nexuscachedirectory
             test_transactionalwritefile test_registry test_wineregistryfile
             test_protondxvkconfig test_gamebryoiniseeder test_texteditorsave
-            test_profilemodlistrename test_profilerename test_instanceunregister
+            test_profilemodlistrename test_profilerename
+            test_profilelegacymigration test_instanceunregister
             test_profiletweakmerge test_pandorapreviousoutput
             test_morrowindpluginlistwriter test_winepluginlistsync
             test_winesavedeployment test_winesavetargetresolver
