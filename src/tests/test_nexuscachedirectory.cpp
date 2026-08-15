@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
+#include <QFileInfo>
 #include <QNetworkAccessManager>
 #include <QNetworkCacheMetaData>
 #include <QNetworkDiskCache>
@@ -223,6 +224,31 @@ TEST(NexusCacheDirectory, ExistingSafeDirectoryIsIdempotent)
   EXPECT_EQ(second.path, first.path);
 }
 
+TEST(NexusCacheDirectory, CreatesMissingConfiguredRootOnFirstRun)
+{
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+
+  const QString root = QDir(temporary.path()).filePath("webcache");
+  const QString sentinel = QDir(temporary.path()).filePath("keep.txt");
+  writeFile(sentinel, "parent sentinel");
+  ASSERT_FALSE(QFileInfo::exists(root));
+
+  QNetworkAccessManager manager;
+  const auto first = NexusCacheDirectory::configure(manager, root);
+  ASSERT_TRUE(first);
+  EXPECT_TRUE(QFileInfo(root).isDir());
+  EXPECT_FALSE(QFileInfo(root).isSymLink());
+  EXPECT_EQ(first.path,
+            QDir(root).filePath(".fluorine-manager/nexus-network-v1"));
+  ASSERT_NE(manager.cache(), nullptr);
+  EXPECT_EQ(readFile(sentinel), "parent sentinel");
+
+  const auto second = NexusCacheDirectory::prepare(root);
+  ASSERT_TRUE(second);
+  EXPECT_EQ(second.path, first.path);
+}
+
 TEST(NexusCacheDirectory, RejectsInvalidRoots)
 {
   QTemporaryDir temporary;
@@ -233,7 +259,7 @@ TEST(NexusCacheDirectory, RejectsInvalidRoots)
   EXPECT_EQ(NexusCacheDirectory::prepare("relative/cache").status,
             NexusCacheDirectory::Status::InvalidRoot);
   EXPECT_EQ(NexusCacheDirectory::prepare(
-                QDir(temporary.path()).filePath("missing"))
+                QDir(temporary.path()).filePath("missing/webcache"))
                 .status,
             NexusCacheDirectory::Status::InvalidRoot);
 }
@@ -271,6 +297,22 @@ TEST(NexusCacheDirectory, RejectsCacheFileCollision)
 }
 
 #ifdef Q_OS_UNIX
+TEST(NexusCacheDirectory, RejectsDanglingConfiguredRoot)
+{
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+
+  const QString root = QDir(temporary.path()).filePath("webcache");
+  const QString missingTarget = QDir(temporary.path()).filePath("missing");
+  ASSERT_TRUE(QFile::link(missingTarget, root));
+
+  const auto result = NexusCacheDirectory::prepare(root);
+  EXPECT_EQ(result.status, NexusCacheDirectory::Status::Collision);
+  EXPECT_EQ(result.errorPath, root);
+  EXPECT_TRUE(QFileInfo(root).isSymLink());
+  EXPECT_FALSE(QFileInfo::exists(missingTarget));
+}
+
 TEST(NexusCacheDirectory, RejectsNamespaceSymlinkAndPreservesTarget)
 {
   QTemporaryDir temporary;

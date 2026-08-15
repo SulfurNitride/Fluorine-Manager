@@ -25,9 +25,10 @@ struct Result
   explicit operator bool() const noexcept { return status == Status::Ready; }
 };
 
-// Prepares the application-owned Nexus network-cache directory below an
-// existing configured cache root. The configured root itself is never used as
-// a QNetworkDiskCache directory.
+// Prepares the application-owned Nexus network-cache directory below the
+// configured cache root. A missing exact root is created when its parent is an
+// existing directory. The configured root itself is never used as a
+// QNetworkDiskCache directory.
 Result prepare(const QString& configuredRoot);
 
 // Configures the manager with a disk cache at the prepared child. On failure,

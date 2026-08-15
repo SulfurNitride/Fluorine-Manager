@@ -38,6 +38,41 @@ public:
   QTemporaryDir directory;
 };
 
+Result ensureConfiguredRoot(const QString& path)
+{
+  QFileInfo info(path);
+  if (info.exists()) {
+    if (!info.isDir()) {
+      return {Status::InvalidRoot, {}, path};
+    }
+    return {Status::Ready, path, {}};
+  }
+
+  // A dangling link is an occupied pathname, not an absent cache root that we
+  // may replace. Existing links to directories remain supported because the
+  // configured cache root has historically allowed user-selected indirection.
+  if (info.isSymLink()) {
+    return {Status::Collision, {}, path};
+  }
+
+  const QString parentPath = info.absolutePath();
+  const QFileInfo parent(parentPath);
+  if (!parent.exists() || !parent.isDir() || info.fileName().isEmpty()) {
+    return {Status::InvalidRoot, {}, path};
+  }
+
+  if (!QDir(parentPath).mkdir(info.fileName())) {
+    return {Status::IoError, {}, path};
+  }
+
+  info.refresh();
+  if (info.isSymLink() || !info.exists() || !info.isDir()) {
+    return {Status::Collision, {}, path};
+  }
+
+  return {Status::Ready, path, {}};
+}
+
 Result ensureChildDirectory(const QString& parent, const QString& name)
 {
   const QString path = QDir(parent).filePath(name);
@@ -128,9 +163,9 @@ Result prepare(const QString& configuredRoot)
   }
 
   const QString rootPath = QDir::cleanPath(configuredRoot);
-  const QFileInfo rootInfo(rootPath);
-  if (!rootInfo.exists() || !rootInfo.isDir()) {
-    return {Status::InvalidRoot, {}, rootPath};
+  const Result root = ensureConfiguredRoot(rootPath);
+  if (!root) {
+    return root;
   }
 
   const Result nameSpace = ensureChildDirectory(rootPath, NamespaceDirectory);
