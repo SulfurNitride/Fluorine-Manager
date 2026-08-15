@@ -2,6 +2,7 @@
 
 #include "fluorinepaths.h"
 #include "processlifetime.h"
+#include "protondxvkconfig.h"
 #include "rootprocesscompletion.h"
 #include "steamdetection.h"
 #include "slrmanager.h"
@@ -1025,19 +1026,17 @@ bool ProtonLauncher::launchWithProton(
     }
   }
 
-  // Force-disable DXVK graphics-pipeline-library.  GPL causes very long shader
+  // Force-disable DXVK graphics-pipeline-library. GPL causes very long shader
   // compile stalls on first launch for heavily modded Bethesda games and the
-  // benefit is modest for us.  We write a small dxvk.conf into the prefix and
-  // point DXVK_CONFIG_FILE at it so every DXVK-rendered process picks it up.
+  // benefit is modest for us. Keep the generated setting separate from the
+  // user's dxvk.conf and only advertise a completely published generation.
   if (!m_prefixPath.isEmpty()) {
-    const QString dxvkConfPath = QDir(m_prefixPath).filePath("dxvk.conf");
-    QFile dxvkConfFile(dxvkConfPath);
-    if (dxvkConfFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-      dxvkConfFile.write("dxvk.enableGraphicsPipelineLibrary = False\n");
-      dxvkConfFile.close();
-      env.insert("DXVK_CONFIG_FILE", dxvkConfPath);
+    const auto dxvkConfig = ProtonDxvkConfig::publish(m_prefixPath);
+    if (dxvkConfig) {
+      env.insert("DXVK_CONFIG_FILE", dxvkConfig.path);
     } else {
-      MOBase::log::warn("Failed to write dxvk.conf at '{}'", dxvkConfPath);
+      MOBase::log::warn("Failed to publish Fluorine's DXVK configuration: {}",
+                        dxvkConfig.error);
     }
   }
 

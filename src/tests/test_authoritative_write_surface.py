@@ -157,6 +157,16 @@ class AuthoritativeWriteSurfaceTests(unittest.TestCase):
         self.assertNotIn("pruneDriveRegistry", spawn)
         self.assertNotIn("pruneExtraDrives(prefixPath)", spawn)
 
+        proton = (ROOT / "src/src/protonlauncher.cpp").read_text(encoding="utf-8")
+        self.assertIn("ProtonDxvkConfig::publish", proton)
+        self.assertNotIn('filePath("dxvk.conf")', proton)
+        self.assertNotIn("QIODevice::Truncate", proton)
+
+        dxvk = (ROOT / "src/src/protondxvkconfig.cpp").read_text(encoding="utf-8")
+        self.assertIn("TransactionalWriteFile transaction(path)", dxvk)
+        self.assertIn('FileName = ".fluorine-dxvk.conf"', dxvk)
+        self.assertIn("transaction.replaceWith", dxvk)
+
 
 if __name__ == "__main__":
     unittest.main()
