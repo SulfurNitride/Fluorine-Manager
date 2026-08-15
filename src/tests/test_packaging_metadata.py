@@ -82,6 +82,37 @@ class PackagingMetadataTests(unittest.TestCase):
             "draft edit, published edit, and create must use reviewed notes",
         )
 
+    def test_portable_runtime_selects_the_bundled_native_dialog_portal(self):
+        build_script = (SOURCE_ROOT / "docker/build-inner.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            'platformthemes/libqxdgdesktopportal.so', build_script
+        )
+        self.assertIn(
+            'if [ ! -f "${PORTAL_THEME_PLUGIN}" ]', build_script
+        )
+        launcher = build_script.split(
+            'cat > "${OUT_DIR}/fluorine-manager" <<\'LAUNCH\'\n', 1
+        )[1].split("\nLAUNCH\n", 1)[0]
+        self.assertIn(
+            'FLUORINE_ORIG_QT_QPA_PLATFORMTHEME="${QT_QPA_PLATFORMTHEME:-}"',
+            launcher,
+        )
+        self.assertIn(
+            "export QT_QPA_PLATFORMTHEME=xdgdesktopportal", launcher
+        )
+
+        application = (SOURCE_ROOT / "src/src/moapplication.cpp").read_text(
+            encoding="utf-8"
+        )
+        constructor = application.split(
+            "MOApplication::MOApplication(int& argc, char** argv)", 1
+        )[1]
+        self.assertIn("FLUORINE_ORIG_QT_QPA_PLATFORMTHEME", constructor)
+        self.assertIn('qunsetenv("QT_QPA_PLATFORMTHEME")', constructor)
+        self.assertIn('qputenv("QT_QPA_PLATFORMTHEME", original)', constructor)
+
 
 if __name__ == "__main__":
     unittest.main()

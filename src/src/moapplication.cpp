@@ -46,6 +46,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "shared/util.h"
 #include "thread_utils.h"
 #include "tutorialmanager.h"
+#include <QByteArray>
 #include <QDebug>
 #include <QDesktopServices>
 #include <QEvent>
@@ -216,6 +217,22 @@ void configureQtWebEngineProcessPath()
 
 MOApplication::MOApplication(int& argc, char** argv) : QApplication(argc, argv)
 {
+  // The packaged launcher selects the exact-version XDG portal theme before
+  // QApplication is constructed so QFileDialog can use the desktop-native
+  // portal. Restore the caller's environment immediately afterward; launched
+  // games, xdg-open and helper processes must not inherit Fluorine's choice.
+  constexpr auto OriginalPlatformTheme =
+      "FLUORINE_ORIG_QT_QPA_PLATFORMTHEME";
+  if (qEnvironmentVariableIsSet(OriginalPlatformTheme)) {
+    const QByteArray original = qgetenv(OriginalPlatformTheme);
+    if (original.isEmpty()) {
+      qunsetenv("QT_QPA_PLATFORMTHEME");
+    } else {
+      qputenv("QT_QPA_PLATFORMTHEME", original);
+    }
+    qunsetenv(OriginalPlatformTheme);
+  }
+
   TimeThis const tt("MOApplication()");
   configureApplicationFont();
 

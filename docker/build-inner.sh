@@ -540,12 +540,17 @@ if [ -d "${QT6_PLUGIN_DIR}" ]; then
             cp -a "${QT6_PLUGIN_DIR}/${plugin_type}" "${OUT_DIR}/qt6plugins/"
         fi
     done
-    # These optional plugins are not part of Fluorine's supported runtime
-    # boundary. qgtk3 recursively binds the bundle to the build host's GTK
-    # stack, while aqt's TIFF plugin requires obsolete libtiff.so.5. Qt falls
-    # back to its own platform theme and the remaining image formats.
+    # qgtk3 recursively binds the bundle to the build host's GTK stack. Use
+    # Qt's DBus-only XDG portal theme for native file dialogs instead, and make
+    # its presence a release invariant rather than silently falling back to
+    # the generic Qt dialog. aqt's TIFF plugin requires obsolete libtiff.so.5.
     rm -f "${OUT_DIR}/qt6plugins/platformthemes/libqgtk3.so"
     rm -f "${OUT_DIR}/qt6plugins/imageformats/libqtiff.so"
+    PORTAL_THEME_PLUGIN="${OUT_DIR}/qt6plugins/platformthemes/libqxdgdesktopportal.so"
+    if [ ! -f "${PORTAL_THEME_PLUGIN}" ]; then
+        echo "ERROR: Qt XDG desktop portal platform theme is missing" >&2
+        exit 1
+    fi
     # Bundle deps of Qt plugins too
     find "${OUT_DIR}/qt6plugins" -name "*.so" -exec sh -c '
         ldd "$1" 2>/dev/null | grep "=>" | awk "{print \$3}" | grep "^/" | while read dep; do
@@ -847,9 +852,11 @@ HERE="$(cd "$(dirname "$SELF")" && pwd)"
     FLUORINE_ORIG_XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 [[ -v FLUORINE_ORIG_QT_PLUGIN_PATH ]] || \
     FLUORINE_ORIG_QT_PLUGIN_PATH="${QT_PLUGIN_PATH:-}"
+[[ -v FLUORINE_ORIG_QT_QPA_PLATFORMTHEME ]] || \
+    FLUORINE_ORIG_QT_QPA_PLATFORMTHEME="${QT_QPA_PLATFORMTHEME:-}"
 export FLUORINE_ORIG_LD_LIBRARY_PATH FLUORINE_ORIG_LD_PRELOAD
 export FLUORINE_ORIG_PATH FLUORINE_ORIG_XDG_DATA_DIRS
-export FLUORINE_ORIG_QT_PLUGIN_PATH
+export FLUORINE_ORIG_QT_PLUGIN_PATH FLUORINE_ORIG_QT_QPA_PLATFORMTHEME
 
 # Clear any injected preload for the bundled Qt6 process. Game launches restore
 # the original value via FLUORINE_ORIG_LD_PRELOAD.
@@ -1044,6 +1051,11 @@ unset PYTHONPATH PYTHONNOUSERSITE PYTHONHOME MO2_PYTHON_DIR
 # plugin lookup and overrides system-wide qt.conf (e.g. Fedora's /etc/xdg/QtProject/).
 export QT_PLUGIN_PATH="${RUN}/qt6plugins"
 export QT_QPA_PLATFORM_PLUGIN_PATH="${RUN}/qt6plugins/platforms"
+# Qt does not select its portal theme by default outside a sandbox. Select the
+# exact-version bundled plugin so QFileDialog uses the desktop portal instead
+# of the generic widget fallback. MOApplication restores the original value as
+# soon as QApplication has consumed this setting.
+export QT_QPA_PLATFORMTHEME=xdgdesktopportal
 
 # Raise open file descriptor limit — large modlists with FUSE VFS
 # can easily exceed the default 1024
