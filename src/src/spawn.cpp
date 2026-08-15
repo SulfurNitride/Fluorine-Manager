@@ -28,6 +28,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "settings.h"
 #include "shared/appconfig.h"
 #include "vfsbackend.h"
+#include "winesavedeployment.h"
 
 #include <QApplication>
 #include <QDir>
@@ -403,6 +404,13 @@ int spawn(const SpawnParameters& sp,
 
   logSpawning(sp);
 
+  if (!sp.saveDeployment.complete() ||
+      (sp.saveDeployment.mode == SaveDeploymentMode::BindMount &&
+       !sp.useProton)) {
+    MOBase::log::error("Invalid save deployment receipt for launch '{}'.", bin);
+    return EINVAL;
+  }
+
   uint32_t steamAppId = parseSteamAppId(sp.steamAppID);
   ProtonLauncher launcher;
   launcher.setBinary(bin)
@@ -432,7 +440,19 @@ int spawn(const SpawnParameters& sp,
         .setStoreVariant(storeVariant)
         .setUseSLR(true);
 
-    const QString prefixPath = resolvePrefixPath();
+    const QString configuredPrefix = resolvePrefixPath();
+    QString prefixPath = configuredPrefix;
+    if (sp.saveDeployment.mode != SaveDeploymentMode::None) {
+      prefixPath = sp.saveDeployment.prefixPath;
+      if (!WineSaveDeployment::samePhysicalDirectory(prefixPath,
+                                                      configuredPrefix)) {
+        MOBase::log::error(
+            "Wine prefix changed after launch preparation ('{}' -> '{}'); "
+            "refusing to launch against unprepared state",
+            prefixPath, configuredPrefix);
+        return ESTALE;
+      }
+    }
     if (prefixPath.isEmpty()) {
       MOBase::log::error("No Wine prefix configured - cannot launch game. "
                          "Configure a prefix in Settings > Proton.");
@@ -458,8 +478,10 @@ int spawn(const SpawnParameters& sp,
       launcher.setWrapper(wrapper);
     }
 
-    if (!sp.saveBindMountSource.isEmpty() && !sp.saveBindMountTarget.isEmpty()) {
-      launcher.setSavesBindMount(sp.saveBindMountSource, sp.saveBindMountTarget);
+    if (sp.saveDeployment.mode == SaveDeploymentMode::BindMount) {
+      launcher.setSavesBindMounts(
+          sp.saveDeployment.profileRoot,
+          WineSaveDeployment::managedLivePaths(sp.saveDeployment.livePath));
     }
     if (!sp.usvfsRequestPath.isEmpty()) {
       launcher.setUsvfsRequest(sp.usvfsRequestPath);

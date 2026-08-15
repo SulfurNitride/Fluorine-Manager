@@ -53,8 +53,21 @@ bool resolveRegularCaseAlias(const QString& requested, QString& effective)
 #ifdef Q_OS_UNIX
 QString identityOf(const struct stat& status)
 {
-  return QString::number(static_cast<qulonglong>(status.st_dev)) + ':' +
-         QString::number(static_cast<qulonglong>(status.st_ino));
+#ifdef Q_OS_DARWIN
+  const auto modified = status.st_mtimespec;
+  const auto changed  = status.st_ctimespec;
+#else
+  const auto modified = status.st_mtim;
+  const auto changed  = status.st_ctim;
+#endif
+  return QStringLiteral("%1:%2:%3:%4:%5:%6:%7")
+      .arg(static_cast<qulonglong>(status.st_dev))
+      .arg(static_cast<qulonglong>(status.st_ino))
+      .arg(static_cast<qlonglong>(status.st_size))
+      .arg(static_cast<qlonglong>(modified.tv_sec))
+      .arg(static_cast<qlonglong>(modified.tv_nsec))
+      .arg(static_cast<qlonglong>(changed.tv_sec))
+      .arg(static_cast<qlonglong>(changed.tv_nsec));
 }
 
 QDateTime modificationTimeOf(const struct stat& status)

@@ -487,8 +487,8 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
     auto prefixPath = FluorineConfig::prefixPath();
     if (!prefixPath || prefixPath->isEmpty()) {
       QSettings const instanceSettings(m_settings->filename(), QSettings::IniFormat);
-      for (const auto& key : {"Settings/proton_prefix_path", "Settings/prefix_path",
-                              "Proton/prefix_path", "fluorine/prefix_path"}) {
+      for (const auto& key : {"fluorine/prefix_path", "Settings/proton_prefix_path",
+                              "Settings/prefix_path", "Proton/prefix_path"}) {
         const QString value = instanceSettings.value(key).toString().trimmed();
         if (!value.isEmpty()) {
           prefixPath = value;

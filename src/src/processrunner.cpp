@@ -318,7 +318,8 @@ ProcessRunner::Results waitForProcesses(const std::vector<HANDLE>& initialProces
 OrganizerCore::AfterRunResult invokeAfterRun(
     OrganizerCore& core, const QFileInfo& binary, DWORD exitCode, pid_t rootPid,
     bool unmountVfs, const QString& launchToken, const QString& profileName,
-    bool triggerRefresh, std::function<void()> refreshComplete = {},
+    bool triggerRefresh, spawn::SaveDeploymentReceipt saveDeployment,
+    std::function<void()> refreshComplete = {},
     std::function<void(bool refreshScheduled)> cleanupComplete = {})
 {
   const auto started = std::chrono::steady_clock::now();
@@ -329,7 +330,8 @@ OrganizerCore::AfterRunResult invokeAfterRun(
   }
   const auto result = core.afterRun(
       binary, exitCode, unmountVfs, launchToken, profileName, triggerRefresh,
-      std::move(refreshComplete), std::move(cleanupComplete));
+      std::move(saveDeployment), std::move(refreshComplete),
+      std::move(cleanupComplete));
   const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                            std::chrono::steady_clock::now() - started)
                            .count();
@@ -455,6 +457,7 @@ struct PreparedProcessObserver
   QString lifetimeToken;
   QString profileName;
   bool ownsVfs{false};
+  spawn::SaveDeploymentReceipt saveDeployment;
   bool expectCompanion{false};
   std::shared_ptr<ApplicationCompletion> completion;
   process_lifetime::Callbacks callbacks;
@@ -527,7 +530,7 @@ void runPreparedAsyncObserver(
   }
 
   if (result != process_lifetime::Result::Completed) {
-    if (!observer->ownsVfs) {
+    if (!observer->ownsVfs && !observer->saveDeployment.needsRollback()) {
       QMetaObject::invokeMethod(
           observer->core,
           [observer]() noexcept {
@@ -553,7 +556,8 @@ void runPreparedAsyncObserver(
             const auto result = invokeAfterRun(
                 *observer->core, observer->binary, observedExitCode,
                 observer->pid, observer->ownsVfs, observer->lifetimeToken,
-                observer->profileName, observer->triggerRefresh);
+                observer->profileName, observer->triggerRefresh,
+                observer->saveDeployment);
             if (result.state == OrganizerCore::AfterRunState::Rejected) {
               log::error(
                   "process runner: queued afterRun was rejected for pid {}",
@@ -637,8 +641,9 @@ void runPreparedApplicationObserver(
 
   const auto result = applicationResult(lifetimeResult);
   completion->finishLifetime(result, exitCode);
-  const bool needsLaunchCleanup = ApplicationCompletion::requiresLaunchCleanup(
-      result, observer->ownsVfs);
+  const bool needsLaunchCleanup =
+      ApplicationCompletion::requiresLaunchCleanup(result, observer->ownsVfs) ||
+      observer->saveDeployment.needsRollback();
 
   if (!observer->core) {
     completion->finishLifetime(ApplicationCompletion::Result::Error,
@@ -699,6 +704,7 @@ void runPreparedApplicationObserver(
               *observer->core, observer->binary, exitCode, observer->pid,
               observer->ownsVfs, observer->lifetimeToken,
               completion->profileName(), triggerRefresh,
+              observer->saveDeployment,
               triggerRefresh ? makeApplicationRefreshCompletion(*observer->core,
                                                                 completion)
                              : std::function<void()>{},
@@ -1014,6 +1020,7 @@ bool ProcessRunner::prepareLaunchObserver(bool ownsVfs)
     observer->lifetimeToken = m_sp.lifetimeToken;
     observer->profileName = m_profileName;
     observer->ownsVfs = ownsVfs;
+    observer->saveDeployment = m_sp.saveDeployment;
     observer->expectCompanion = !m_companionProcessNames.isEmpty();
     observer->completion = std::make_shared<ApplicationCompletion>(
         0, ownsVfs, m_profileName);
@@ -1259,7 +1266,8 @@ std::optional<ProcessRunner::Results> ProcessRunner::runBinary()
       [this, ownsVfs]() noexcept {
         m_core.abortProcessLaunchPreparation(
             m_sp.lifetimeToken, m_profileName, ownsVfs,
-            std::move(m_sp.usvfsRequestPath));
+            std::move(m_sp.usvfsRequestPath),
+            std::move(m_sp.saveDeployment));
       });
 
   // FUSE makes an executable stored under mods/ visible at its virtual game
@@ -1282,7 +1290,7 @@ std::optional<ProcessRunner::Results> ProcessRunner::runBinary()
                         m_sp.argumentList, m_profileName, m_customOverwrite,
                         m_forcedLibraries, m_sp.useProton, m_sp.lifetimeToken,
                         ownsVfs, &m_sp.usvfsRequestPath,
-                        &m_sp.saveBindMountSource, &m_sp.saveBindMountTarget)) {
+                        &m_sp.saveDeployment)) {
     return Error;
   }
 
@@ -1486,6 +1494,7 @@ ProcessRunner::Results ProcessRunner::postRun()
     const auto afterRun = invokeAfterRun(
         m_core, m_sp.binary, m_exitCode, getProcessHandle(), ownsVfs,
         m_sp.lifetimeToken, m_profileName, triggerRefresh,
+        m_sp.saveDeployment,
         wait ? std::function<void()>(
                    [refreshWait]() noexcept { refreshWait->complete(); })
              : std::function<void()>{},

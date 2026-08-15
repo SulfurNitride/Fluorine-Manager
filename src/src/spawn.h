@@ -22,11 +22,13 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <QDir>
 #include <QFileInfo>
+#include <QList>
 #include <QStringList>
 
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "wineprofileinisync.h"
 #include <cstdint>
 
 class QProcess;
@@ -40,17 +42,60 @@ struct LaunchReceipt;
 namespace spawn
 {
 
+enum class SaveDeploymentMode : std::uint8_t
+{
+  None,
+  LeaseOnly,
+  ManagedLinks,
+  BindMount,
+};
+
+struct SaveDeploymentReceipt
+{
+  SaveDeploymentMode mode{SaveDeploymentMode::None};
+  QString prefixPath;
+  QString profileRoot;
+  QString livePath;
+  QString prefixIni;
+  QString ownerId;
+  QList<WineProfileIniSync::Deployment> profileIniDeployments;
+  WineProfileIniSync::CleanupPhase profileIniCleanupPhase{
+      WineProfileIniSync::CleanupPhase::Prepared};
+  bool iniPatched{false};
+  bool sessionLeasePublished{false};
+  bool topologyRestored{false};
+  bool deploymentCleanupPending{false};
+
+  bool complete() const noexcept
+  {
+    if (mode == SaveDeploymentMode::None)
+      return true;
+    if (prefixPath.isEmpty() || livePath.isEmpty() || ownerId.isEmpty()) {
+      return false;
+    }
+    return mode == SaveDeploymentMode::LeaseOnly || !profileRoot.isEmpty();
+  }
+
+  bool needsRollback() const noexcept
+  {
+    return mode == SaveDeploymentMode::ManagedLinks || deploymentCleanupPending ||
+           iniPatched || sessionLeasePublished || !profileIniDeployments.isEmpty();
+  }
+};
+
 /*
  * @param binary the binary to spawn
  * @param arguments arguments to pass to the binary
  * @param profileName name of the active profile
- * @param currentDirectory the directory to use as the working directory to run in
- * @param logLevel log level to be used by the hook library. Ignored if hooked is false
+ * @param currentDirectory the directory to use as the working directory to run
+ * in
+ * @param logLevel log level to be used by the hook library. Ignored if hooked
+ * is false
  * @param hooked if set, the binary is started with mo injected
- * @param stdout if not equal to INVALID_HANDLE_VALUE, this is used as stdout for the
- * process
- * @param stderr if not equal to INVALID_HANDLE_VALUE, this is used as stderr for the
- * process
+ * @param stdout if not equal to INVALID_HANDLE_VALUE, this is used as stdout
+ * for the process
+ * @param stderr if not equal to INVALID_HANDLE_VALUE, this is used as stderr
+ * for the process
  */
 struct SpawnParameters
 {
@@ -64,18 +109,15 @@ struct SpawnParameters
   QDir currentDirectory;
   QDir gameDirectory;
   QString steamAppID;
-  bool hooked = false;
-  bool useProton = true;
+  bool hooked      = false;
+  bool useProton   = true;
   bool useTerminal = false;
   int stdOut       = -1;
   int stdErr       = -1;
-  // When both are set and unprivileged user namespaces are available,
-  // spawn() wraps the launch so `saveBindMountTarget` becomes a live view
-  // of `saveBindMountSource` for the duration of the game process tree.
-  // Used to redirect `<prefix>/__MO_Saves` to the profile's saves dir
-  // without symlinks, which Wine can accidentally replace.
-  QString saveBindMountSource;
-  QString saveBindMountTarget;
+  // Exact save topology committed by beforeRun. This value, rather than
+  // mutable profile settings or empty-string inference, owns rollback and
+  // after-run teardown.
+  SaveDeploymentReceipt saveDeployment;
   // Versioned request consumed by the Wine-side USVFS controller. Empty means
   // launch the target normally (the FUSE path).
   QString usvfsRequestPath;
@@ -96,8 +138,7 @@ bool checkBlacklist(QWidget* parent, const SpawnParameters& sp, Settings& settin
 /**
  * @brief spawn a binary, returning the new pid (or -1 on failure)
  **/
-process_lifetime::LaunchReceipt startBinary(QWidget* parent,
-                                            const SpawnParameters& sp);
+process_lifetime::LaunchReceipt startBinary(QWidget* parent, const SpawnParameters& sp);
 
 enum class FileExecutionTypes
 {

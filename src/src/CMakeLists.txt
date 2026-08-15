@@ -88,6 +88,9 @@ list(APPEND ORGANIZER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/runtimelock.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/settingsdialogproton.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/unixtermination.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/wineprofileinisync.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/winesavedeployment.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/winesaverouting.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/winepluginlistsync.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/wineprefix.cpp)
 list(APPEND ORGANIZER_HEADERS
@@ -111,6 +114,9 @@ list(APPEND ORGANIZER_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/runtimelock.h
     ${CMAKE_CURRENT_SOURCE_DIR}/settingsdialogproton.h
     ${CMAKE_CURRENT_SOURCE_DIR}/unixtermination.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/wineprofileinisync.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/winesavedeployment.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/winesaverouting.h
     ${CMAKE_CURRENT_SOURCE_DIR}/winepluginlistsync.h
     ${CMAKE_CURRENT_SOURCE_DIR}/wineprefix.h)
 

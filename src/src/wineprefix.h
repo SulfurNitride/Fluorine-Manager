@@ -2,64 +2,71 @@
 #define WINEPREFIX_H
 
 #include <QDateTime>
+#include <QList>
 #include <QString>
 #include <QStringList>
-#include <QList>
-#include <QPair>
+
+#include "wineprofileinisync.h"
 
 class WinePrefix
 {
 public:
   // Mirrors MOBase::IPluginGame::LoadOrderMechanism without pulling that
   // header into wineprefix.  Callers translate from the game feature.
-  enum class PluginListMechanism {
+  enum class PluginListMechanism
+  {
     None,        // no plugin list file in AppData
     FileTime,    // lowercase "plugins.txt" (enabled-only), order via mtime
-    PluginsTxt,  // "Plugins.txt" with '*' prefix for enabled (SSE/AE/FO4/Starfield)
+    PluginsTxt,  // "Plugins.txt" with '*' prefix for enabled
+                 // (SSE/AE/FO4/Starfield)
   };
 
   explicit WinePrefix(const QString& prefixPath);
 
   bool isValid() const;  // drive_c/ exists
   QString driveC() const;
-  QString documentsPath() const;  // drive_c/users/steamuser/Documents
-  QString myGamesPath() const;    // .../Documents/My Games
-  QString appdataLocal() const;   // .../AppData/Local
-  QString userProfilePath() const; // drive_c/users/steamuser
+  QString documentsPath() const;    // drive_c/users/steamuser/Documents
+  QString myGamesPath() const;      // .../Documents/My Games
+  QString appdataLocal() const;     // .../AppData/Local
+  QString userProfilePath() const;  // drive_c/users/steamuser
 
   // Deploy profile files into prefix.  Only the plugin list file the game
   // actually reads is written — loadorder.txt is MO2-internal and never
   // belongs in AppData/Local/<Game>/.
   bool deployPlugins(const QStringList& plugins, const QString& dataDir,
                      PluginListMechanism mechanism) const;
-  bool deployProfileIni(const QString& sourceIniPath,
-                        const QString& targetIniPath) const;
-  bool deployProfileSaves(const QString& profileSaveDir,
-                          const QString& absoluteSaveDir,
-                          bool clearDestination) const;
+  bool deployProfileIni(const QString& sourceIniPath, const QString& targetIniPath,
+                        const QString& ownerId,
+                        WineProfileIniSync::Deployment& deployment) const;
+  bool deployProfileSaves(const QString& profileSaveDir, const QString& absoluteSaveDir,
+                          bool clearDestination, const QString& ownerId,
+                          bool* cleanupRequired = nullptr) const;
+  bool prepareProfileSavesBindTarget(const QString& profileSaveDir,
+                                     const QString& absoluteSaveDir,
+                                     const QString& ownerId,
+                                     bool* cleanupRequired = nullptr) const;
 
   // Sync saves back from prefix to profile.  Mirrors deletions: profile
   // files absent from the prefix are removed so in-game save deletions
   // propagate.
-  bool syncSavesBack(const QString& profileSaveDir,
-                     const QString& absoluteSaveDir) const;
+  bool syncSavesBack(const QString& profileSaveDir, const QString& absoluteSaveDir,
+                     const QString& ownerId, bool* topologyComplete = nullptr,
+                     bool* cleanupRequired = nullptr) const;
+  bool rollbackProfileSaves(const QString& profileSaveDir,
+                            const QString& absoluteSaveDir, const QString& ownerId,
+                            bool* topologyComplete = nullptr,
+                            bool* cleanupRequired  = nullptr) const;
 
-  /// Remove the __MO_Saves symlink(s) deployed by deployProfileSaves so a
-  /// vanilla game launch outside MO2 uses the prefix's default Saves dir.
-  /// Only removes entries that are actually symlinks — real directories
-  /// from a pre-symlink install are left alone.
-  void undeployProfileSaves(const QString& absoluteSaveDir) const;
-
-  bool syncProfileInisBack(
-      const QList<QPair<QString, QString>>& iniMappings) const;
+  bool syncProfileInisBack(QList<WineProfileIniSync::Deployment>& deployments,
+                           const QString& ownerId, bool publishChanges,
+                           WineProfileIniSync::CleanupPhase& phase) const;
 
   // Sync the game's plugin-list file from the prefix AppData back to the
   // profile after a tool like LOOT may have edited it.  Picks the newest
   // case-insensitive variant.  Only the Plugins.txt/plugins.txt file the
   // game reads is synced — loadorder.txt is never written to the prefix
   // and is not read back.
-  bool syncPluginsBack(const QString& profilePluginsPath,
-                       const QString& dataDir,
+  bool syncPluginsBack(const QString& profilePluginsPath, const QString& dataDir,
                        PluginListMechanism mechanism) const;
 
   // Last-modified time of the newest plugin-list variant in the prefix.
@@ -72,9 +79,9 @@ public:
   void restoreStaleBackups() const;
 
   // Wine registry (system.reg / user.reg) access.
-  // subKey uses Wine format: "Software\\\\Bethesda Softworks\\\\Skyrim Special Edition"
-  // (double-escaped backslashes as stored in .reg files).
-  // Convenience overload accepts normal backslash paths and escapes internally.
+  // subKey uses Wine format: "Software\\\\Bethesda Softworks\\\\Skyrim Special
+  // Edition" (double-escaped backslashes as stored in .reg files). Convenience
+  // overload accepts normal backslash paths and escapes internally.
   QString readRegistryValue(const QString& regFile, const QString& subKey,
                             const QString& valueName) const;
   bool writeRegistryValue(const QString& regFile, const QString& subKey,

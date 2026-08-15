@@ -47,6 +47,19 @@ TEST(WinePluginListSync, ReadsAndCountsARegularSnapshot)
   EXPECT_TRUE(result.snapshot->modificationTime.isValid());
 }
 
+TEST(WinePluginListSync, RejectsAnInPlaceGenerationChange)
+{
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const QString path = temporary.filePath("Plugins.txt");
+  ASSERT_TRUE(writeBytes(path, "first-data\n"));
+  const auto snapshot = WinePluginListSync::read(path);
+  ASSERT_TRUE(snapshot.snapshot) << qPrintable(snapshot.error);
+
+  ASSERT_TRUE(writeBytes(path, "other-data\n"));
+  EXPECT_FALSE(WinePluginListSync::isSameFile(path, *snapshot.snapshot));
+}
+
 TEST(WinePluginListSync, SuspiciousActiveDropPolicyIsBounded)
 {
   EXPECT_FALSE(WinePluginListSync::isSuspiciousActiveDrop(10, 0));
@@ -62,8 +75,8 @@ TEST(WinePluginListSync, AcceptsStrictCaseAliasAndRecognizesSameLeaf)
 {
   QTemporaryDir temporary;
   ASSERT_TRUE(temporary.isValid());
-  const QString target = temporary.filePath("Plugins.txt");
-  const QString alias  = temporary.filePath("plugins.txt");
+  const QString target  = temporary.filePath("Plugins.txt");
+  const QString alias   = temporary.filePath("plugins.txt");
   const QString sibling = temporary.filePath("PLUGINS.TXT");
   ASSERT_TRUE(writeBytes(target, "*One.esm\n"));
   ASSERT_TRUE(writeBytes(sibling, "stale\n"));
@@ -77,8 +90,7 @@ TEST(WinePluginListSync, AcceptsStrictCaseAliasAndRecognizesSameLeaf)
 
   MOBase::TransactionalWriteFile siblingTransaction(sibling);
   QString error;
-  ASSERT_TRUE(WinePluginListSync::publish(siblingTransaction, *result.snapshot,
-                                          error))
+  ASSERT_TRUE(WinePluginListSync::publish(siblingTransaction, *result.snapshot, error))
       << qPrintable(error);
   EXPECT_EQ(readBytes(target), "*One.esm\n");
   EXPECT_EQ(readBytes(alias), "*One.esm\n");
@@ -117,8 +129,7 @@ TEST(WinePluginListSync, PublishesContentsAndTimestampBeforeCommit)
   const QString target = temporary.filePath("target.txt");
   ASSERT_TRUE(writeBytes(source, "*New.esm\n"));
   ASSERT_TRUE(writeBytes(target, "old"));
-  const QDateTime wanted =
-      QDateTime::fromMSecsSinceEpoch(1'700'000'000'000LL);
+  const QDateTime wanted = QDateTime::fromMSecsSinceEpoch(1'700'000'000'000LL);
   QFile sourceFile(source);
   ASSERT_TRUE(sourceFile.open(QIODevice::ReadWrite));
   ASSERT_TRUE(sourceFile.setFileTime(wanted, QFileDevice::FileModificationTime));

@@ -1,158 +1,35 @@
 #include "wineprefix.h"
 #include "winepluginlistsync.h"
+#include "wineprofileinisync.h"
+#include "winesavedeployment.h"
+#include "winesaverouting.h"
 
 #include <QDateTime>
 #include <QDir>
 #include <QDirIterator>
-#include <QSet>
 #include <QFile>
 #include <QFileInfo>
+#include <QLockFile>
 #include <QTextStream>
-#include <log.h>
-#include <uibase/transactionalwritefile.h>
 #include <uibase/filesystemutilities.h>
-
-#include <sys/stat.h>
-#include <utime.h>
+#include <uibase/log.h>
+#include <uibase/transactionalwritefile.h>
 
 namespace
 {
-constexpr const char* BackupIniSuffix  = ".mo2linux_backup";
-
-// Copy a file, preserving its modification time so that games see the
-// original save timestamps rather than "now".
-bool copyFileWithParents(const QString& source, const QString& destination)
-{
-  const QFileInfo destinationInfo(destination);
-  if (!QDir().mkpath(destinationInfo.dir().absolutePath())) {
-    return false;
-  }
-
-  if (QFile::exists(destination) && !QFile::remove(destination)) {
-    return false;
-  }
-
-  if (!QFile::copy(source, destination)) {
-    return false;
-  }
-
-  // QFile::copy() does not preserve timestamps. Restore the source file's
-  // mtime so that games display the correct save date.
-  struct stat srcStat;
-  if (stat(source.toUtf8().constData(), &srcStat) == 0) {
-    struct utimbuf times;
-    times.actime  = srcStat.st_atime;
-    times.modtime = srcStat.st_mtime;
-    utime(destination.toUtf8().constData(), &times);
-  }
-
-  return true;
-}
-
-bool copyTreeContents(const QString& sourceRoot, const QString& destinationRoot)
-{
-  QDirIterator it(sourceRoot, QDir::Files, QDirIterator::Subdirectories);
-
-  while (it.hasNext()) {
-    const QString source = it.next();
-    const QString relativePath = QDir(sourceRoot).relativeFilePath(source);
-    const QString destination = QDir(destinationRoot).filePath(relativePath);
-
-    if (!copyFileWithParents(source, destination)) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-// Mirror deletions from source into destination: remove any file in the
-// destination tree that does not exist at the matching relative path in
-// source.  Then prune resulting empty directories.  Used to propagate
-// in-game save deletions from the prefix back to the profile.
-bool mirrorDeletions(const QString& sourceRoot, const QString& destinationRoot)
-{
-  if (!QDir(destinationRoot).exists()) {
-    return true;
-  }
-
-  const QDir srcDir(sourceRoot);
-  QDirIterator it(destinationRoot, QDir::Files | QDir::Hidden | QDir::System,
-                  QDirIterator::Subdirectories);
-  while (it.hasNext()) {
-    const QString destFile = it.next();
-    const QString relativePath = QDir(destinationRoot).relativeFilePath(destFile);
-    const QString sourceFile = srcDir.filePath(relativePath);
-    if (!QFile::exists(sourceFile)) {
-      if (!QFile::remove(destFile)) {
-        MOBase::log::warn("mirrorDeletions: failed to remove '{}'", destFile);
-      } else {
-        MOBase::log::debug("mirrorDeletions: removed '{}'", destFile);
-      }
-    }
-  }
-
-  // Prune empty directories bottom-up.
-  QStringList dirs;
-  QDirIterator dirIt(destinationRoot,
-                     QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden,
-                     QDirIterator::Subdirectories);
-  while (dirIt.hasNext()) {
-    dirs.append(dirIt.next());
-  }
-  std::sort(dirs.begin(), dirs.end(),
-            [](const QString& a, const QString& b) { return a.length() > b.length(); });
-  for (const QString& d : dirs) {
-    QDir qd(d);
-    if (qd.isEmpty(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden)) {
-      qd.rmdir(".");
-    }
-  }
-
-  return true;
-}
-
-bool restoreBackedUpSaves(const QString& liveUpper, const QString& liveLower,
-                          const QString& backupUpper, const QString& backupLower)
-{
-  if (QDir(liveUpper).exists() && !QDir(liveUpper).removeRecursively()) {
-    MOBase::log::warn("restoreBackedUpSaves: failed to remove '{}'", liveUpper);
-    return false;
-  }
-  if (QDir(liveLower).exists() && !QDir(liveLower).removeRecursively()) {
-    MOBase::log::warn("restoreBackedUpSaves: failed to remove '{}'", liveLower);
-    return false;
-  }
-
-  if (QDir(backupUpper).exists() && !QDir().rename(backupUpper, liveUpper)) {
-    MOBase::log::warn("restoreBackedUpSaves: failed to rename '{}' -> '{}'",
-                      backupUpper, liveUpper);
-    return false;
-  }
-  if (QDir(backupLower).exists() && !QDir().rename(backupLower, liveLower)) {
-    MOBase::log::warn("restoreBackedUpSaves: failed to rename '{}' -> '{}'",
-                      backupLower, liveLower);
-    return false;
-  }
-
-  return true;
-}
+constexpr const char* BackupIniSuffix = ".mo2linux_backup";
 
 bool restoreBackedUpIni(const QString& liveIni, const QString& backupIni)
 {
-  if (!QFile::exists(backupIni)) {
-    return true;
-  }
-
-  if (QFile::exists(liveIni) && !QFile::remove(liveIni)) {
-    return false;
-  }
-
-  return QFile::rename(backupIni, liveIni);
+  const auto result = WineProfileIniSync::restoreLegacyBackup(liveIni, backupIni);
+  if (!result)
+    MOBase::log::warn("Could not restore INI backup '{}': {}", backupIni, result.error);
+  return result.success;
 }
 
-// Find all files in the same directory that match the filename case-insensitively.
-// E.g. for "skyrimprefs.ini" returns {"skyrimprefs.ini", "SkyrimPrefs.ini"} if both exist.
+// Find all files in the same directory that match the filename
+// case-insensitively. E.g. for "skyrimprefs.ini" returns {"skyrimprefs.ini",
+// "SkyrimPrefs.ini"} if both exist.
 QStringList findCaseVariants(const QString& path)
 {
   QFileInfo info(path);
@@ -277,64 +154,26 @@ bool WinePrefix::deployPlugins(const QStringList& plugins, const QString& dataDi
 }
 
 bool WinePrefix::deployProfileIni(const QString& sourceIniPath,
-                                  const QString& targetIniPath) const
+                                  const QString& targetIniPath, const QString& ownerId,
+                                  WineProfileIniSync::Deployment& deployment) const
 {
-  const QFileInfo iniInfo(sourceIniPath);
-  if (!iniInfo.exists() || !iniInfo.isFile()) {
-    MOBase::log::warn("deployProfileIni: source '{}' does not exist or is not a file",
-                      sourceIniPath);
-    return false;
-  }
-
   MOBase::log::debug("deployProfileIni: '{}' -> '{}'", sourceIniPath, targetIniPath);
-  const QString destination = QDir::cleanPath(targetIniPath);
-
-  // Back up ALL case-insensitive variants (e.g. both skyrimprefs.ini and
-  // SkyrimPrefs.ini). Linux is case-sensitive, so the game may create a
-  // different-case file alongside ours. Backing up all variants ensures
-  // a clean deploy and correct restore later.
-  const QStringList variants = findCaseVariants(destination);
-  for (const QString& variant : variants) {
-    const QString backup = variant + BackupIniSuffix;
-    if (!restoreBackedUpIni(variant, backup)) {
-      return false;
-    }
-    if (QFile::exists(variant) && !QFile::rename(variant, backup)) {
-      return false;
-    }
-  }
-
-  // If the exact-case file wasn't among the variants (didn't exist yet),
-  // still restore any stale backup for it.
-  if (!variants.contains(destination)) {
-    const QString backup = destination + BackupIniSuffix;
-    if (!restoreBackedUpIni(destination, backup)) {
-      return false;
-    }
-  }
-
-  if (!copyFileWithParents(iniInfo.absoluteFilePath(), destination)) {
+  const auto result =
+      WineProfileIniSync::deploy(sourceIniPath, targetIniPath, ownerId, deployment);
+  if (!result) {
+    MOBase::log::error("deployProfileIni: {}", result.error);
     return false;
   }
-
-  // Create a lowercase alias so the game can find the INI regardless of
-  // which casing it uses (e.g. FalloutNV reads "fallout.ini" but we deploy
-  // "Fallout.ini").
-  const QFileInfo destInfo(destination);
-  const QString lowerName = destInfo.fileName().toLower();
-  if (lowerName != destInfo.fileName()) {
-    const QString lowerPath = QDir(destInfo.path()).filePath(lowerName);
-    QFile::remove(lowerPath);  // remove stale copy/symlink if any
-    QFile::link(destInfo.fileName(), lowerPath);
-  }
-
   return true;
 }
 
 bool WinePrefix::deployProfileSaves(const QString& profileSaveDir,
                                     const QString& absoluteSaveDir,
-                                    bool /*clearDestination*/) const
+                                    bool /*clearDestination*/, const QString& ownerId,
+                                    bool* cleanupRequired) const
 {
+  if (cleanupRequired)
+    *cleanupRequired = false;
   if (!isValid()) {
     MOBase::log::error("deployProfileSaves: prefix '{}' is not valid", m_prefixPath);
     return false;
@@ -343,79 +182,46 @@ bool WinePrefix::deployProfileSaves(const QString& profileSaveDir,
   MOBase::log::debug("deployProfileSaves: profileSaveDir='{}', absoluteSaveDir='{}'",
                      profileSaveDir, absoluteSaveDir);
 
-  // Ensure the profile saves dir exists — the game will write into it
-  // directly via the symlink.
-  if (!QDir().mkpath(profileSaveDir)) {
-    MOBase::log::error("deployProfileSaves: cannot create profile saves dir '{}'",
-                       profileSaveDir);
-    return false;
+  const auto result = WineSaveDeployment::deployLinks(driveC(), profileSaveDir,
+                                                      absoluteSaveDir, ownerId);
+  if (cleanupRequired)
+    *cleanupRequired = result.cleanupRequired;
+  if (!result) {
+    MOBase::log::error("deployProfileSaves: {}", result.error);
   }
-
-  const QFileInfo saveDirInfo(absoluteSaveDir);
-  const QString parentDir = saveDirInfo.dir().absolutePath();
-  const QString leafName = saveDirInfo.fileName();
-  const QString lowerSaveDir =
-      QDir(parentDir).filePath(leafName.toLower());
-
-  if (!QDir().mkpath(parentDir)) {
-    return false;
-  }
-
-  // Symlink both the proper-case and lowercase save dirs straight to the
-  // profile saves dir. Writes land in the profile immediately — no copy-in
-  // / copy-out dance, crash-safe, and profile switches only swap the link.
-  auto relink = [&profileSaveDir](const QString& linkPath) -> bool {
-    QFileInfo fi(linkPath);
-    if (fi.isSymLink()) {
-      QFile::remove(linkPath);
-    } else if (QDir(linkPath).exists()) {
-      // Existing real directory from a pre-symlink install. Preserve any
-      // contents by copying into the profile, then remove so we can link.
-      copyTreeContents(linkPath, profileSaveDir);
-      QDir(linkPath).removeRecursively();
-    } else if (fi.exists()) {
-      QFile::remove(linkPath);
-    }
-    if (!QFile::link(profileSaveDir, linkPath)) {
-      MOBase::log::warn("deployProfileSaves: failed to symlink '{}' -> '{}'",
-                        linkPath, profileSaveDir);
-      return false;
-    }
-    return true;
-  };
-
-  if (!relink(absoluteSaveDir))
-    return false;
-  if (absoluteSaveDir != lowerSaveDir && !relink(lowerSaveDir))
-    return false;
-
-  return true;
+  return result.success;
 }
 
-void WinePrefix::undeployProfileSaves(const QString& absoluteSaveDir) const
+bool WinePrefix::prepareProfileSavesBindTarget(const QString& profileSaveDir,
+                                               const QString& absoluteSaveDir,
+                                               const QString& ownerId,
+                                               bool* cleanupRequired) const
 {
-  if (!isValid())
-    return;
-
-  const QFileInfo saveDirInfo(absoluteSaveDir);
-  const QString parentDir = saveDirInfo.dir().absolutePath();
-  const QString leafName = saveDirInfo.fileName();
-  const QString lowerSaveDir =
-      QDir(parentDir).filePath(leafName.toLower());
-
-  auto unlinkIfSymlink = [](const QString& path) {
-    if (QFileInfo(path).isSymLink()) {
-      QFile::remove(path);
-    }
-  };
-  unlinkIfSymlink(absoluteSaveDir);
-  if (absoluteSaveDir != lowerSaveDir)
-    unlinkIfSymlink(lowerSaveDir);
+  if (cleanupRequired)
+    *cleanupRequired = false;
+  if (!isValid()) {
+    MOBase::log::error("prepareProfileSavesBindTarget: prefix '{}' is not valid",
+                       m_prefixPath);
+    return false;
+  }
+  const auto result = WineSaveDeployment::prepareBindTarget(driveC(), profileSaveDir,
+                                                            absoluteSaveDir, ownerId);
+  if (cleanupRequired)
+    *cleanupRequired = result.cleanupRequired;
+  if (!result) {
+    MOBase::log::error("prepareProfileSavesBindTarget: {}", result.error);
+  }
+  return result.success;
 }
 
 bool WinePrefix::syncSavesBack(const QString& profileSaveDir,
-                               const QString& absoluteSaveDir) const
+                               const QString& absoluteSaveDir, const QString& ownerId,
+                               bool* topologyComplete, bool* cleanupRequired) const
 {
+  if (topologyComplete)
+    *topologyComplete = false;
+  if (cleanupRequired)
+    *cleanupRequired = false;
   if (!isValid()) {
     MOBase::log::error("syncSavesBack: prefix '{}' is not valid", m_prefixPath);
     return false;
@@ -424,59 +230,72 @@ bool WinePrefix::syncSavesBack(const QString& profileSaveDir,
   MOBase::log::debug("syncSavesBack: profileSaveDir='{}', absoluteSaveDir='{}'",
                      profileSaveDir, absoluteSaveDir);
 
-  // With the symlink-based deploy, writes already land in the profile — no
-  // sync needed. Fall through to the legacy copy path only for pre-existing
-  // installs where the save dir is still a real directory.
-  if (QFileInfo(absoluteSaveDir).isSymLink()) {
-    return true;
+  const auto result = WineSaveDeployment::synchronizeAndRestore(
+      driveC(), profileSaveDir, absoluteSaveDir, ownerId);
+  if (topologyComplete)
+    *topologyComplete = result.topologyComplete;
+  if (cleanupRequired)
+    *cleanupRequired = result.cleanupRequired;
+  if (!result) {
+    MOBase::log::error("syncSavesBack: {}", result.error);
+  } else if (!result.error.isEmpty()) {
+    MOBase::log::warn("syncSavesBack: {}", result.error);
   }
+  return result.success;
+}
 
-  const QFileInfo saveDirInfo(absoluteSaveDir);
-  const QString parentDir = saveDirInfo.dir().absolutePath();
-  const QString leafName = saveDirInfo.fileName();
-  const QString lowerSaveDir =
-      QDir(parentDir).filePath(leafName.toLower());
-
-  QString sourceSavesDir;
-  if (QDir(absoluteSaveDir).exists()) {
-    sourceSavesDir = absoluteSaveDir;
-  } else if (absoluteSaveDir != lowerSaveDir && QDir(lowerSaveDir).exists()) {
-    sourceSavesDir = lowerSaveDir;
-  } else {
-    return true;
-  }
-
-  if (!QDir().mkpath(profileSaveDir)) {
+bool WinePrefix::rollbackProfileSaves(const QString& profileSaveDir,
+                                      const QString& absoluteSaveDir,
+                                      const QString& ownerId, bool* topologyComplete,
+                                      bool* cleanupRequired) const
+{
+  if (topologyComplete)
+    *topologyComplete = false;
+  if (cleanupRequired)
+    *cleanupRequired = false;
+  if (!isValid()) {
+    MOBase::log::error("rollbackProfileSaves: prefix '{}' is not valid", m_prefixPath);
     return false;
   }
-
-  // Mirror deletions first, then copy remaining files.  Without the delete
-  // pass, a save the user deleted in-game would remain in the profile
-  // because copyTreeContents only copies files present in the source.
-  mirrorDeletions(sourceSavesDir, profileSaveDir);
-
-  const bool copied = copyTreeContents(sourceSavesDir, profileSaveDir);
-  if (!copied) {
-    MOBase::log::warn("Failed syncing saves from '{}' to '{}'", sourceSavesDir,
-                      profileSaveDir);
+  const auto result = WineSaveDeployment::rollbackLinks(driveC(), profileSaveDir,
+                                                        absoluteSaveDir, ownerId);
+  if (topologyComplete)
+    *topologyComplete = result.topologyComplete;
+  if (cleanupRequired)
+    *cleanupRequired = result.cleanupRequired;
+  if (!result) {
+    MOBase::log::error("rollbackProfileSaves: {}", result.error);
+  } else if (!result.error.isEmpty()) {
+    MOBase::log::warn("rollbackProfileSaves: {}", result.error);
   }
-
-  const QString backupUpper =
-      QDir(parentDir).filePath(".mo2linux_backup_" + leafName);
-  const QString backupLower =
-      QDir(parentDir).filePath(".mo2linux_backup_" + leafName.toLower());
-  if (!restoreBackedUpSaves(absoluteSaveDir, lowerSaveDir,
-                            backupUpper, backupLower)) {
-    MOBase::log::warn("Failed restoring backed up global saves in '{}'", parentDir);
-    return false;
-  }
-
-  return copied;
+  return result.success;
 }
 
 void WinePrefix::restoreStaleBackups() const
 {
   if (!isValid()) {
+    return;
+  }
+
+  QLockFile prefixLease(WineSaveDeployment::leasePathFor(m_prefixPath, QString{}));
+  if (!prefixLease.tryLock(0) &&
+      (!prefixLease.removeStaleLockFile() || !prefixLease.tryLock(0))) {
+    MOBase::log::warn(
+        "Deferring stale Wine INI recovery because prefix '{}' is active in "
+        "another Fluorine process",
+        m_prefixPath);
+    return;
+  }
+
+  // A manager may have crashed while its Wine child kept running. The
+  // persistent save-session marker is deliberately not auto-adopted, and the
+  // same rule applies to deployed INIs: restoring them underneath that child
+  // would mutate its live configuration and invalidate the routing receipt.
+  if (WineSaveDeployment::hasPersistedSessionLease(m_prefixPath)) {
+    MOBase::log::warn(
+        "Deferring stale Wine INI recovery because prefix '{}' still has an "
+        "unresolved save-session owner",
+        m_prefixPath);
     return;
   }
 
@@ -493,113 +312,42 @@ void WinePrefix::restoreStaleBackups() const
     const QString livePath =
         backupPath.left(backupPath.length() - QString(BackupIniSuffix).length());
 
+    QString routingOwner;
+    bool routingPending = false;
+    const auto routing =
+        WineSaveRouting::pendingOwner(livePath, routingOwner, routingPending);
+    if (!routing || routingPending) {
+      MOBase::log::warn(
+          "Deferring stale INI backup '{}' because its save-routing receipt "
+          "is {}{}",
+          backupPath, routing ? "still owned by launch '" : "invalid: ",
+          routing ? routingOwner + QStringLiteral("'") : routing.error);
+      continue;
+    }
+
     MOBase::log::info("Restoring stale INI backup '{}' -> '{}'", backupPath, livePath);
     if (!restoreBackedUpIni(livePath, backupPath)) {
       MOBase::log::warn("Failed to restore stale INI backup '{}'", backupPath);
     }
   }
 
-  // Also restore stale save backups — scan entire prefix for .mo2linux_backup_*
-  // directories (saves may be in Documents/My Games/.../Saves, Saved Games/..., etc.)
-  QSet<QString> processedBackups;
-  QDirIterator saveIt(driveC(), QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot,
-                      QDirIterator::Subdirectories);
-  while (saveIt.hasNext()) {
-    saveIt.next();
-    const QString dirName = saveIt.fileName();
-    if (!dirName.startsWith(".mo2linux_backup_")) {
-      continue;
-    }
-
-    const QString backupPath = saveIt.filePath();
-    const QString parentDir = QFileInfo(backupPath).dir().absolutePath();
-    const QString originalLeaf = dirName.mid(QString(".mo2linux_backup_").length());
-    if (originalLeaf.isEmpty()) {
-      continue;
-    }
-
-    // Use lowercase key to deduplicate upper/lower variants in same parent
-    const QString dedupeKey = parentDir + "/" + originalLeaf.toLower();
-    if (processedBackups.contains(dedupeKey)) {
-      continue;
-    }
-    processedBackups.insert(dedupeKey);
-
-    const QString liveUpper = QDir(parentDir).filePath(originalLeaf);
-    const QString liveLower = QDir(parentDir).filePath(originalLeaf.toLower());
-    const QString backupUpper =
-        QDir(parentDir).filePath(".mo2linux_backup_" + originalLeaf);
-    const QString backupLower =
-        QDir(parentDir).filePath(".mo2linux_backup_" + originalLeaf.toLower());
-
-    MOBase::log::info("Restoring stale save backups: '{}' in '{}'",
-                      originalLeaf, parentDir);
-    if (!restoreBackedUpSaves(liveUpper, liveLower, backupUpper, backupLower)) {
-      MOBase::log::warn("Failed to restore stale save backups in '{}'", parentDir);
-    }
-  }
+  // Save backups carry profile/launch ownership and are recovered only after
+  // the exact configured save path and selected profile are known. A broad
+  // name-only prefix scan could otherwise rename unrelated application data.
 }
 
-bool WinePrefix::syncProfileInisBack(
-    const QList<QPair<QString, QString>>& iniMappings) const
+bool WinePrefix::syncProfileInisBack(QList<WineProfileIniSync::Deployment>& deployments,
+                                     const QString& ownerId, bool publishChanges,
+                                     WineProfileIniSync::CleanupPhase& phase) const
 {
-  MOBase::log::debug("syncProfileInisBack: {} INI mappings to sync back",
-                     iniMappings.size());
-  bool allCopied = true;
-  for (const auto& mapping : iniMappings) {
-    const QString profileIniPath = QDir::cleanPath(mapping.first);
-    const QString prefixIniPath  = QDir::cleanPath(mapping.second);
-    MOBase::log::debug("syncProfileInisBack: profile='{}' <- prefix='{}'",
-                       profileIniPath, prefixIniPath);
-
-    // Find ALL case-insensitive variants of the INI file (e.g. both
-    // skyrimprefs.ini and SkyrimPrefs.ini may exist on Linux).
-    // Pick the most recently modified one — that's the file the game wrote to.
-    const QStringList variants = findCaseVariants(prefixIniPath);
-
-    QString newestVariant;
-    QDateTime newestTime;
-    for (const QString& variant : variants) {
-      const QFileInfo fi(variant);
-      if (fi.lastModified() > newestTime) {
-        newestTime    = fi.lastModified();
-        newestVariant = variant;
-      }
-    }
-
-    if (newestVariant.isEmpty()) {
-      // No INI file found at all — try to restore from any backup.
-      const QString backupIniPath = prefixIniPath + BackupIniSuffix;
-      if (!restoreBackedUpIni(prefixIniPath, backupIniPath)) {
-        allCopied = false;
-      }
-      continue;
-    }
-
-    // Sync the game's version back to the profile.
-    if (!copyFileWithParents(newestVariant, profileIniPath)) {
-      allCopied = false;
-    }
-
-    // Remove ALL variants (including stale deployed copies), then
-    // restore ALL backed-up originals.
-    for (const QString& variant : variants) {
-      QFile::remove(variant);
-    }
-
-    // Restore all backups (there may be multiple from different case variants).
-    const QStringList backupVariants =
-        findCaseVariants(prefixIniPath + BackupIniSuffix);
-    for (const QString& backup : backupVariants) {
-      const QString livePath =
-          backup.left(backup.length() - QString(BackupIniSuffix).length());
-      if (!restoreBackedUpIni(livePath, backup)) {
-        allCopied = false;
-      }
-    }
+  MOBase::log::debug("syncProfileInisBack: {} INI deployments to finish",
+                     deployments.size());
+  const auto result =
+      WineProfileIniSync::finish(deployments, ownerId, publishChanges, phase);
+  if (!result) {
+    MOBase::log::error("syncProfileInisBack: {}", result.error);
   }
-
-  return allCopied;
+  return result.success;
 }
 
 QDateTime WinePrefix::prefixPluginsMTime(const QString& dataDir) const
@@ -612,8 +360,7 @@ QDateTime WinePrefix::prefixPluginsMTime(const QString& dataDir) const
     return {};
   }
   QDateTime newest;
-  for (const QString& v :
-       findCaseVariants(QDir(pluginsDir).filePath("plugins.txt"))) {
+  for (const QString& v : findCaseVariants(QDir(pluginsDir).filePath("plugins.txt"))) {
     const QDateTime t = QFileInfo(v).lastModified();
     if (!newest.isValid() || t > newest) {
       newest = t;
@@ -686,16 +433,13 @@ bool WinePrefix::syncPluginsBack(const QString& profilePluginsPath,
   // that case and let the profile's existing list stand.
   auto countStarredLines = [](const QString& path) -> int {
     const auto result = WinePluginListSync::read(path);
-    return result.snapshot ? WinePluginListSync::countStarred(
-                                 result.snapshot->contents)
+    return result.snapshot ? WinePluginListSync::countStarred(result.snapshot->contents)
                            : -1;
   };
 
-  const int profileStars = countStarredLines(profilePluginsPath);
-  const int candidateStars =
-      WinePluginListSync::countStarred(sourceSnapshot.contents);
-  if (WinePluginListSync::isSuspiciousActiveDrop(profileStars,
-                                                  candidateStars)) {
+  const int profileStars   = countStarredLines(profilePluginsPath);
+  const int candidateStars = WinePluginListSync::countStarred(sourceSnapshot.contents);
+  if (WinePluginListSync::isSuspiciousActiveDrop(profileStars, candidateStars)) {
     const int absDrop = profileStars - candidateStars;
     const double relDrop =
         static_cast<double>(absDrop) / static_cast<double>(profileStars);
@@ -709,8 +453,7 @@ bool WinePrefix::syncPluginsBack(const QString& profilePluginsPath,
 
   MOBase::log::info("syncPluginsBack: '{}' <- '{}'", profilePluginsPath, newest);
   QString publicationError;
-  if (!WinePluginListSync::publish(profileFile, sourceSnapshot,
-                                   publicationError)) {
+  if (!WinePluginListSync::publish(profileFile, sourceSnapshot, publicationError)) {
     MOBase::log::error("syncPluginsBack: failed to publish '{}': {}",
                        profilePluginsPath, publicationError);
     return false;
@@ -718,15 +461,14 @@ bool WinePrefix::syncPluginsBack(const QString& profilePluginsPath,
 
   bool allMirrored = true;
   for (const QString& sibling : variants) {
-    if (sibling == newest ||
-        WinePluginListSync::isSameFile(sibling, sourceSnapshot)) {
+    if (sibling == newest || WinePluginListSync::isSameFile(sibling, sourceSnapshot)) {
       continue;
     }
     MOBase::TransactionalWriteFile siblingFile(sibling);
     QString siblingError;
     if (!WinePluginListSync::publish(siblingFile, sourceSnapshot, siblingError)) {
-      MOBase::log::error("syncPluginsBack: failed to mirror '{}' into '{}': {}",
-                         newest, sibling, siblingError);
+      MOBase::log::error("syncPluginsBack: failed to mirror '{}' into '{}': {}", newest,
+                         sibling, siblingError);
       allMirrored = false;
     }
   }
@@ -735,8 +477,7 @@ bool WinePrefix::syncPluginsBack(const QString& profilePluginsPath,
   // The game never reads it; leaving it around only invites confusion.
   for (const QString& stale :
        findCaseVariants(QDir(pluginsDir).filePath("loadorder.txt"))) {
-    MOBase::log::debug("syncPluginsBack: removing stale loadorder variant '{}'",
-                       stale);
+    MOBase::log::debug("syncPluginsBack: removing stale loadorder variant '{}'", stale);
     QFile::remove(stale);
   }
 
@@ -773,8 +514,7 @@ static QString escapeRegValue(const QString& val)
   return escaped;
 }
 
-QString WinePrefix::readRegistryValue(const QString& regFile,
-                                      const QString& subKey,
+QString WinePrefix::readRegistryValue(const QString& regFile, const QString& subKey,
                                       const QString& valueName) const
 {
   const QString filePath = m_prefixPath + "/" + regFile;
@@ -785,9 +525,8 @@ QString WinePrefix::readRegistryValue(const QString& regFile,
 
   // Wine .reg section headers have an optional trailing timestamp:
   //   [Software\\Bethesda Softworks\\Skyrim Special Edition] 1774203819
-  const QString sectionPrefix =
-      "[" + escapeRegKey(subKey) + "]";
-  const QString valuePrefix = "\"" + valueName + "\"=";
+  const QString sectionPrefix = "[" + escapeRegKey(subKey) + "]";
+  const QString valuePrefix   = "\"" + valueName + "\"=";
 
   bool inSection = false;
   QTextStream in(&file);
@@ -802,7 +541,8 @@ QString WinePrefix::readRegistryValue(const QString& regFile,
     if (inSection && line.startsWith(valuePrefix, Qt::CaseInsensitive)) {
       // Extract value: "Name"="value" or "Name"=str(2):"value"
       int eqPos = line.indexOf('=');
-      if (eqPos < 0) continue;
+      if (eqPos < 0)
+        continue;
       QString rhs = line.mid(eqPos + 1);
 
       // Handle str(2):"..." (REG_EXPAND_SZ) and regular "..." (REG_SZ)
@@ -818,8 +558,7 @@ QString WinePrefix::readRegistryValue(const QString& regFile,
   return {};
 }
 
-bool WinePrefix::writeRegistryValue(const QString& regFile,
-                                    const QString& subKey,
+bool WinePrefix::writeRegistryValue(const QString& regFile, const QString& subKey,
                                     const QString& valueName,
                                     const QString& value) const
 {
@@ -832,16 +571,16 @@ bool WinePrefix::writeRegistryValue(const QString& regFile,
 
   const QString sectionPrefix = "[" + escapeRegKey(subKey) + "]";
   const QString valuePrefix   = "\"" + valueName + "\"=";
-  const QString newLine       = "\"" + valueName + "\"=\"" + escapeRegValue(value) + "\"";
+  const QString newLine = "\"" + valueName + "\"=\"" + escapeRegValue(value) + "\"";
 
   QStringList lines;
-  bool inSection = false;
-  bool replaced  = false;
+  bool inSection    = false;
+  bool replaced     = false;
   bool sectionFound = false;
 
   QTextStream in(&file);
   while (!in.atEnd()) {
-    QString line = in.readLine();
+    QString line          = in.readLine();
     const QString trimmed = line.trimmed();
 
     if (trimmed.startsWith('[')) {
@@ -851,7 +590,8 @@ bool WinePrefix::writeRegistryValue(const QString& regFile,
         replaced = true;
       }
       inSection = trimmed.startsWith(sectionPrefix, Qt::CaseInsensitive);
-      if (inSection) sectionFound = true;
+      if (inSection)
+        sectionFound = true;
     }
 
     if (inSection && trimmed.startsWith(valuePrefix, Qt::CaseInsensitive)) {
@@ -896,19 +636,17 @@ bool WinePrefix::writeRegistryValue(const QString& regFile,
     out << l << "\n";
   }
 
-  MOBase::log::info("Updated Wine registry: [{}] \"{}\"=\"{}\" in {}",
-                    subKey, valueName, value, regFile);
+  MOBase::log::info("Updated Wine registry: [{}] \"{}\"=\"{}\" in {}", subKey,
+                    valueName, value, regFile);
   return true;
 }
 
-QString WinePrefix::readHklmValue(const QString& subKey,
-                                  const QString& valueName) const
+QString WinePrefix::readHklmValue(const QString& subKey, const QString& valueName) const
 {
   return readRegistryValue("system.reg", subKey, valueName);
 }
 
-bool WinePrefix::writeHklmValue(const QString& subKey,
-                                const QString& valueName,
+bool WinePrefix::writeHklmValue(const QString& subKey, const QString& valueName,
                                 const QString& value) const
 {
   return writeRegistryValue("system.reg", subKey, valueName, value);

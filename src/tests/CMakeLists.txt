@@ -79,6 +79,15 @@ set_tests_properties(test_nexus_cache_surface PROPERTIES
     TIMEOUT 10
 )
 add_test(
+    NAME test_winesave_surface
+    COMMAND ${Python3_EXECUTABLE} -m unittest -v
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_winesave_surface.py
+)
+set_tests_properties(test_winesave_surface PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    TIMEOUT 10
+)
+add_test(
     NAME test_desktop_entry
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/test_desktop_entry.py
@@ -1225,6 +1234,30 @@ target_link_libraries(test_winepluginlistsync PRIVATE
 add_test(NAME test_winepluginlistsync COMMAND test_winepluginlistsync)
 set_tests_properties(test_winepluginlistsync PROPERTIES TIMEOUT 10)
 
+add_executable(test_winesavedeployment EXCLUDE_FROM_ALL
+    test_winesavedeployment.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/wineprofileinisync.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/winepluginlistsync.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/winesavedeployment.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/winesaverouting.cpp
+)
+set_target_properties(test_winesavedeployment PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_winesavedeployment PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_winesavedeployment PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+    mo2::uibase
+)
+add_test(NAME test_winesavedeployment COMMAND test_winesavedeployment)
+set_tests_properties(test_winesavedeployment PROPERTIES TIMEOUT 20)
+
 add_test(NAME test_authoritative_write_surface
     COMMAND ${Python3_EXECUTABLE} -m unittest -v
             ${CMAKE_CURRENT_SOURCE_DIR}/test_authoritative_write_surface.py
@@ -1273,4 +1306,5 @@ add_custom_target(fluorine-tests
             test_instancegeneralsettings test_downloadmetadatapolicy
             test_downloadwritelifecycle test_nexuscachedirectory
             test_transactionalwritefile test_profilemodlistrename
-            test_morrowindpluginlistwriter test_winepluginlistsync)
+            test_morrowindpluginlistwriter test_winepluginlistsync
+            test_winesavedeployment)

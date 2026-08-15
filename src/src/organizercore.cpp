@@ -2,15 +2,15 @@
 #include "categories.h"
 #include "categoriesdialog.h"
 #include "credentialsdialog.h"
-#include "fluorine_build_info.h"
-#include "fluorineupdater.h"
-#include "slrmanager.h"
 #include "delayedfilewriter.h"
 #include "directoryrefresher.h"
 #include "env.h"
 #include "envfs.h"
 #include "envmodule.h"
 #include "filedialogmemory.h"
+#include "fluorine_build_info.h"
+#include "fluorineconfig.h"
+#include "fluorineupdater.h"
 #include "guessedvalue.h"
 #include "imodinterface.h"
 #include "imoinfo.h"
@@ -28,38 +28,36 @@
 #include "plugincontainer.h"
 #include "previewdialog.h"
 #include "profile.h"
+#include "protonlauncher.h"
 #include "shared/appconfig.h"
 #include "shared/directoryentry.h"
 #include "shared/fileentry.h"
 #include "shared/filesorigin.h"
 #include "shared/util.h"
+#include "slrmanager.h"
 #include "spawn.h"
 #include "syncoverwritedialog.h"
-#include "virtualfiletree.h"
 #include "usvfsrequest.h"
 #include "usvfssnapshot.h"
-#include "vfsbackend.h"
-#include "vfs/vfscatalog.h"
-#include "vfs/permissionrepair.h"
 #include "vfs/gamesavemigration.h"
+#include "vfs/permissionrepair.h"
+#include "vfs/vfscatalog.h"
+#include "vfsbackend.h"
+#include "virtualfiletree.h"
+#include "wineprefix.h"
+#include "winesavedeployment.h"
+#include "winesaverouting.h"
 #include <ipluginmodpage.h>
 #include <questionboxmemory.h>
+#include <uibase/filesystemutilities.h>
 #include <uibase/game_features/dataarchives.h>
 #include <uibase/game_features/localsavegames.h>
 #include <uibase/game_features/scriptextender.h>
 #include <uibase/registry.h>
 #include <uibase/report.h>
 #include <uibase/scopeguard.h>
-#include <uibase/filesystemutilities.h>
 #include <uibase/utility.h>
-#include "fluorineconfig.h"
-#include "protonlauncher.h"
-#include "wineprefix.h"
 
-#include <chrono>
-#include <cstdio>
-#include <filesystem>
-#include <thread>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDateTime>
@@ -69,7 +67,6 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFutureWatcher>
-#include <QStandardPaths>
 #include <QMessageBox>
 #include <QNetworkInterface>
 #include <QPointer>
@@ -77,6 +74,7 @@
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QStandardPaths>
 #include <QTemporaryFile>
 #include <QTextStream>
 #include <QThread>
@@ -84,6 +82,10 @@
 #include <QUrl>
 #include <QWidget>
 #include <QtConcurrent/QtConcurrentRun>
+#include <chrono>
+#include <cstdio>
+#include <filesystem>
+#include <thread>
 
 #include <QtDebug>
 #include <QtGlobal>  // for qUtf8Printable, etc
@@ -92,8 +94,8 @@
 #include <cstddef>
 #include <cstring>  // for memset, wcsrchr
 
-#include <boost/algorithm/string/predicate.hpp>
 #include <atomic>
+#include <boost/algorithm/string/predicate.hpp>
 #include <exception>
 #include <functional>
 #include <iterator>
@@ -130,7 +132,7 @@ QString uniqueFilePath(const QDir& dir, const QString& fileName)
   }
 
   const QFileInfo info(fileName);
-  const QString base = info.completeBaseName();
+  const QString base   = info.completeBaseName();
   const QString suffix = info.suffix();
   const QString timestamp =
       QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_hhmmss"));
@@ -146,10 +148,9 @@ QString uniqueFilePath(const QDir& dir, const QString& fileName)
     }
   }
 
-  return dir.filePath(
-      suffix.isEmpty()
-          ? QStringLiteral("%1_%2").arg(base, timestamp)
-          : QStringLiteral("%1_%2.%3").arg(base, timestamp, suffix));
+  return dir.filePath(suffix.isEmpty()
+                          ? QStringLiteral("%1_%2").arg(base, timestamp)
+                          : QStringLiteral("%1_%2.%3").arg(base, timestamp, suffix));
 }
 
 void installSlrUpdate(QWidget* parent, const SlrUpdateInfo& info);
@@ -157,14 +158,16 @@ void installSlrUpdate(QWidget* parent, const SlrUpdateInfo& info);
 bool fileContainsAsciiMarker(const QString& path, const QByteArray& marker)
 {
   QFile file(path);
-  if (!file.open(QIODevice::ReadOnly) || marker.isEmpty()) return false;
+  if (!file.open(QIODevice::ReadOnly) || marker.isEmpty())
+    return false;
 
   QByteArray carry;
   while (!file.atEnd()) {
     QByteArray block = carry + file.read(1024 * 1024);
-    if (block.contains(marker)) return true;
+    if (block.contains(marker))
+      return true;
     const qsizetype keep = std::min<qsizetype>(marker.size() - 1, block.size());
-    carry = block.right(keep);
+    carry                = block.right(keep);
   }
   return false;
 }
@@ -172,13 +175,14 @@ bool fileContainsAsciiMarker(const QString& path, const QByteArray& marker)
 bool usvfsRuntimeSupportsResolvedSnapshots()
 {
   const QByteArray override = qgetenv("FLUORINE_USVFS_RESOLVED_SNAPSHOT").trimmed();
-  if (override == "1") return true;
-  if (override == "0") return false;
+  if (override == "1")
+    return true;
+  if (override == "0")
+    return false;
 
   const QString dll = QDir(QCoreApplication::applicationDirPath())
                           .filePath(QStringLiteral("usvfs/usvfs_x64.dll"));
-  return fileContainsAsciiMarker(
-      dll, QByteArrayLiteral("usvfsVirtualLinkMappings"));
+  return fileContainsAsciiMarker(dll, QByteArrayLiteral("usvfsVirtualLinkMappings"));
 }
 
 void promptSlrUpdate(QWidget* parent, const SlrUpdateInfo& info)
@@ -245,59 +249,54 @@ void installSlrUpdate(QWidget* parent, const SlrUpdateInfo& info)
   progress->setMinimumDuration(0);
 
   const SlrCancellationSource cancellation;
-  QObject::connect(progress, &QProgressDialog::canceled, progress,
-                   [cancellation] {
+  QObject::connect(progress, &QProgressDialog::canceled, progress, [cancellation] {
     cancellation.cancel();
   });
 
   auto* watcher = new QFutureWatcher<QString>(progress);
-  QObject::connect(watcher, &QFutureWatcher<QString>::finished, progress,
-                   [watcher, progress, cancellation] {
-                     progress->close();
-                     const QString err = watcher->result();
-                     watcher->deleteLater();
-                     progress->deleteLater();
+  QObject::connect(
+      watcher, &QFutureWatcher<QString>::finished, progress,
+      [watcher, progress, cancellation] {
+        progress->close();
+        const QString err = watcher->result();
+        watcher->deleteLater();
+        progress->deleteLater();
 
-                     if (cancellation.isCancellationRequested() ||
-                         slrOperationAdmissionSuppressed()) {
-                       return;
-                     }
+        if (cancellation.isCancellationRequested() ||
+            slrOperationAdmissionSuppressed()) {
+          return;
+        }
 
-                     if (!err.isEmpty()) {
-                       MOBase::log::warn("SLR update failed: {}", err);
-                       QMessageBox::warning(
-                           qApp->activeWindow(),
-                           QObject::tr("Steam Linux Runtime"),
-                           QObject::tr("Steam Linux Runtime update failed:\n%1\n\n"
-                                       "The existing runtime was kept.")
-                               .arg(err));
-                     } else {
-                       if (!runSlrUiCommitIfAllowed([] {
-                             QSettings settings = globalSettings();
-                             settings.remove(QStringLiteral(
-                                 "SteamLinuxRuntime/skipped_build_id"));
-                           })) {
-                         return;
-                       }
-                       MOBase::log::info("Steam Linux Runtime updated successfully");
-                       QMessageBox::information(
-                           qApp->activeWindow(),
-                           QObject::tr("Steam Linux Runtime"),
-                           QObject::tr("Steam Linux Runtime updated successfully."));
-                     }
-                   });
+        if (!err.isEmpty()) {
+          MOBase::log::warn("SLR update failed: {}", err);
+          QMessageBox::warning(qApp->activeWindow(), QObject::tr("Steam Linux Runtime"),
+                               QObject::tr("Steam Linux Runtime update failed:\n%1\n\n"
+                                           "The existing runtime was kept.")
+                                   .arg(err));
+        } else {
+          if (!runSlrUiCommitIfAllowed([] {
+                QSettings settings = globalSettings();
+                settings.remove(QStringLiteral("SteamLinuxRuntime/skipped_build_id"));
+              })) {
+            return;
+          }
+          MOBase::log::info("Steam Linux Runtime updated successfully");
+          QMessageBox::information(
+              qApp->activeWindow(), QObject::tr("Steam Linux Runtime"),
+              QObject::tr("Steam Linux Runtime updated successfully."));
+        }
+      });
 
-  watcher->setFuture(
-      QtConcurrent::run([token = cancellation.token()]() -> QString {
-        return downloadSlr(nullptr, nullptr, token);
-      }));
+  watcher->setFuture(QtConcurrent::run([token = cancellation.token()]() -> QString {
+    return downloadSlr(nullptr, nullptr, token);
+  }));
   progress->show();
 }
 
 int cleanupRetryDelayMs(unsigned int retryCount)
 {
   constexpr unsigned int maxShift = 5;
-  const auto shift = std::min(retryCount, maxShift);
+  const auto shift                = std::min(retryCount, maxShift);
   return std::min(100 * (1 << shift), 5000);
 }
 
@@ -339,8 +338,7 @@ QStringList toStringList(InputIterator current, InputIterator end)
   return result;
 }
 
-QString resolveWinePrefixPath(const Settings& settings,
-                              const IPluginGame* managedGame)
+QString resolveWinePrefixPath(const Settings& settings, const IPluginGame* managedGame)
 {
   if (managedGame != nullptr && managedGame->isNativeLinux()) {
     return {};
@@ -361,8 +359,8 @@ QString resolveWinePrefixPath(const Settings& settings,
   if (!explicitPath.isEmpty()) {
     return explicitPath;
   }
-  for (const auto& key : {"Settings/proton_prefix_path", "Settings/prefix_path",
-                           "Proton/prefix_path"}) {
+  for (const auto& key :
+       {"Settings/proton_prefix_path", "Settings/prefix_path", "Proton/prefix_path"}) {
     const QString value = instanceSettings.value(key).toString().trimmed();
     if (!value.isEmpty()) {
       return value;
@@ -410,8 +408,7 @@ QString resolvePrefixGameDocumentsDir(const WinePrefix& prefix,
   return QDir(prefix.myGamesPath()).filePath(dataDirName);
 }
 
-QString resolveAbsoluteSaveDir(const WinePrefix& prefix,
-                               const IPluginGame* managedGame,
+QString resolveAbsoluteSaveDir(const WinePrefix& prefix, const IPluginGame* managedGame,
                                MOBase::LocalSavegames* localSaves,
                                std::shared_ptr<Profile> profile)
 {
@@ -420,12 +417,12 @@ QString resolveAbsoluteSaveDir(const WinePrefix& prefix,
     return QDir(prefix.myGamesPath()).filePath(dataDirName + "/Saves");
   }
 
-  const QString profileSaveDir =
-      QDir(profile->absolutePath()).filePath("saves");
+  const QString profileSaveDir = QDir(profile->absolutePath()).filePath("saves");
 
   // Strategy 1: Use LocalSavegames::mappings() if available.
-  // Extract the user-relative portion of the destination (after drive_c/users/<name>/)
-  // and reconstruct it under our prefix's userProfilePath().
+  // Extract the user-relative portion of the destination (after
+  // drive_c/users/<name>/) and reconstruct it under our prefix's
+  // userProfilePath().
   if (localSaves != nullptr) {
     const MappingType mappings = localSaves->mappings(QDir(profileSaveDir));
     for (const auto& mapping : mappings) {
@@ -433,7 +430,7 @@ QString resolveAbsoluteSaveDir(const WinePrefix& prefix,
         continue;
       }
 
-      const QString source = QDir::cleanPath(mapping.source);
+      const QString source      = QDir::cleanPath(mapping.source);
       const QString destination = QDir::cleanPath(mapping.destination);
       if (source != QDir::cleanPath(profileSaveDir)) {
         continue;
@@ -445,8 +442,7 @@ QString resolveAbsoluteSaveDir(const WinePrefix& prefix,
       const auto match = userDirRe.match(destination);
       if (match.hasMatch()) {
         const QString userRelative = match.captured(1);
-        const QString resolved =
-            QDir(prefix.userProfilePath()).filePath(userRelative);
+        const QString resolved = QDir(prefix.userProfilePath()).filePath(userRelative);
         log::debug("resolveAbsoluteSaveDir: from mappings -> '{}'", resolved);
         return resolved;
       }
@@ -455,15 +451,14 @@ QString resolveAbsoluteSaveDir(const WinePrefix& prefix,
 
   // Strategy 2: Use managedGame->savesDirectory()
   {
-    const QDir savesDir = managedGame->savesDirectory();
+    const QDir savesDir     = managedGame->savesDirectory();
     const QString savesPath = QDir::cleanPath(savesDir.absolutePath());
     static const QRegularExpression userDirRe(
         "drive_c/users/[^/]+/(.+)", QRegularExpression::CaseInsensitiveOption);
     const auto match = userDirRe.match(savesPath);
     if (match.hasMatch()) {
       const QString userRelative = match.captured(1);
-      const QString resolved =
-          QDir(prefix.userProfilePath()).filePath(userRelative);
+      const QString resolved = QDir(prefix.userProfilePath()).filePath(userRelative);
       log::debug("resolveAbsoluteSaveDir: from savesDirectory -> '{}'", resolved);
       return resolved;
     }
@@ -471,8 +466,7 @@ QString resolveAbsoluteSaveDir(const WinePrefix& prefix,
 
   // Fallback: Documents/My Games/<dataDirName>/Saves (old Bethesda behavior)
   const QString dataDirName = resolveWineDataDirName(managedGame);
-  const QString fallback =
-      QDir(prefix.myGamesPath()).filePath(dataDirName + "/Saves");
+  const QString fallback = QDir(prefix.myGamesPath()).filePath(dataDirName + "/Saves");
   log::debug("resolveAbsoluteSaveDir: fallback -> '{}'", fallback);
   return fallback;
 }
@@ -486,8 +480,7 @@ void migrateGameLocalSavesFromOverwrite(const IPluginGame* game,
 
   const auto stats = MOBase::Vfs::migrateGameLocalSaves(
       game->dataDirectory().absolutePath().toStdString(),
-      game->savesDirectory().absolutePath().toStdString(),
-      overwriteDir.toStdString());
+      game->savesDirectory().absolutePath().toStdString(), overwriteDir.toStdString());
   if (stats.moved == 0 && stats.failed == 0 && stats.skipped == 0) {
     return;
   }
@@ -498,8 +491,7 @@ void migrateGameLocalSavesFromOverwrite(const IPluginGame* game,
 }
 
 OrganizerCore::OrganizerCore(Settings& settings)
-    :
-      m_CurrentProfile(nullptr), m_Settings(settings),
+    : m_CurrentProfile(nullptr), m_Settings(settings),
       m_Updater(&NexusInterface::instance()), m_ModList(m_PluginContainer, this),
       m_PluginList(*this),
       m_DirectoryRefresher(new DirectoryRefresher(this, settings.refreshThreadCount())),
@@ -584,7 +576,8 @@ OrganizerCore::~OrganizerCore()
   } catch (const std::exception& e) {
     log::error("failed while stopping OrganizerCore worker threads: {}", e.what());
   } catch (...) {
-    log::error("failed while stopping OrganizerCore worker threads: unknown exception");
+    log::error("failed while stopping OrganizerCore worker threads: unknown "
+               "exception");
   }
 
   try {
@@ -651,10 +644,9 @@ void OrganizerCore::updateExecutablesList()
 void OrganizerCore::updateModInfoFromDisc()
 {
   const QString modsPath = m_Settings.paths().mods();
-  log::debug("updateModInfoFromDisc: base='{}', mods='{}'",
-             m_Settings.paths().base(), modsPath);
-  ModInfo::updateFromDisc(modsPath, *this,
-                          m_Settings.interface().displayForeign(),
+  log::debug("updateModInfoFromDisc: base='{}', mods='{}'", m_Settings.paths().base(),
+             modsPath);
+  ModInfo::updateFromDisc(modsPath, *this, m_Settings.interface().displayForeign(),
                           m_Settings.refreshThreadCount());
 }
 
@@ -691,7 +683,7 @@ void OrganizerCore::suppressPersistenceForFailedRollback() noexcept
   m_DownloadManager.suppressAdmissionForFailedRollback();
   m_ProcessLaunchContext.suppressNewReservations();
   suppressSlrOperationsForFailedRollback();
-  m_PersistenceSuppressed = true;
+  m_PersistenceSuppressed          = true;
   m_CurrentProfileSavedForShutdown = true;
   CategoryFactory::instance().suppressWritesForFailedRollback();
   ModInfo::suppressAllWritesForFailedRollback();
@@ -754,45 +746,48 @@ void OrganizerCore::checkForSlrUpdates()
       return;
     }
 
-    const bool invoked = QMetaObject::invokeMethod(self, [self, info]() {
-      if (!self) {
-        s_slrUpdateCheckInProgress = false;
-        return;
-      }
+    const bool invoked = QMetaObject::invokeMethod(
+        self,
+        [self, info]() {
+          if (!self) {
+            s_slrUpdateCheckInProgress = false;
+            return;
+          }
 
-      s_slrUpdateCheckInProgress = false;
+          s_slrUpdateCheckInProgress = false;
 
-      if (slrOperationAdmissionSuppressed()) {
-        return;
-      }
+          if (slrOperationAdmissionSuppressed()) {
+            return;
+          }
 
-      if (!info.error.isEmpty()) {
-        MOBase::log::warn("SLR update check failed: {}", info.error);
-        return;
-      }
+          if (!info.error.isEmpty()) {
+            MOBase::log::warn("SLR update check failed: {}", info.error);
+            return;
+          }
 
-      if (!info.updateAvailable) {
-        MOBase::log::debug("Steam Linux Runtime is up to date ({})",
-                           info.localBuildId);
-        return;
-      }
+          if (!info.updateAvailable) {
+            MOBase::log::debug("Steam Linux Runtime is up to date ({})",
+                               info.localBuildId);
+            return;
+          }
 
-      QSettings settings = globalSettings();
-      const QString skippedBuild =
-          settings.value(QStringLiteral("SteamLinuxRuntime/skipped_build_id"))
-              .toString();
-      if (skippedBuild == info.remoteBuildId) {
-        MOBase::log::debug("Skipping SLR update prompt for ignored build {}",
-                           info.remoteBuildId);
-        return;
-      }
+          QSettings settings = globalSettings();
+          const QString skippedBuild =
+              settings.value(QStringLiteral("SteamLinuxRuntime/skipped_build_id"))
+                  .toString();
+          if (skippedBuild == info.remoteBuildId) {
+            MOBase::log::debug("Skipping SLR update prompt for ignored build {}",
+                               info.remoteBuildId);
+            return;
+          }
 
-      QWidget* parent = nullptr;
-      if (self->m_UserInterface) {
-        parent = self->m_UserInterface->mainWindow();
-      }
-      promptSlrUpdate(parent, info);
-    }, Qt::QueuedConnection);
+          QWidget* parent = nullptr;
+          if (self->m_UserInterface) {
+            parent = self->m_UserInterface->mainWindow();
+          }
+          promptSlrUpdate(parent, info);
+        },
+        Qt::QueuedConnection);
     if (!invoked) {
       s_slrUpdateCheckInProgress = false;
     }
@@ -810,13 +805,10 @@ void OrganizerCore::checkForFluorineUpdates()
 
     connect(m_FluorineUpdater, &FluorineUpdater::updateAvailable, this,
             [](const FluorineUpdater::ReleaseInfo& info) {
-              const QString channel =
-                  FluorineUpdater::channelToString(info.channel);
-              MOBase::log::info(
-                  "Fluorine update available ({}): {} at {}",
-                  channel,
-                  info.tagName.isEmpty() ? info.name : info.tagName,
-                  info.htmlUrl);
+              const QString channel = FluorineUpdater::channelToString(info.channel);
+              MOBase::log::info("Fluorine update available ({}): {} at {}", channel,
+                                info.tagName.isEmpty() ? info.name : info.tagName,
+                                info.htmlUrl);
             });
     connect(m_FluorineUpdater, &FluorineUpdater::upToDate, this,
             [](const FluorineUpdater::ReleaseInfo& info) {
@@ -1026,12 +1018,11 @@ bool OrganizerCore::checkPathSymlinks()
                            QFileInfo(m_Settings.paths().overwrite()).isSymLink());
 
   if (hasSymlink) {
-    log::warn(
-        "{}",
-        QObject::tr(
-            "One of the configured MO2 directories (profiles, mods, or overwrite) "
-            "is on a path containing a symbolic (or other) link. This is likely to "
-            "be incompatible with MO2's virtual filesystem."));
+    log::warn("{}", QObject::tr("One of the configured MO2 directories (profiles, "
+                                "mods, or overwrite) "
+                                "is on a path containing a symbolic (or other) link. "
+                                "This is likely to "
+                                "be incompatible with MO2's virtual filesystem."));
 
     return false;
   }
@@ -1083,18 +1074,16 @@ void OrganizerCore::prepareVFS()
   {
     const auto instance = InstanceManager::singleton().currentInstance();
     m_USVFS.setIndexPublicationContext(
-        {.output_base=basePath().toStdString(),
-         .producer=std::string("Fluorine ") + FLUORINE_VERSION_STRING,
-         .instance_name=
+        {.output_base = basePath().toStdString(),
+         .producer    = std::string("Fluorine ") + FLUORINE_VERSION_STRING,
+         .instance_name =
              instance != nullptr ? instance->displayName().toStdString() : "",
-         .profile_name=
-             m_CurrentProfile != nullptr
-                 ? m_CurrentProfile->name().toStdString()
-                 : "",
+         .profile_name =
+             m_CurrentProfile != nullptr ? m_CurrentProfile->name().toStdString() : "",
 #ifdef _WIN32
-         .consumer_path_style=VfsIndexConsumerPathStyle::NativeWindows
+         .consumer_path_style = VfsIndexConsumerPathStyle::NativeWindows
 #else
-         .consumer_path_style=VfsIndexConsumerPathStyle::Wine
+         .consumer_path_style = VfsIndexConsumerPathStyle::Wine
 #endif
         });
   }
@@ -1129,7 +1118,7 @@ void OrganizerCore::prepareVFS()
     QString const owPath = settings().paths().overwrite();
     QDir const owDir(owPath);
     QString trackPath = owDir.absoluteFilePath("../tracked_writes.json");
-    trackPath = QDir::cleanPath(trackPath);
+    trackPath         = QDir::cleanPath(trackPath);
     std::fprintf(stderr, "[VFS] prepareVFS: owPath='%s' trackPath='%s'\n",
                  owPath.toStdString().c_str(), trackPath.toStdString().c_str());
     m_USVFS.setTrackingFilePath(trackPath.toStdString());
@@ -1152,7 +1141,8 @@ void OrganizerCore::prepareVFS()
   // directory lives below the game data root.
   migrateGameLocalSavesFromOverwrite(managedGame(), overwritePath());
 
-  // Diagnostic toggle from Settings > Proton/Wine tab (see settingsdialogproton.cpp).
+  // Diagnostic toggle from Settings > Proton/Wine tab (see
+  // settingsdialogproton.cpp).
   m_USVFS.setDisableVfsCache(
       QSettings().value("fluorine/disable_vfs_cache", false).toBool());
 
@@ -1176,16 +1166,16 @@ OrganizerCore::VfsPreviewSessionResult
 OrganizerCore::beginVfsPreviewSession(const QString& launchToken,
                                       const QString& profileName)
 {
-  if (launchToken.isEmpty() || profileName.isEmpty() ||
-      m_CurrentProfile == nullptr || m_CurrentProfile->name() != profileName) {
+  if (launchToken.isEmpty() || profileName.isEmpty() || m_CurrentProfile == nullptr ||
+      m_CurrentProfile->name() != profileName) {
     log::warn("VFS preview refused: missing or non-current launch profile '{}'; "
               "token='{}'",
               profileName.toStdString(), launchToken.toStdString());
     return VfsPreviewSessionResult::Unavailable;
   }
 
-  ScopedProcessLaunchReservation reservation(
-      m_ProcessLaunchContext, launchToken, profileName, /*ownsVfs=*/true);
+  ScopedProcessLaunchReservation reservation(m_ProcessLaunchContext, launchToken,
+                                             profileName, /*ownsVfs=*/true);
   if (!reservation) {
     const auto active = m_ProcessLaunchContext.activeLaunches();
     log::warn("VFS preview refused: organizer VFS is already reserved "
@@ -1224,15 +1214,15 @@ bool OrganizerCore::endVfsPreviewSession(const QString& launchToken,
 }
 
 bool OrganizerCore::continueVfsPreviewTeardown(const QString& launchToken,
-                                               const QString& profileName,
-                                               bool retry,
+                                               const QString& profileName, bool retry,
                                                unsigned int retryCount)
 {
   const auto attempt = launch_cleanup::attemptMandatoryCleanup(
       m_ProcessLaunchContext, launchToken, profileName, /*ownsVfs=*/true,
-      retry ? launch_cleanup::AttemptKind::Retry
-            : launch_cleanup::AttemptKind::Initial,
-      [this]() { m_USVFS.unmount(); });
+      retry ? launch_cleanup::AttemptKind::Retry : launch_cleanup::AttemptKind::Initial,
+      [this]() {
+        m_USVFS.unmount();
+      });
 
   if (attempt.state == launch_cleanup::AttemptState::Rejected) {
     log::warn("VFS preview close ignored for unknown or mismatched session "
@@ -1248,17 +1238,15 @@ bool OrganizerCore::continueVfsPreviewTeardown(const QString& launchToken,
                launchToken.toStdString(),
                cleanupFailureMessage(attempt.failure).toStdString(), delay);
     try {
-      QTimer::singleShot(
-          delay, this,
-          [this, launchToken, profileName, retryCount]() {
-            try {
-              continueVfsPreviewTeardown(launchToken, profileName,
-                                         /*retry=*/true, retryCount + 1);
-            } catch (...) {
-              logQueuedCleanupFailure("VFS preview cleanup retry", launchToken,
-                                      std::current_exception());
-            }
-          });
+      QTimer::singleShot(delay, this, [this, launchToken, profileName, retryCount]() {
+        try {
+          continueVfsPreviewTeardown(launchToken, profileName,
+                                     /*retry=*/true, retryCount + 1);
+        } catch (...) {
+          logQueuedCleanupFailure("VFS preview cleanup retry", launchToken,
+                                  std::current_exception());
+        }
+      });
     } catch (const std::exception& e) {
       log::error("unable to schedule VFS preview cleanup retry for '{}': {}; "
                  "launch ownership remains retained",
@@ -1315,17 +1303,15 @@ void OrganizerCore::movePGPatcherLogsToLogsFolder()
                     QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot,
                     QDirIterator::Subdirectories);
     while (it.hasNext()) {
-      const QString source = it.next();
-      const QString destination =
-          uniqueFilePath(logsDir, QFileInfo(source).fileName());
+      const QString source      = it.next();
+      const QString destination = uniqueFilePath(logsDir, QFileInfo(source).fileName());
 
       if (QFile::rename(source, destination) ||
           (QFile::copy(source, destination) && QFile::remove(source))) {
         ++moved;
         log::info("Moved PGPatcher log '{}' -> '{}'", source, destination);
       } else {
-        log::warn("Failed to move PGPatcher log '{}' -> '{}'", source,
-                  destination);
+        log::warn("Failed to move PGPatcher log '{}' -> '{}'", source, destination);
       }
     }
   }
@@ -1535,8 +1521,8 @@ MOBase::IModInterface* OrganizerCore::createMod(GuessedValue<QString>& name)
     settingsFile.endArray();
   }
 
-  // shouldn't this use the existing mod in case of a merge? also, this does not refresh
-  // the indices in the ModInfo structure
+  // shouldn't this use the existing mod in case of a merge? also, this does not
+  // refresh the indices in the ModInfo structure
   return ModInfo::createFrom(QDir(targetDirectory), *this).data();
 }
 
@@ -1594,8 +1580,8 @@ QString OrganizerCore::pluginDataPath()
   // Base dir is not writable — redirect to a user-writable location, keeping
   // plugin data alongside Fluorine's other runtime data
   // (~/.local/share/fluorine/plugin_data).
-  return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
-         + "/fluorine/plugin_data";
+  return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) +
+         "/fluorine/plugin_data";
 }
 
 MOBase::IModInterface* OrganizerCore::installMod(const QString& archivePath,
@@ -1633,13 +1619,13 @@ OrganizerCore::doInstall(const QString& archivePath, GuessedValue<QString> modNa
   if (result) {
     MessageDialog::showMessage(tr("Installation successful"), qApp->activeWindow());
 
-    // we wait for the directory structure to be ready before notifying the mod list,
-    // this prevents issue with third-party plugins, e.g., if the installed mod is
-    // activated before the structure is ready
+    // we wait for the directory structure to be ready before notifying the mod
+    // list, this prevents issue with third-party plugins, e.g., if the
+    // installed mod is activated before the structure is ready
     //
-    // we need to fetch modIndex() within the call back because the index is only
-    // valid after the call to refresh(), but we do not want to connect after
-    // refresh()
+    // we need to fetch modIndex() within the call back because the index is
+    // only valid after the call to refresh(), but we do not want to connect
+    // after refresh()
     //
     connect(
         this, &OrganizerCore::directoryStructureReady, this,
@@ -1694,8 +1680,10 @@ OrganizerCore::doInstall(const QString& archivePath, GuessedValue<QString> modNa
         QMessageBox::information(
             qApp->activeWindow(), tr("Extraction cancelled"),
             tr("The installation was cancelled while extracting files. "
-               "If this was prior to a FOMOD setup, this warning may be ignored. "
-               "However, if this was during installation, the mod will likely be "
+               "If this was prior to a FOMOD setup, this warning may be "
+               "ignored. "
+               "However, if this was during installation, the mod will likely "
+               "be "
                "missing "
                "files."),
             QMessageBox::Ok);
@@ -1712,10 +1700,10 @@ ModInfo::Ptr OrganizerCore::installDownload(int index, int priority)
   ScopedDisableDirWatcher const scopedDirwatcher(&m_DownloadManager);
 
   try {
-    QString const fileName        = m_DownloadManager.getFilePath(index);
-    QString const gameName        = m_DownloadManager.getGameName(index);
-    int const modID               = m_DownloadManager.getModID(index);
-    int const fileID              = m_DownloadManager.getFileInfo(index)->fileID;
+    QString const fileName  = m_DownloadManager.getFilePath(index);
+    QString const gameName  = m_DownloadManager.getGameName(index);
+    int const modID         = m_DownloadManager.getModID(index);
+    int const fileID        = m_DownloadManager.getFileInfo(index)->fileID;
     ModInfo::Ptr currentMod = nullptr;
     GuessedValue<QString> modName;
 
@@ -1746,8 +1734,8 @@ ModInfo::Ptr OrganizerCore::installDownload(int index, int priority)
 
     return modInfo;
   } catch (const std::exception& e) {
-    log::error("installDownload exception: type={}, what='{}'",
-               typeid(e).name(), e.what());
+    log::error("installDownload exception: type={}, what='{}'", typeid(e).name(),
+               e.what());
     reportError(tr("Installation failed: %1").arg(e.what()));
   }
 
@@ -1895,11 +1883,12 @@ bool OrganizerCore::previewFileWithAlternatives(QWidget* parent, QString fileNam
 {
   fileName = QDir::fromNativeSeparators(fileName);
 
-  // what we have is an absolute path to the file in its actual location (for the
-  // primary origin) what we want is the path relative to the virtual data directory
+  // what we have is an absolute path to the file in its actual location (for
+  // the primary origin) what we want is the path relative to the virtual data
+  // directory
 
-  // we need to look in the virtual directory for the file to make sure the info is up
-  // to date.
+  // we need to look in the virtual directory for the file to make sure the info
+  // is up to date.
 
   // check if the file comes from the actual data folder instead of a mod
   QDir const gameDirectory   = managedGame()->dataDirectory().absolutePath();
@@ -1939,8 +1928,8 @@ bool OrganizerCore::previewFileWithAlternatives(QWidget* parent, QString fileNam
     QString const filePath =
         QDir::fromNativeSeparators(ToQString(origin.getPath())) + "/" + fileName;
     if (QFile::exists(filePath)) {
-      // it's very possible the file doesn't exist, because it's inside an archive. we
-      // don't support that
+      // it's very possible the file doesn't exist, because it's inside an
+      // archive. we don't support that
       QWidget* wid = m_PluginContainer->previewGenerator().genPreview(filePath);
       if (wid == nullptr) {
         reportError(tr("failed to generate preview for %1").arg(filePath));
@@ -2302,9 +2291,9 @@ void OrganizerCore::updateModsActiveState(const QList<unsigned int>& modIndices,
     }
   }
   if (active && (enabled > 1)) {
-    MessageDialog::showMessage(
-        tr("Multiple esps/esls activated, please check that they don't conflict."),
-        qApp->activeWindow());
+    MessageDialog::showMessage(tr("Multiple esps/esls activated, please check "
+                                  "that they don't conflict."),
+                               qApp->activeWindow());
   }
   m_PluginList.refreshLoadOrder();
   // immediately save affected lists
@@ -2325,9 +2314,9 @@ void OrganizerCore::updateModsInDirectoryStructure(
   std::vector<DirectoryRefresher::EntryInfo> entries;
 
   for (auto idx : modInfo.keys()) {
-    QString path       = modInfo[idx]->absolutePath();
+    QString path             = modInfo[idx]->absolutePath();
     QString const modDataDir = managedGame()->modDataDirectory();
-    path               = modDataDir.isEmpty() ? path : path + "/" + modDataDir;
+    path                     = modDataDir.isEmpty() ? path : path + "/" + modDataDir;
     entries.push_back({modInfo[idx]->name(),
                        path,
                        modInfo[idx]->stealFiles(),
@@ -2358,9 +2347,9 @@ void OrganizerCore::updateModsInDirectoryStructure(
 
   // finally also add files from bsas to the directory structure
   for (auto idx : modInfo.keys()) {
-    QString path       = modInfo[idx]->absolutePath();
+    QString path             = modInfo[idx]->absolutePath();
     QString const modDataDir = managedGame()->modDataDirectory();
-    path               = modDataDir.isEmpty() ? path : path + "/" + modDataDir;
+    path                     = modDataDir.isEmpty() ? path : path + "/" + modDataDir;
     m_DirectoryRefresher->addModBSAToStructure(
         m_DirectoryStructure, modInfo[idx]->name(),
         m_CurrentProfile->getModPriority(idx), path, modInfo[idx]->archives());
@@ -2483,7 +2472,7 @@ void OrganizerCore::refreshDirectoryStructure()
   }
 
   log::debug("refreshing structure");
-  m_DirectoryUpdate = true;
+  m_DirectoryUpdate                  = true;
   m_ActiveDirectoryRefreshGeneration = ++m_NextDirectoryRefreshGeneration;
 
   m_CurrentProfile->writeModlistNow(true);
@@ -2613,7 +2602,7 @@ void OrganizerCore::modPrioritiesChanged(const QModelIndexList& indices)
     int const priority = currentProfile()->getModPriority(i);
     if (currentProfile()->modEnabled(i)) {
       ModInfo::Ptr const modInfo = ModInfo::getByIndex(i);
-      const auto name = MOBase::ToWString(modInfo->internalName());
+      const auto name            = MOBase::ToWString(modInfo->internalName());
       // priorities in the directory structure are one higher because data is 0
       if (directoryStructure()->originExists(name)) {
         directoryStructure()->getOriginByName(name).setPriority(priority + 1);
@@ -2853,10 +2842,10 @@ std::vector<unsigned int> OrganizerCore::activeProblems() const
   std::vector<unsigned int> problems;
   const auto& hookdll = oldMO1HookDll();
   if (!hookdll.isEmpty()) {
-    // This warning will now be shown every time the problems are checked, which is a
-    // bit of a "log spam". But since this is a sever error which will most likely make
-    // the game crash/freeze/etc. and is very hard to diagnose,  this "log spam" will
-    // make it easier for the user to notice the warning.
+    // This warning will now be shown every time the problems are checked, which
+    // is a bit of a "log spam". But since this is a sever error which will most
+    // likely make the game crash/freeze/etc. and is very hard to diagnose, this
+    // "log spam" will make it easier for the user to notice the warning.
     log::warn("hook.dll found in game folder: {}", hookdll);
     problems.push_back(PROBLEM_MO1SCRIPTEXTENDERWORKAROUND);
   }
@@ -2867,8 +2856,8 @@ QString OrganizerCore::shortDescription(unsigned int key) const
 {
   switch (key) {
   case PROBLEM_MO1SCRIPTEXTENDERWORKAROUND: {
-    return tr(
-        "MO1 \"Script Extender\" load mechanism has left hook.dll in your game folder");
+    return tr("MO1 \"Script Extender\" load mechanism has left hook.dll in "
+              "your game folder");
   } break;
   default: {
     return tr("Description missing");
@@ -2880,13 +2869,17 @@ QString OrganizerCore::fullDescription(unsigned int key) const
 {
   switch (key) {
   case PROBLEM_MO1SCRIPTEXTENDERWORKAROUND: {
-    return tr("<a href=\"%1\">hook.dll</a> has been found in your game folder (right "
+    return tr("<a href=\"%1\">hook.dll</a> has been found in your game folder "
+              "(right "
               "click to copy the full path). "
-              "This is most likely a leftover of setting the ModOrganizer 1 load "
+              "This is most likely a leftover of setting the ModOrganizer 1 "
+              "load "
               "mechanism to \"Script Extender\", "
-              "in which case you must remove this file either by changing the load "
+              "in which case you must remove this file either by changing the "
+              "load "
               "mechanism in ModOrganizer 1 or "
-              "manually removing the file, otherwise the game is likely to crash and "
+              "manually removing the file, otherwise the game is likely to "
+              "crash and "
               "burn.")
         .arg(oldMO1HookDll());
     break;
@@ -3020,25 +3013,27 @@ bool OrganizerCore::checkGameRegistryKey()
   // Map of game short names to their registry key info.
   // Format: { shortName, { subKey, valueName } }
   static const QMap<QString, QPair<QString, QString>> gameRegistryKeys = {
-    {"Enderal",    {"Software\\SureAI\\Enderal",                            "Install_Path"}},
-    {"EnderalSE",  {"Software\\SureAI\\EnderalSE",                          "Install_Path"}},
-    {"Fallout3",   {"Software\\Bethesda Softworks\\Fallout3",               "installed path"}},
-    {"Fallout4",   {"Software\\Bethesda Softworks\\Fallout4",               "installed path"}},
-    {"Fallout4VR", {"Software\\Bethesda Softworks\\Fallout 4 VR",           "installed path"}},
-    {"FalloutNV",  {"Software\\Bethesda Softworks\\FalloutNV",              "installed path"}},
-    {"Morrowind",  {"Software\\Bethesda Softworks\\Morrowind",              "installed path"}},
-    {"Oblivion",   {"Software\\Bethesda Softworks\\Oblivion",               "installed path"}},
-    {"Skyrim",     {"Software\\Bethesda Softworks\\Skyrim",                 "installed path"}},
-    {"SkyrimSE",   {"Software\\Bethesda Softworks\\Skyrim Special Edition", "installed path"}},
-    {"SkyrimVR",   {"Software\\Bethesda Softworks\\Skyrim VR",              "installed path"}},
-    {"TTW",        {"Software\\Bethesda Softworks\\FalloutNV",              "installed path"}},
+      {"Enderal", {"Software\\SureAI\\Enderal", "Install_Path"}},
+      {"EnderalSE", {"Software\\SureAI\\EnderalSE", "Install_Path"}},
+      {"Fallout3", {"Software\\Bethesda Softworks\\Fallout3", "installed path"}},
+      {"Fallout4", {"Software\\Bethesda Softworks\\Fallout4", "installed path"}},
+      {"Fallout4VR", {"Software\\Bethesda Softworks\\Fallout 4 VR", "installed path"}},
+      {"FalloutNV", {"Software\\Bethesda Softworks\\FalloutNV", "installed path"}},
+      {"Morrowind", {"Software\\Bethesda Softworks\\Morrowind", "installed path"}},
+      {"Oblivion", {"Software\\Bethesda Softworks\\Oblivion", "installed path"}},
+      {"Skyrim", {"Software\\Bethesda Softworks\\Skyrim", "installed path"}},
+      {"SkyrimSE",
+       {"Software\\Bethesda Softworks\\Skyrim Special Edition", "installed path"}},
+      {"SkyrimVR", {"Software\\Bethesda Softworks\\Skyrim VR", "installed path"}},
+      {"TTW", {"Software\\Bethesda Softworks\\FalloutNV", "installed path"}},
   };
 
   const auto* game = managedGame();
-  if (!game) return true;
+  if (!game)
+    return true;
 
   const QString shortName = game->gameShortName();
-  auto it = gameRegistryKeys.find(shortName);
+  auto it                 = gameRegistryKeys.find(shortName);
   if (it == gameRegistryKeys.end()) {
     return true;  // unknown game, nothing to check
   }
@@ -3063,7 +3058,8 @@ bool OrganizerCore::checkGameRegistryKey()
   }
 
   // Convert Linux path to Wine Z: path for comparison.
-  // Trailing backslash required — game launchers expect it (matches Steam's format).
+  // Trailing backslash required — game launchers expect it (matches Steam's
+  // format).
   QString winePath = "Z:" + QString(gameDir).replace("/", "\\");
   if (!winePath.endsWith('\\'))
     winePath += '\\';
@@ -3072,7 +3068,7 @@ bool OrganizerCore::checkGameRegistryKey()
   QString registryPath = prefix.readHklmValue(subKey, valueName);
   if (registryPath.isEmpty()) {
     const QString wow64Key = "Software\\Wow6432Node\\" + subKey.mid(9);
-    registryPath = prefix.readHklmValue(wow64Key, valueName);
+    registryPath           = prefix.readHklmValue(wow64Key, valueName);
   }
 
   // Normalize trailing separators before comparing — Steam writes paths with
@@ -3084,10 +3080,10 @@ bool OrganizerCore::checkGameRegistryKey()
   };
 
   if (registryPath.isEmpty() ||
-      stripTrailingSep(registryPath).compare(stripTrailingSep(winePath),
-                                             Qt::CaseInsensitive) != 0) {
-    const QString displayRegPath = registryPath.isEmpty()
-        ? tr("<not set>") : registryPath;
+      stripTrailingSep(registryPath)
+              .compare(stripTrailingSep(winePath), Qt::CaseInsensitive) != 0) {
+    const QString displayRegPath =
+        registryPath.isEmpty() ? tr("<not set>") : registryPath;
 
     QWidget* parent = nullptr;
     if (m_UserInterface) {
@@ -3095,23 +3091,22 @@ bool OrganizerCore::checkGameRegistryKey()
     }
 
     const auto answer = QMessageBox::question(
-        parent,
-        tr("Registry key does not match"),
+        parent, tr("Registry key does not match"),
         tr("The game's installation path in the Wine registry does not match "
            "the managed game path.\n\n"
            "Registry Game Path:\n\t%1\n"
            "Managed Game Path:\n\t%2\n\n"
            "Change the path in the registry to match the managed game path?")
             .arg(displayRegPath, winePath),
-        QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel,
-        QMessageBox::Yes);
+        QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel, QMessageBox::Yes);
 
     if (answer == QMessageBox::Yes) {
       if (!prefix.writeHklmValue(subKey, valueName, winePath)) {
         log::error("Failed to update game registry key");
       }
       // Also update the Wow6432Node copy (32-bit registry view)
-      const QString wow64Key = "Software\\Wow6432Node\\" + subKey.mid(9);  // skip "Software\\"
+      const QString wow64Key =
+          "Software\\Wow6432Node\\" + subKey.mid(9);  // skip "Software\\"
       prefix.writeHklmValue(wow64Key, valueName, winePath);
     } else if (answer == QMessageBox::Cancel) {
       return false;  // cancel launch
@@ -3123,19 +3118,17 @@ bool OrganizerCore::checkGameRegistryKey()
 
 bool OrganizerCore::beforeRun(
     const QFileInfo& binary, const QDir& cwd, const QString& arguments,
-    const QStringList& argumentList,
-    const QString& profileName, const QString& customOverwrite,
-    const QList<MOBase::ExecutableForcedLoadSetting>& forcedLibraries,
-    bool useProton, const QString& launchToken, bool ownsVfs,
-    QString* usvfsRequestPath,
-    QString* saveBindMountSource, QString* saveBindMountTarget)
+    const QStringList& argumentList, const QString& profileName,
+    const QString& customOverwrite,
+    const QList<MOBase::ExecutableForcedLoadSetting>& forcedLibraries, bool useProton,
+    const QString& launchToken, bool ownsVfs, QString* usvfsRequestPath,
+    spawn::SaveDeploymentReceipt* saveDeployment)
 {
   saveCurrentProfile();
 
   std::shared_ptr<Profile> launchProfile = m_CurrentProfile;
   if (launchProfile == nullptr || launchProfile->name() != profileName) {
-    const QDir profileDir(
-        QDir(m_Settings.paths().profiles()).filePath(profileName));
+    const QDir profileDir(QDir(m_Settings.paths().profiles()).filePath(profileName));
     if (!profileDir.exists()) {
       log::error("beforeRun: launch profile '{}' does not exist",
                  profileName.toStdString());
@@ -3147,22 +3140,23 @@ bool OrganizerCore::beforeRun(
   const auto setIndexPublicationContext = [this, &profileName]() {
     const auto instance = InstanceManager::singleton().currentInstance();
     m_USVFS.setIndexPublicationContext(
-        {.output_base=basePath().toStdString(),
-         .producer=std::string("Fluorine ") + FLUORINE_VERSION_STRING,
-         .instance_name=
+        {.output_base = basePath().toStdString(),
+         .producer    = std::string("Fluorine ") + FLUORINE_VERSION_STRING,
+         .instance_name =
              instance != nullptr ? instance->displayName().toStdString() : "",
-         .profile_name=profileName.toStdString(),
+         .profile_name = profileName.toStdString(),
 #ifdef _WIN32
-         .consumer_path_style=VfsIndexConsumerPathStyle::NativeWindows
+         .consumer_path_style = VfsIndexConsumerPathStyle::NativeWindows
 #else
-         .consumer_path_style=VfsIndexConsumerPathStyle::Wine
+         .consumer_path_style = VfsIndexConsumerPathStyle::Wine
 #endif
         });
   };
   setIndexPublicationContext();
-  if (saveBindMountSource) saveBindMountSource->clear();
-  if (saveBindMountTarget) saveBindMountTarget->clear();
-  if (usvfsRequestPath) usvfsRequestPath->clear();
+  if (saveDeployment)
+    *saveDeployment = {};
+  if (usvfsRequestPath)
+    usvfsRequestPath->clear();
 
   // A completed generation can synchronously schedule another generation
   // before waking us. Do not prepare a launch against that intermediate
@@ -3183,8 +3177,7 @@ bool OrganizerCore::beforeRun(
   // this not-yet-started launch's VFS reservation while callbacks run. A
   // synchronous helper cleans up before returning; an asynchronous helper
   // keeps ownership and makes the outer re-reservation fail safely.
-  if (ownsVfs &&
-      !m_ProcessLaunchContext.handoffVfsReservation(launchToken)) {
+  if (ownsVfs && !m_ProcessLaunchContext.handoffVfsReservation(launchToken)) {
     log::error("beforeRun: launch '{}' could not hand off its VFS reservation",
                launchToken.toStdString());
     return false;
@@ -3195,8 +3188,7 @@ bool OrganizerCore::beforeRun(
     return false;
   }
 
-  if (ownsVfs &&
-      !m_ProcessLaunchContext.reclaimVfsReservation(launchToken)) {
+  if (ownsVfs && !m_ProcessLaunchContext.reclaimVfsReservation(launchToken)) {
     log::error("beforeRun: launch '{}' could not reclaim VFS ownership after "
                "an about-to-run callback started another application",
                launchToken.toStdString());
@@ -3219,7 +3211,8 @@ bool OrganizerCore::beforeRun(
     };
     if (!customOverwrite.isEmpty()) {
       candidates.append(
-          QDir(modsPath()).filePath(customOverwrite + "/Pandora_Engine/PreviousOutput.txt"));
+          QDir(modsPath())
+              .filePath(customOverwrite + "/Pandora_Engine/PreviousOutput.txt"));
     }
 
     log::debug("Pandora fix: checking {} candidate(s) for PreviousOutput.txt",
@@ -3284,7 +3277,8 @@ bool OrganizerCore::beforeRun(
   // Recover any prior in-game saves before this launch builds its VFS catalog.
   migrateGameLocalSavesFromOverwrite(managedGame(), overwritePath());
 
-  // Diagnostic toggle from Settings > Proton/Wine tab (see settingsdialogproton.cpp).
+  // Diagnostic toggle from Settings > Proton/Wine tab (see
+  // settingsdialogproton.cpp).
   m_USVFS.setDisableVfsCache(
       QSettings().value("fluorine/disable_vfs_cache", false).toBool());
 
@@ -3297,8 +3291,7 @@ bool OrganizerCore::beforeRun(
         managedGame() == nullptr || managedGame()->usesVFS();
     const QSettings instanceIni(m_Settings.filename(), QSettings::IniFormat);
     const VfsBackend configuredBackend = parseVfsBackend(
-        instanceIni.value(kVfsBackendSetting, QStringLiteral("fuse"))
-            .toString());
+        instanceIni.value(kVfsBackendSetting, QStringLiteral("fuse")).toString());
     const bool launchWithUsvfs =
         useUsvfsForLaunch(configuredBackend, useProton, gameUsesOrganizerVfs);
 
@@ -3313,8 +3306,8 @@ bool OrganizerCore::beforeRun(
       // The Data tab may have mounted a preview FUSE tree earlier. USVFS maps
       // the original physical destinations, so tear the preview down first.
       m_USVFS.unmount();
-      const auto usvfsUnmountedAt = std::chrono::steady_clock::now();
-      const MappingType mappings = fileMapping(profileName, customOverwrite);
+      const auto usvfsUnmountedAt     = std::chrono::steady_clock::now();
+      const MappingType mappings      = fileMapping(profileName, customOverwrite);
       const auto usvfsMappingsBuiltAt = std::chrono::steady_clock::now();
       m_USVFS.prepareRootFilesForUsvfs(mappings);
       const auto usvfsRootPreparedAt = std::chrono::steady_clock::now();
@@ -3329,11 +3322,10 @@ bool OrganizerCore::beforeRun(
               mappings, snapshotDataDirectory, m_Settings.skipFileSuffixes(),
               m_Settings.skipDirectories());
           useResolvedSnapshot = true;
-          log::info(
-              "Prepared resolved USVFS snapshot directly: entries={} "
-              "directories={} files={}",
-              resolvedSnapshot.mappings.size(), resolvedSnapshot.directoryCount,
-              resolvedSnapshot.fileCount);
+          log::info("Prepared resolved USVFS snapshot directly: entries={} "
+                    "directories={} files={}",
+                    resolvedSnapshot.mappings.size(), resolvedSnapshot.directoryCount,
+                    resolvedSnapshot.fileCount);
         } catch (const std::exception& error) {
           log::warn("Unable to prepare resolved USVFS snapshot; using ordinary "
                     "recursive mappings: {}",
@@ -3347,26 +3339,25 @@ bool OrganizerCore::beforeRun(
           QDir(qApp->property("dataPath").toString()).filePath("logs");
       QDir().mkpath(logsDirectory);
       UsvfsRequestOptions requestOptions{
-          .binary = binary,
-          .workingDirectory = cwd,
-          .arguments = argumentList,
-          .mappings = mappings,
+          .binary              = binary,
+          .workingDirectory    = cwd,
+          .arguments           = argumentList,
+          .mappings            = mappings,
           .useResolvedSnapshot = useResolvedSnapshot,
-          .dataDirectory = snapshotDataDirectory,
-          .resolvedMappings = std::move(resolvedSnapshot.mappings),
-          .forcedLibraries = forcedLibraries,
+          .dataDirectory       = snapshotDataDirectory,
+          .resolvedMappings    = std::move(resolvedSnapshot.mappings),
+          .forcedLibraries     = forcedLibraries,
           .executableBlacklist =
               m_Settings.executablesBlacklist().split(';', Qt::SkipEmptyParts),
           .skipFileSuffixes = m_Settings.skipFileSuffixes(),
-          .skipDirectories = m_Settings.skipDirectories(),
-          .logPath =
-              QDir(logsDirectory)
-                  .filePath(QStringLiteral("usvfs-%1.log")
-                                .arg(QDateTime::currentDateTimeUtc().toString(
-                                    QStringLiteral("yyyyMMdd-HHmmss-zzz")))),
+          .skipDirectories  = m_Settings.skipDirectories(),
+          .logPath          = QDir(logsDirectory)
+                         .filePath(QStringLiteral("usvfs-%1.log")
+                                       .arg(QDateTime::currentDateTimeUtc().toString(
+                                           QStringLiteral("yyyyMMdd-HHmmss-zzz")))),
       };
-      const auto mappingPreparedAt = std::chrono::steady_clock::now();
-      const auto requestWriteStart = mappingPreparedAt;
+      const auto mappingPreparedAt     = std::chrono::steady_clock::now();
+      const auto requestWriteStart     = mappingPreparedAt;
       const UsvfsRequestResult request = writeUsvfsRequest(requestOptions);
       if (!request) {
         throw std::runtime_error(request.error.toStdString());
@@ -3447,22 +3438,102 @@ bool OrganizerCore::beforeRun(
     const QString prefixPathStr = resolveWinePrefixPath(m_Settings, managedGame());
 
     if (!prefixPathStr.isEmpty()) {
-      WinePrefix const prefix(prefixPathStr);
+      const QString preparedPrefixPath = QFileInfo(prefixPathStr).canonicalFilePath();
+      if (preparedPrefixPath.isEmpty()) {
+        log::error("Refusing Wine launch because prefix '{}' has no stable "
+                   "physical identity",
+                   prefixPathStr);
+        return false;
+      }
+      WinePrefix const prefix(preparedPrefixPath);
       if (prefix.isValid()) {
-        const QString dataDirName  = resolveWineDataDirName(managedGame());
-        const QString appDataLocal = prefix.appdataLocal();
-        const QString pluginsTargetDir =
-            QDir(appDataLocal).filePath(dataDirName);
-        const QString documentsDir =
-            resolvePrefixGameDocumentsDir(prefix, dataDirName);
+        const QString dataDirName      = resolveWineDataDirName(managedGame());
+        const QString appDataLocal     = prefix.appdataLocal();
+        const QString pluginsTargetDir = QDir(appDataLocal).filePath(dataDirName);
+        const QString documentsDir = resolvePrefixGameDocumentsDir(prefix, dataDirName);
         log::info("Wine prefix paths: AppData/Local plugins dir='{}', "
                   "Documents/My Games INI dir='{}'",
                   pluginsTargetDir, documentsDir);
-        const auto localSavesFeature = gameFeatures().gameFeature<LocalSavegames>();
-        const QString absoluteSaveDir =
-            resolveAbsoluteSaveDir(prefix, managedGame(),
-                                   localSavesFeature.get(), launchProfile);
+        const auto localSavesFeature  = gameFeatures().gameFeature<LocalSavegames>();
+        const QString absoluteSaveDir = resolveAbsoluteSaveDir(
+            prefix, managedGame(), localSavesFeature.get(), launchProfile);
         log::info("Wine prefix save target: '{}'", absoluteSaveDir);
+        const QStringList managedIniFiles = managedGame()->iniFiles();
+        const QString prefixIni =
+            managedIniFiles.isEmpty()
+                ? QString{}
+                : QDir(resolvePrefixGameDocumentsDir(prefix, dataDirName))
+                      .filePath(QFileInfo(managedIniFiles.first()).fileName());
+
+        // Serialize every launch that can touch this physical Wine save path,
+        // including launches with local saves disabled. A persisted owner or
+        // routing receipt from another generation is never guessed away: it
+        // may belong to a still-running child after the manager crashed.
+        if (!absoluteSaveDir.isEmpty()) {
+          if (saveDeployment == nullptr || launchToken.isEmpty()) {
+            log::error("Refusing Wine launch without save-path ownership");
+            return false;
+          }
+          const QString leasePath =
+              WineSaveDeployment::leasePathFor(preparedPrefixPath, absoluteSaveDir);
+          auto saveLease = std::make_shared<QLockFile>(leasePath);
+          if (!saveLease->tryLock(0) &&
+              (!saveLease->removeStaleLockFile() || !saveLease->tryLock(0))) {
+            log::error("Refusing launch because Wine save path '{}' is owned by "
+                       "another Fluorine process",
+                       absoluteSaveDir);
+            return false;
+          }
+          m_SaveDeploymentLocks.insert(launchToken, saveLease);
+
+          WineSaveDeployment::PendingDeployment pending;
+          const auto pendingResult = WineSaveDeployment::pendingDeployment(
+              prefix.driveC(), absoluteSaveDir, pending);
+          if (!pendingResult) {
+            log::error("Refusing launch because Wine save recovery state is "
+                       "invalid: {}",
+                       pendingResult.error);
+            return false;
+          }
+          if (pending.present) {
+            log::error("Refusing launch because Wine save state is still owned "
+                       "by launch '{}' for profile '{}'; preserve it for "
+                       "explicit recovery",
+                       pending.ownerId, pending.profileRoot);
+            return false;
+          }
+
+          if (!prefixIni.isEmpty()) {
+            QString routingOwner;
+            bool routingPending = false;
+            const auto routingResult =
+                WineSaveRouting::pendingOwner(prefixIni, routingOwner, routingPending);
+            if (!routingResult || routingPending) {
+              log::error("Refusing launch because save-routing recovery for "
+                         "'{}' is {}{}",
+                         prefixIni,
+                         routingResult ? QStringLiteral("still owned by launch '")
+                                       : QStringLiteral("invalid: "),
+                         routingResult ? routingOwner + QStringLiteral("'")
+                                       : routingResult.error);
+              return false;
+            }
+          }
+
+          const auto sessionLease = WineSaveDeployment::beginSessionLease(
+              preparedPrefixPath, absoluteSaveDir, launchToken);
+          if (!sessionLease) {
+            log::error("Refusing launch because Wine save-session ownership "
+                       "could not be established: {}",
+                       sessionLease.error);
+            return false;
+          }
+          saveDeployment->mode                  = spawn::SaveDeploymentMode::LeaseOnly;
+          saveDeployment->prefixPath            = preparedPrefixPath;
+          saveDeployment->livePath              = absoluteSaveDir;
+          saveDeployment->ownerId               = launchToken;
+          saveDeployment->sessionLeasePublished = true;
+        }
 
         // If the prefix's plugin-list file is newer than the profile's
         // (e.g. LOOT ran outside MO2 and edited it), sync back first so
@@ -3481,20 +3552,16 @@ bool OrganizerCore::beforeRun(
             break;
           }
           if (preMech != WinePrefix::PluginListMechanism::None) {
-            const QString profilePluginsPath =
-                launchProfile->getPluginsFileName();
-            const QDateTime prefixMTime =
-                prefix.prefixPluginsMTime(dataDirName);
-            const QDateTime profileMTime =
-                QFileInfo(profilePluginsPath).lastModified();
+            const QString profilePluginsPath = launchProfile->getPluginsFileName();
+            const QDateTime prefixMTime      = prefix.prefixPluginsMTime(dataDirName);
+            const QDateTime profileMTime = QFileInfo(profilePluginsPath).lastModified();
             if (prefixMTime.isValid() &&
                 (!profileMTime.isValid() || prefixMTime > profileMTime)) {
               log::info("Prefix plugins.txt newer than profile "
                         "(prefix={}, profile={}), syncing back before deploy",
                         prefixMTime.toString(Qt::ISODate),
                         profileMTime.toString(Qt::ISODate));
-              if (prefix.syncPluginsBack(profilePluginsPath, dataDirName,
-                                         preMech)) {
+              if (prefix.syncPluginsBack(profilePluginsPath, dataDirName, preMech)) {
                 refreshESPList(true);
               } else {
                 log::warn("Pre-deploy sync-back failed; proceeding with "
@@ -3552,18 +3619,35 @@ bool OrganizerCore::beforeRun(
         }
 
         if (launchProfile->localSettingsEnabled()) {
+          if (saveDeployment == nullptr || saveDeployment->prefixPath.isEmpty() ||
+              saveDeployment->ownerId.isEmpty()) {
+            log::error("Refusing local-settings deployment without Wine launch "
+                       "ownership");
+            return false;
+          }
           const QString targetIniBase =
               resolvePrefixGameDocumentsDir(prefix, dataDirName);
           int deployedIniCount = 0;
-          for (const QString& iniFile : managedGame()->iniFiles()) {
-            const QString sourceIni =
-                launchProfile->absoluteIniFilePath(iniFile);
+          for (const QString& iniFile : managedIniFiles) {
+            const QString sourceIni = launchProfile->absoluteIniFilePath(iniFile);
             const QString targetIni =
                 QDir(targetIniBase).filePath(QFileInfo(iniFile).fileName());
             log::info("INI deploy target: '{}' -> '{}' (exists={})", sourceIni,
                       targetIni, QFileInfo::exists(sourceIni));
-            if (QFileInfo::exists(sourceIni) &&
-                prefix.deployProfileIni(sourceIni, targetIni)) {
+            if (QFileInfo::exists(sourceIni)) {
+              WineProfileIniSync::Deployment iniDeployment;
+              if (!prefix.deployProfileIni(sourceIni, targetIni,
+                                           saveDeployment->ownerId, iniDeployment)) {
+                if (iniDeployment.needsCleanup()) {
+                  saveDeployment->profileIniDeployments.append(
+                      std::move(iniDeployment));
+                }
+                log::error("Refusing launch because profile INI '{}' could not "
+                           "be deployed safely to '{}'",
+                           sourceIni, targetIni);
+                return false;
+              }
+              saveDeployment->profileIniDeployments.append(std::move(iniDeployment));
               ++deployedIniCount;
               log::debug("Deployed profile INI '{}' -> '{}'", sourceIni, targetIni);
             }
@@ -3579,72 +3663,95 @@ bool OrganizerCore::beforeRun(
         }
 
         if (launchProfile->localSavesEnabled()) {
+          if (saveDeployment == nullptr || launchToken.isEmpty() ||
+              absoluteSaveDir.isEmpty()) {
+            log::error("Refusing local-save launch without a deployment receipt");
+            return false;
+          }
           const QString profileSavesDir =
               QDir(launchProfile->absolutePath()).filePath("saves");
 
           const bool useBindMount =
-              saveBindMountSource && saveBindMountTarget &&
-              ProtonLauncher::unprivilegedBindMountSupported();
+              useProton && ProtonLauncher::unprivilegedBindMountSupported();
+
+          saveDeployment->profileRoot = profileSavesDir;
 
           if (useBindMount) {
-            // Clean up any stale symlink from previous symlink-based runs:
-            // mount --bind won't traverse a symlink as the target.
-            if (QFileInfo(absoluteSaveDir).isSymLink()) {
-              QFile::remove(absoluteSaveDir);
+            bool cleanupRequired = false;
+            if (!prefix.prepareProfileSavesBindTarget(profileSavesDir, absoluteSaveDir,
+                                                      launchToken, &cleanupRequired)) {
+              if (cleanupRequired) {
+                saveDeployment->mode = spawn::SaveDeploymentMode::BindMount;
+                saveDeployment->deploymentCleanupPending = true;
+              }
+              log::error("Refusing launch because profile saves could not be "
+                         "prepared safely for the bind mount");
+              return false;
             }
-            const QFileInfo leafInfo(absoluteSaveDir);
-            const QString lowerSaveDir =
-                QDir(leafInfo.dir().absolutePath())
-                    .filePath(leafInfo.fileName().toLower());
-            if (lowerSaveDir != absoluteSaveDir &&
-                QFileInfo(lowerSaveDir).isSymLink()) {
-              QFile::remove(lowerSaveDir);
-            }
+            saveDeployment->mode             = spawn::SaveDeploymentMode::BindMount;
+            saveDeployment->topologyRestored = true;
 
-            // Both endpoints must exist before the kernel can bind them.
-            QDir().mkpath(profileSavesDir);
-            QDir().mkpath(absoluteSaveDir);
-
-            *saveBindMountSource = profileSavesDir;
-            *saveBindMountTarget = absoluteSaveDir;
             log::info("Save bind mount: '{}' -> '{}'", profileSavesDir,
                       absoluteSaveDir);
           } else {
             log::info("Save deploy target: '{}' -> '{}'", profileSavesDir,
                       absoluteSaveDir);
-            if (!prefix.deployProfileSaves(profileSavesDir, absoluteSaveDir,
-                                            true)) {
-              log::warn("Failed to deploy profile saves from '{}' to "
-                        "prefix '{}'",
-                        profileSavesDir, prefixPathStr);
+            bool cleanupRequired = false;
+            if (!prefix.deployProfileSaves(profileSavesDir, absoluteSaveDir, true,
+                                           launchToken, &cleanupRequired)) {
+              if (cleanupRequired) {
+                saveDeployment->mode = spawn::SaveDeploymentMode::ManagedLinks;
+                saveDeployment->deploymentCleanupPending = true;
+              }
+              log::error("Refusing launch because profile saves from '{}' "
+                         "could not be deployed safely into prefix '{}'",
+                         profileSavesDir, prefixPathStr);
+              return false;
             }
+            saveDeployment->mode             = spawn::SaveDeploymentMode::ManagedLinks;
+            saveDeployment->topologyRestored = false;
           }
 
           // Ensure the prefix INI points to __MO_Saves so the game reads
           // profile-specific saves, even when localSettingsEnabled() is off.
-          const QStringList iniFiles = managedGame()->iniFiles();
-          if (!iniFiles.isEmpty()) {
-            const QString prefixIni =
-                QDir(resolvePrefixGameDocumentsDir(prefix, dataDirName))
-                    .filePath(QFileInfo(iniFiles.first()).fileName());
-            MOBase::WriteRegistryValue("General", "sLocalSavePath",
-                                       "__MO_Saves\\", prefixIni);
-            MOBase::WriteRegistryValue("General", "bUseMyGamesDirectory",
-                                       "1", prefixIni);
+          if (!prefixIni.isEmpty()) {
+            saveDeployment->prefixIni = prefixIni;
+            const auto routing = WineSaveRouting::activate(prefixIni, launchToken);
+            saveDeployment->iniPatched = routing.recoveryRequired;
+            if (!routing) {
+              log::error("Refusing launch because '{}' could not be routed "
+                         "transactionally to profile saves: {}",
+                         prefixIni, routing.error);
+              return false;
+            }
             log::debug("Patched prefix INI '{}': sLocalSavePath=__MO_Saves\\",
                        prefixIni);
           }
         } else {
-          // Local saves disabled — restore default sLocalSavePath in prefix INI
-          const QStringList iniFiles = managedGame()->iniFiles();
-          if (!iniFiles.isEmpty()) {
-            const QString prefixIni =
-                QDir(resolvePrefixGameDocumentsDir(prefix, dataDirName))
-                    .filePath(QFileInfo(iniFiles.first()).fileName());
-            MOBase::WriteRegistryValue("General", "sLocalSavePath",
-                                       "Saves\\", prefixIni);
-            log::debug("Restored prefix INI '{}': sLocalSavePath=Saves\\",
-                       prefixIni);
+          // Preserve the game's configured save route when profile-local
+          // saves are disabled. An unowned __MO_Saves value can be residue
+          // from an older interrupted deployment; never guess a replacement
+          // for it or launch against the stale profile path.
+          if (!prefixIni.isEmpty() && QFileInfo::exists(prefixIni)) {
+            WineSaveRouting::Value localPath;
+            const auto route = WineSaveRouting::readValue(
+                prefixIni, QByteArrayLiteral("General"),
+                QByteArrayLiteral("sLocalSavePath"), localPath);
+            if (!route) {
+              log::error("Refusing launch because save routing in '{}' could "
+                         "not be validated: {}",
+                         prefixIni, route.error);
+              return false;
+            }
+            if (localPath.present &&
+                localPath.bytes.trimmed().compare(QByteArrayLiteral("__MO_Saves\\"),
+                                                  Qt::CaseInsensitive) == 0) {
+              log::error("Refusing launch because '{}' still selects the "
+                         "unowned __MO_Saves route; recover the prior launch "
+                         "before disabling profile-local saves",
+                         prefixIni);
+              return false;
+            }
           }
         }
       } else {
@@ -3659,8 +3766,7 @@ bool OrganizerCore::beforeRun(
 }
 
 bool OrganizerCore::reserveProcessLaunch(const QString& launchToken,
-                                         const QString& profileName,
-                                         bool ownsVfs)
+                                         const QString& profileName, bool ownsVfs)
 {
   return m_ProcessLaunchContext.reserve(launchToken, profileName, ownsVfs);
 }
@@ -3675,14 +3781,60 @@ void OrganizerCore::abandonProcessLaunch(const QString& launchToken)
   m_ProcessLaunchContext.abandon(launchToken);
 }
 
-void OrganizerCore::abortProcessLaunchPreparation(const QString& launchToken,
-                                                  const QString& profileName,
-                                                  bool ownsVfs,
-                                                  QString usvfsRequestPath) noexcept
+namespace
+{
+bool restoreSaveRouting(spawn::SaveDeploymentReceipt& receipt)
+{
+  if (!receipt.iniPatched)
+    return true;
+  if (receipt.prefixIni.isEmpty())
+    return false;
+  const auto result = WineSaveRouting::restore(receipt.prefixIni, receipt.ownerId);
+  if (!result) {
+    log::error("Could not restore save routing in '{}': {}", receipt.prefixIni,
+               result.error);
+    return false;
+  }
+  receipt.iniPatched = false;
+  return true;
+}
+
+bool finishProfileIniDeployment(spawn::SaveDeploymentReceipt& receipt,
+                                bool publishChanges)
+{
+  if (receipt.profileIniDeployments.isEmpty())
+    return true;
+  if (receipt.prefixPath.isEmpty() || receipt.ownerId.isEmpty())
+    return false;
+  WinePrefix prefix(receipt.prefixPath);
+  if (!prefix.syncProfileInisBack(receipt.profileIniDeployments, receipt.ownerId,
+                                  publishChanges, receipt.profileIniCleanupPhase)) {
+    return false;
+  }
+  receipt.profileIniDeployments.clear();
+  receipt.profileIniCleanupPhase = WineProfileIniSync::CleanupPhase::Prepared;
+  return true;
+}
+}  // namespace
+
+struct OrganizerCore::AbortedLaunchWork
+{
+  QString launchToken;
+  QString profileName;
+  bool ownsVfs{false};
+  QString usvfsRequestPath;
+  spawn::SaveDeploymentReceipt saveDeployment;
+};
+
+void OrganizerCore::abortProcessLaunchPreparation(
+    const QString& launchToken, const QString& profileName, bool ownsVfs,
+    QString usvfsRequestPath, spawn::SaveDeploymentReceipt saveDeployment) noexcept
 {
   try {
-    continueAbortedLaunchTeardown(launchToken, profileName, ownsVfs,
-                                  usvfsRequestPath,
+    auto work = std::make_shared<AbortedLaunchWork>(
+        AbortedLaunchWork{launchToken, profileName, ownsVfs,
+                          std::move(usvfsRequestPath), std::move(saveDeployment)});
+    continueAbortedLaunchTeardown(work,
                                   /*retry=*/false, /*retryCount=*/0);
   } catch (const std::exception& e) {
     try {
@@ -3702,30 +3854,102 @@ void OrganizerCore::abortProcessLaunchPreparation(const QString& launchToken,
 }
 
 void OrganizerCore::continueAbortedLaunchTeardown(
-    const QString& launchToken, const QString& profileName, bool ownsVfs,
-    const QString& usvfsRequestPath, bool retry, unsigned int retryCount)
+    const std::shared_ptr<AbortedLaunchWork>& work, bool retry, unsigned int retryCount)
 {
   const auto attempt = launch_cleanup::attemptMandatoryCleanup(
-      m_ProcessLaunchContext, launchToken, profileName, ownsVfs,
-      retry ? launch_cleanup::AttemptKind::Retry
-            : launch_cleanup::AttemptKind::Initial,
-      [this, &usvfsRequestPath](bool cleanupVfs) {
-        if (!removePreparedLaunchArtifact(usvfsRequestPath)) {
+      m_ProcessLaunchContext, work->launchToken, work->profileName, work->ownsVfs,
+      retry ? launch_cleanup::AttemptKind::Retry : launch_cleanup::AttemptKind::Initial,
+      [this, work](bool cleanupVfs) {
+        if (!removePreparedLaunchArtifact(work->usvfsRequestPath)) {
           throw std::runtime_error(
               QStringLiteral("unable to remove aborted USVFS request '%1'")
-                  .arg(usvfsRequestPath)
+                  .arg(work->usvfsRequestPath)
                   .toStdString());
         }
         if (cleanupVfs) {
           m_USVFS.unmount();
         }
+
+        if (work->saveDeployment.mode == spawn::SaveDeploymentMode::ManagedLinks) {
+          if (!work->saveDeployment.topologyRestored ||
+              work->saveDeployment.deploymentCleanupPending) {
+            WinePrefix prefix(work->saveDeployment.prefixPath);
+            bool topologyComplete = false;
+            bool cleanupRequired  = false;
+            const bool complete   = prefix.rollbackProfileSaves(
+                work->saveDeployment.profileRoot, work->saveDeployment.livePath,
+                work->saveDeployment.ownerId, &topologyComplete, &cleanupRequired);
+            if (topologyComplete) {
+              work->saveDeployment.topologyRestored = true;
+            }
+            work->saveDeployment.deploymentCleanupPending = cleanupRequired;
+            if (topologyComplete && !restoreSaveRouting(work->saveDeployment)) {
+              throw std::runtime_error(
+                  "unable to restore save routing after aborted launch");
+            }
+            if (!complete) {
+              throw std::runtime_error("unable to finish save deployment rollback");
+            }
+          }
+          if (!restoreSaveRouting(work->saveDeployment)) {
+            throw std::runtime_error(
+                "unable to restore save routing after aborted launch");
+          }
+        } else if (work->saveDeployment.mode == spawn::SaveDeploymentMode::BindMount) {
+          if (!work->saveDeployment.topologyRestored ||
+              work->saveDeployment.deploymentCleanupPending) {
+            WinePrefix prefix(work->saveDeployment.prefixPath);
+            bool topologyComplete = false;
+            bool cleanupRequired  = false;
+            const bool complete   = prefix.rollbackProfileSaves(
+                work->saveDeployment.profileRoot, work->saveDeployment.livePath,
+                work->saveDeployment.ownerId, &topologyComplete, &cleanupRequired);
+            if (topologyComplete) {
+              work->saveDeployment.topologyRestored = true;
+            }
+            work->saveDeployment.deploymentCleanupPending = cleanupRequired;
+            if (topologyComplete && !restoreSaveRouting(work->saveDeployment)) {
+              throw std::runtime_error(
+                  "unable to restore save routing after aborted bind launch");
+            }
+            if (!complete) {
+              throw std::runtime_error(
+                  "unable to finish aborted bind preparation cleanup");
+            }
+          }
+          if (!restoreSaveRouting(work->saveDeployment)) {
+            throw std::runtime_error(
+                "unable to restore save routing after aborted bind launch");
+          }
+        }
+        if (!finishProfileIniDeployment(work->saveDeployment,
+                                        /*publishChanges=*/false)) {
+          throw std::runtime_error(
+              "unable to restore profile INIs after aborted launch");
+        }
+        if (work->saveDeployment.sessionLeasePublished) {
+          const auto retired = WineSaveDeployment::endSessionLease(
+              work->saveDeployment.prefixPath, work->saveDeployment.livePath,
+              work->saveDeployment.ownerId);
+          if (!retired) {
+            throw std::runtime_error(
+                QStringLiteral("unable to retire save-session ownership: %1")
+                    .arg(retired.error)
+                    .toStdString());
+          }
+          work->saveDeployment.sessionLeasePublished = false;
+        }
+        work->saveDeployment = {};
+        m_SaveDeploymentLocks.remove(work->launchToken);
       },
-      /*additionalCleanupRequired=*/!usvfsRequestPath.isEmpty());
+      /*additionalCleanupRequired=*/
+      !work->usvfsRequestPath.isEmpty() || work->saveDeployment.needsRollback() ||
+          m_SaveDeploymentLocks.contains(work->launchToken));
 
   if (attempt.state == launch_cleanup::AttemptState::Rejected) {
     log::error("launch preparation rollback rejected for token '{}' and profile "
                "'{}'; no foreign VFS cleanup was attempted",
-               launchToken.toStdString(), profileName.toStdString());
+               work->launchToken.toStdString(), work->profileName.toStdString());
     return;
   }
 
@@ -3733,45 +3957,41 @@ void OrganizerCore::continueAbortedLaunchTeardown(
     const int delay = cleanupRetryDelayMs(retryCount);
     log::error("launch preparation rollback for '{}' failed: {}; retaining "
                "ownership and retrying in {} ms",
-               launchToken.toStdString(),
+               work->launchToken.toStdString(),
                cleanupFailureMessage(attempt.failure).toStdString(), delay);
     try {
-      QTimer::singleShot(
-          delay, this,
-          [this, launchToken, profileName, ownsVfs, usvfsRequestPath,
-           retryCount]() {
-            try {
-              continueAbortedLaunchTeardown(launchToken, profileName, ownsVfs,
-                                            usvfsRequestPath,
-                                            /*retry=*/true, retryCount + 1);
-            } catch (...) {
-              logQueuedCleanupFailure("launch preparation cleanup retry",
-                                      launchToken, std::current_exception());
-            }
-          });
+      QTimer::singleShot(delay, this, [this, work, retryCount]() {
+        try {
+          continueAbortedLaunchTeardown(work,
+                                        /*retry=*/true, retryCount + 1);
+        } catch (...) {
+          logQueuedCleanupFailure("launch preparation cleanup retry", work->launchToken,
+                                  std::current_exception());
+        }
+      });
     } catch (const std::exception& e) {
       log::error("unable to schedule launch rollback retry for '{}': {}; launch "
                  "ownership remains retained",
-                 launchToken.toStdString(), e.what());
+                 work->launchToken.toStdString(), e.what());
     } catch (...) {
       log::error("unable to schedule launch rollback retry for '{}'; launch "
                  "ownership remains retained",
-                 launchToken.toStdString());
+                 work->launchToken.toStdString());
     }
     return;
   }
 
-  m_ProcessLaunchContext.finishCompletion(launchToken);
+  m_ProcessLaunchContext.finishCompletion(work->launchToken);
   if (!m_PersistenceSuppressed) {
     try {
       movePGPatcherLogsToLogsFolder();
     } catch (...) {
-      logQueuedCleanupFailure("launch preparation post-cleanup", launchToken,
+      logQueuedCleanupFailure("launch preparation post-cleanup", work->launchToken,
                               std::current_exception());
     }
   }
   log::debug("launch preparation rollback completed for '{}'",
-             launchToken.toStdString());
+             work->launchToken.toStdString());
 }
 
 struct OrganizerCore::AfterRunWork
@@ -3782,6 +4002,8 @@ struct OrganizerCore::AfterRunWork
   QString launchToken;
   QString profileName;
   bool triggerRefresh{false};
+  QString preparedWinePrefix;
+  spawn::SaveDeploymentReceipt saveDeployment;
   std::function<void()> refreshComplete;
   std::function<void(bool)> cleanupComplete;
 };
@@ -3789,30 +4011,90 @@ struct OrganizerCore::AfterRunWork
 OrganizerCore::AfterRunResult OrganizerCore::afterRun(
     const QFileInfo& binary, DWORD exitCode, bool unmountVfs,
     const QString& launchToken, const QString& profileName, bool triggerRefresh,
-    std::function<void()> refreshComplete,
+    spawn::SaveDeploymentReceipt saveDeployment, std::function<void()> refreshComplete,
     std::function<void(bool refreshScheduled)> cleanupComplete)
 {
-  auto work = std::make_shared<AfterRunWork>(AfterRunWork{
-      binary, exitCode, unmountVfs, launchToken, profileName, triggerRefresh,
-      std::move(refreshComplete), std::move(cleanupComplete)});
+  const QString preparedWinePrefix = saveDeployment.prefixPath;
+  auto work                        = std::make_shared<AfterRunWork>(
+      AfterRunWork{binary, exitCode, unmountVfs, launchToken, profileName,
+                   triggerRefresh, preparedWinePrefix, std::move(saveDeployment),
+                   std::move(refreshComplete), std::move(cleanupComplete)});
   return continueAfterRun(work, /*retry=*/false, /*retryCount=*/0);
 }
 
-OrganizerCore::AfterRunResult OrganizerCore::continueAfterRun(
-    const std::shared_ptr<AfterRunWork>& work, bool retry,
-    unsigned int retryCount)
+OrganizerCore::AfterRunResult
+OrganizerCore::continueAfterRun(const std::shared_ptr<AfterRunWork>& work, bool retry,
+                                unsigned int retryCount)
 {
   const bool trackedLaunch = !work->launchToken.isEmpty();
-  launch_cleanup::CleanupStage cleanupStage(launch_cleanup::AttemptResult{
-      launch_cleanup::AttemptState::Complete, {}});
+  launch_cleanup::CleanupStage cleanupStage(
+      launch_cleanup::AttemptResult{launch_cleanup::AttemptState::Complete, {}});
   bool untrackedVfsCleanupPerformed = false;
   if (trackedLaunch) {
-    cleanupStage = launch_cleanup::beginMandatoryCleanup(
-        m_ProcessLaunchContext, work->launchToken, work->profileName,
-        work->unmountVfs,
+    cleanupStage = launch_cleanup::CleanupStage(launch_cleanup::attemptMandatoryCleanup(
+        m_ProcessLaunchContext, work->launchToken, work->profileName, work->unmountVfs,
         retry ? launch_cleanup::AttemptKind::Retry
               : launch_cleanup::AttemptKind::Initial,
-        [this]() { m_USVFS.unmount(); });
+        [this, work](bool cleanupVfs) {
+          if (cleanupVfs)
+            m_USVFS.unmount();
+
+          if (work->saveDeployment.mode == spawn::SaveDeploymentMode::ManagedLinks) {
+            if (!work->saveDeployment.topologyRestored ||
+                work->saveDeployment.deploymentCleanupPending) {
+              WinePrefix prefix(work->saveDeployment.prefixPath);
+              bool topologyComplete = false;
+              bool cleanupRequired  = false;
+              const bool complete   = prefix.syncSavesBack(
+                  work->saveDeployment.profileRoot, work->saveDeployment.livePath,
+                  work->saveDeployment.ownerId, &topologyComplete, &cleanupRequired);
+              if (topologyComplete) {
+                work->saveDeployment.topologyRestored = true;
+              }
+              work->saveDeployment.deploymentCleanupPending = cleanupRequired;
+              if (topologyComplete && !restoreSaveRouting(work->saveDeployment)) {
+                throw std::runtime_error(
+                    "unable to restore save routing after managed launch");
+              }
+              if (!complete) {
+                throw std::runtime_error(
+                    "unable to finish managed save synchronization");
+              }
+            }
+            if (!restoreSaveRouting(work->saveDeployment)) {
+              throw std::runtime_error(
+                  "unable to restore save routing after managed launch");
+            }
+          } else if (work->saveDeployment.mode ==
+                     spawn::SaveDeploymentMode::BindMount) {
+            if (!restoreSaveRouting(work->saveDeployment)) {
+              throw std::runtime_error(
+                  "unable to restore save routing after bind launch");
+            }
+          }
+          if (!finishProfileIniDeployment(work->saveDeployment,
+                                          /*publishChanges=*/true)) {
+            throw std::runtime_error(
+                "unable to publish and restore profile INIs after launch");
+          }
+          if (work->saveDeployment.sessionLeasePublished) {
+            const auto retired = WineSaveDeployment::endSessionLease(
+                work->saveDeployment.prefixPath, work->saveDeployment.livePath,
+                work->saveDeployment.ownerId);
+            if (!retired) {
+              throw std::runtime_error(
+                  QStringLiteral("unable to retire save-session ownership: %1")
+                      .arg(retired.error)
+                      .toStdString());
+            }
+            work->saveDeployment.sessionLeasePublished = false;
+          }
+          work->saveDeployment = {};
+          m_SaveDeploymentLocks.remove(work->launchToken);
+        },
+        /*additionalCleanupRequired=*/
+        work->saveDeployment.needsRollback() ||
+            m_SaveDeploymentLocks.contains(work->launchToken)));
   } else if (work->unmountVfs) {
     // Compatibility callers with no launch token historically owned no
     // tracker. Keep their behavior, but never let an unmount exception escape
@@ -3822,8 +4104,7 @@ OrganizerCore::AfterRunResult OrganizerCore::continueAfterRun(
       untrackedVfsCleanupPerformed = true;
     } catch (...) {
       cleanupStage = launch_cleanup::CleanupStage(
-          {launch_cleanup::AttemptState::RetryRequired,
-           std::current_exception()});
+          {launch_cleanup::AttemptState::RetryRequired, std::current_exception()});
     }
   }
 
@@ -3868,8 +4149,7 @@ OrganizerCore::AfterRunResult OrganizerCore::continueAfterRun(
   // registered forever.
   bool refreshScheduled = false;
   const bool vfsCleanupPerformed =
-      trackedLaunch ? attempt.vfsCleanupPerformed
-                    : untrackedVfsCleanupPerformed;
+      trackedLaunch ? attempt.vfsCleanupPerformed : untrackedVfsCleanupPerformed;
   std::exception_ptr postRunFailure;
   std::exception_ptr refreshFailure;
   std::exception_ptr finishedRunFailure;
@@ -3888,44 +4168,39 @@ OrganizerCore::AfterRunResult OrganizerCore::continueAfterRun(
               if (!work->profileName.isEmpty() &&
                   (launchProfile == nullptr ||
                    launchProfile->name() != work->profileName)) {
-                const QDir profileDir(QDir(m_Settings.paths().profiles())
-                                          .filePath(work->profileName));
+                const QDir profileDir(
+                    QDir(m_Settings.paths().profiles()).filePath(work->profileName));
                 if (profileDir.exists()) {
                   try {
-                    launchProfile = std::make_shared<Profile>(
-                        profileDir, managedGame(), gameFeatures());
-                  } catch (const std::exception &e) {
-                    log::error(
-                        "afterRun: failed to load launch profile '{}': {}; "
-                        "continuing launch-owned teardown without profile "
-                        "synchronization",
-                        work->profileName.toStdString(), e.what());
+                    launchProfile = std::make_shared<Profile>(profileDir, managedGame(),
+                                                              gameFeatures());
+                  } catch (const std::exception& e) {
+                    log::error("afterRun: failed to load launch profile '{}': {}; "
+                               "continuing launch-owned teardown without profile "
+                               "synchronization",
+                               work->profileName.toStdString(), e.what());
                     launchProfile.reset();
                   }
                 } else {
-                  log::error(
-                      "afterRun: launch profile '{}' no longer exists; "
-                      "continuing "
-                      "launch-owned teardown without profile synchronization",
-                      work->profileName.toStdString());
+                  log::error("afterRun: launch profile '{}' no longer exists; "
+                             "continuing "
+                             "launch-owned teardown without profile synchronization",
+                             work->profileName.toStdString());
                   launchProfile.reset();
                 }
               }
-              const bool fileTimeLoadOrder =
-                  managedGame()->loadOrderMechanism() ==
-                  IPluginGame::LoadOrderMechanism::FileTime;
+              const bool fileTimeLoadOrder = managedGame()->loadOrderMechanism() ==
+                                             IPluginGame::LoadOrderMechanism::FileTime;
 
-              migrateGameLocalSavesFromOverwrite(managedGame(),
-                                                 overwritePath());
+              migrateGameLocalSavesFromOverwrite(managedGame(), overwritePath());
               movePGPatcherLogsToLogsFolder();
 
               // Only a launch that actually completed physical VFS cleanup may
               // repair permissions. Native games and handed-off launch contexts
               // never mounted this game tree and must leave it untouched.
               if (vfsCleanupPerformed) {
-                const auto t0 = std::chrono::steady_clock::now();
-                const QString gameDir =
-                    managedGame()->gameDirectory().absolutePath();
+                const auto t0         = std::chrono::steady_clock::now();
+                const QString gameDir = managedGame()->gameDirectory().absolutePath();
                 const PermissionRepairStats repair =
                     repairGameDirectoryPermissions(gameDir.toStdString());
                 if (repair.traversal_error == ENOTCONN) {
@@ -3935,114 +4210,43 @@ OrganizerCore::AfterRunResult OrganizerCore::continueAfterRun(
                   FuseConnector::tryCleanupStaleMount(
                       managedGame()->dataDirectory().absolutePath());
                 }
-                const auto ms =
-                    std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now() - t0)
-                        .count();
+                const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - t0)
+                                    .count();
                 switch (permissionRepairOutcome(repair)) {
                 case PermissionRepairOutcome::Failed:
-                  log::warn(
-                      "afterRun: VFS permission repair inspected={} repaired={} "
-                      "skipped={} failed={} elapsed_ms={}",
-                      repair.inspected, repair.repaired, repair.skipped,
-                      repair.failed, ms);
+                  log::warn("afterRun: VFS permission repair inspected={} "
+                            "repaired={} "
+                            "skipped={} failed={} elapsed_ms={}",
+                            repair.inspected, repair.repaired, repair.skipped,
+                            repair.failed, ms);
                   break;
                 case PermissionRepairOutcome::RepairsApplied:
-                  log::info(
-                      "afterRun: VFS permission repair inspected={} repaired={} "
-                      "skipped={} failed={} elapsed_ms={}",
-                      repair.inspected, repair.repaired, repair.skipped,
-                      repair.failed, ms);
+                  log::info("afterRun: VFS permission repair inspected={} "
+                            "repaired={} "
+                            "skipped={} failed={} elapsed_ms={}",
+                            repair.inspected, repair.repaired, repair.skipped,
+                            repair.failed, ms);
                   break;
                 case PermissionRepairOutcome::NoChanges:
-                  log::debug(
-                      "afterRun: VFS permission repair inspected={} repaired={} "
-                      "skipped={} failed={} elapsed_ms={}",
-                      repair.inspected, repair.repaired, repair.skipped,
-                      repair.failed, ms);
+                  log::debug("afterRun: VFS permission repair inspected={} "
+                             "repaired={} "
+                             "skipped={} failed={} elapsed_ms={}",
+                             repair.inspected, repair.repaired, repair.skipped,
+                             repair.failed, ms);
                   break;
                 }
               }
 
               if (launchProfile != nullptr) {
                 const QString prefixPathStr =
-                    resolveWinePrefixPath(m_Settings, managedGame());
+                    !work->preparedWinePrefix.isEmpty()
+                        ? work->preparedWinePrefix
+                        : resolveWinePrefixPath(m_Settings, managedGame());
                 if (!prefixPathStr.isEmpty()) {
                   WinePrefix const prefix(prefixPathStr);
                   if (prefix.isValid()) {
-                    const QString dataDirName =
-                        resolveWineDataDirName(managedGame());
-                    const auto localSavesFeature =
-                        gameFeatures().gameFeature<LocalSavegames>();
-                    const QString absoluteSaveDir = resolveAbsoluteSaveDir(
-                        prefix, managedGame(), localSavesFeature.get(),
-                        launchProfile);
-
-                    if (launchProfile->localSavesEnabled()) {
-                      const QString profileSavesDir =
-                          QDir(launchProfile->absolutePath()).filePath("saves");
-
-                      // Bind-mount path: writes already landed live in the
-                      // profile via the per-launch mount namespace, which
-                      // teardown automatically when the game exited.  Nothing
-                      // to sync and nothing to undeploy. The symlink path below
-                      // only runs on kernels without unprivileged user
-                      // namespaces.
-                      const bool usedBindMount =
-                          !QFileInfo(absoluteSaveDir).isSymLink() &&
-                          ProtonLauncher::unprivilegedBindMountSupported();
-                      if (!usedBindMount) {
-                        log::info("Save sync target: '{}' <- '{}'",
-                                  profileSavesDir, absoluteSaveDir);
-                        if (!prefix.syncSavesBack(profileSavesDir,
-                                                  absoluteSaveDir)) {
-                          log::warn("Failed to sync saves back from prefix "
-                                    "'{}' to '{}'",
-                                    prefixPathStr, profileSavesDir);
-                        }
-
-                        // Remove the __MO_Saves symlinks and revert the prefix
-                        // INI so a vanilla launch outside MO2 uses the default
-                        // Saves dir.
-                        prefix.undeployProfileSaves(absoluteSaveDir);
-                      }
-                      const QStringList iniFiles = managedGame()->iniFiles();
-                      if (!iniFiles.isEmpty()) {
-                        const QString prefixIni =
-                            QDir(resolvePrefixGameDocumentsDir(prefix,
-                                                               dataDirName))
-                                .filePath(
-                                    QFileInfo(iniFiles.first()).fileName());
-                        MOBase::WriteRegistryValue("General", "sLocalSavePath",
-                                                   "Saves\\", prefixIni);
-                        log::debug(
-                            "Restored prefix INI '{}': sLocalSavePath=Saves\\",
-                            prefixIni);
-                      }
-                    }
-
-                    if (launchProfile->localSettingsEnabled()) {
-                      const QString targetIniBase =
-                          resolvePrefixGameDocumentsDir(prefix, dataDirName);
-                      QList<QPair<QString, QString>> iniMappings;
-                      for (const QString &iniFile : managedGame()->iniFiles()) {
-                        const QString profileIni =
-                            launchProfile->absoluteIniFilePath(iniFile);
-                        const QString targetIni =
-                            QDir(targetIniBase)
-                                .filePath(QFileInfo(iniFile).fileName());
-                        iniMappings.append({profileIni, targetIni});
-                        log::info("INI sync target: '{}' <- '{}'", profileIni,
-                                  targetIni);
-                      }
-
-                      if (!iniMappings.isEmpty() &&
-                          !prefix.syncProfileInisBack(iniMappings)) {
-                        log::warn(
-                            "Failed to sync profile INIs back from prefix '{}'",
-                            prefixPathStr);
-                      }
-                    }
+                    const QString dataDirName = resolveWineDataDirName(managedGame());
 
                     // Sync the game's plugin-list file back from the prefix.
                     // LOOT and similar tools edit the deployed copy in
@@ -4086,11 +4290,10 @@ OrganizerCore::AfterRunResult OrganizerCore::continueAfterRun(
                                 "rewritten with a crash-time active set; "
                                 "profile preserved.",
                                 work->exitCode);
-                    } else if (!prefix.syncPluginsBack(profilePluginsPath,
-                                                       dataDirName, wineMech)) {
-                      log::warn(
-                          "Failed to sync plugins.txt back from prefix '{}'",
-                          prefixPathStr);
+                    } else if (!prefix.syncPluginsBack(profilePluginsPath, dataDirName,
+                                                       wineMech)) {
+                      log::warn("Failed to sync plugins.txt back from prefix '{}'",
+                                prefixPathStr);
                     }
                   }
                 }
@@ -4101,8 +4304,7 @@ OrganizerCore::AfterRunResult OrganizerCore::continueAfterRun(
               // the profile copy so refreshESPList falls back to file times —
               // LOOT updates those directly on the .esp files via FUSE setattr.
               if (fileTimeLoadOrder && launchProfile != nullptr) {
-                log::debug(
-                    "removing loadorder.txt (FileTime load order mechanism)");
+                log::debug("removing loadorder.txt (FileTime load order mechanism)");
                 QFile::remove(launchProfile->getLoadOrderFileName());
               }
             },
@@ -4116,8 +4318,8 @@ OrganizerCore::AfterRunResult OrganizerCore::continueAfterRun(
               }
               return refreshAfterRun(work->profileName, work->refreshComplete);
             });
-        postRunFailure = postRefresh.postFailure;
-        refreshFailure = postRefresh.refreshFailure;
+        postRunFailure   = postRefresh.postFailure;
+        refreshFailure   = postRefresh.refreshFailure;
         refreshScheduled = postRefresh.refreshScheduled;
         if (work->triggerRefresh && !refreshScheduled && !refreshFailure) {
           refreshFailure = std::make_exception_ptr(
@@ -4141,10 +4343,9 @@ OrganizerCore::AfterRunResult OrganizerCore::continueAfterRun(
       });
 
   if (postRunFailure) {
-    log::error(
-        "afterRun: optional post-run synchronization failed for '{}': {}",
-        work->binary.absoluteFilePath().toStdString(),
-        cleanupFailureMessage(postRunFailure).toStdString());
+    log::error("afterRun: optional post-run synchronization failed for '{}': {}",
+               work->binary.absoluteFilePath().toStdString(),
+               cleanupFailureMessage(postRunFailure).toStdString());
   }
   if (refreshFailure) {
     log::error("afterRun: refresh startup failed for '{}': {}",
@@ -4157,17 +4358,15 @@ OrganizerCore::AfterRunResult OrganizerCore::continueAfterRun(
                cleanupFailureMessage(finishedRunFailure).toStdString());
   }
   if (finalization.postFailure) {
-    log::error(
-        "afterRun: non-mandatory post-run processing failed for '{}': {}",
-        work->binary.absoluteFilePath().toStdString(),
-        cleanupFailureMessage(finalization.postFailure).toStdString());
+    log::error("afterRun: non-mandatory post-run processing failed for '{}': {}",
+               work->binary.absoluteFilePath().toStdString(),
+               cleanupFailureMessage(finalization.postFailure).toStdString());
   }
   if (finalization.trackerFailure) {
-    log::error(
-        "afterRun: tracker release failed for '{}': {}; cleanup completion "
-        "was withheld and ownership remains retained",
-        work->launchToken.toStdString(),
-        cleanupFailureMessage(finalization.trackerFailure).toStdString());
+    log::error("afterRun: tracker release failed for '{}': {}; cleanup completion "
+               "was withheld and ownership remains retained",
+               work->launchToken.toStdString(),
+               cleanupFailureMessage(finalization.trackerFailure).toStdString());
   }
   if (finalization.completionFailure) {
     log::error("afterRun: cleanup completion callback failed for '{}': {}",
@@ -4202,8 +4401,7 @@ bool OrganizerCore::refreshAfterRun(const QString& profileName,
     return true;
   }
 
-  AfterRunRefreshQueue::Request request{profileName,
-                                        std::move(refreshComplete)};
+  AfterRunRefreshQueue::Request request{profileName, std::move(refreshComplete)};
   if (m_DirectoryUpdate) {
     m_AfterRunRefreshQueue.enqueue(std::move(request));
     return true;
@@ -4273,8 +4471,7 @@ void OrganizerCore::completeAfterRunRefresh(std::uint64_t generation)
 
 void OrganizerCore::completeAllAfterRunRefreshForFailStop()
 {
-  auto completions =
-      m_AfterRunRefreshQueue.takeAllCompletionsForFailStop();
+  auto completions = m_AfterRunRefreshQueue.takeAllCompletionsForFailStop();
   for (auto& complete : completions) {
     try {
       complete();
@@ -4331,8 +4528,8 @@ bool OrganizerCore::waitForDirectoryRefreshes()
       },
       [this, self]() {
         QEventLoop loop;
-        connect(this, &OrganizerCore::directoryRefreshRetired, &loop,
-                &QEventLoop::quit, Qt::QueuedConnection);
+        connect(this, &OrganizerCore::directoryRefreshRetired, &loop, &QEventLoop::quit,
+                Qt::QueuedConnection);
         connect(this, &QObject::destroyed, &loop, &QEventLoop::quit);
         loop.exec();
         return !self.isNull();
@@ -4390,8 +4587,7 @@ std::vector<Mapping> OrganizerCore::fileMapping(const QString& profileName,
   if (profile.localSavesEnabled()) {
     auto localSaves = gameFeatures().gameFeature<LocalSavegames>();
     if (localSaves != nullptr) {
-      MappingType saveMap =
-          localSaves->mappings(profile.absolutePath() + "/saves");
+      MappingType saveMap = localSaves->mappings(profile.absolutePath() + "/saves");
       result.reserve(result.size() + saveMap.size());
       result.insert(result.end(), saveMap.begin(), saveMap.end());
     } else {
@@ -4432,14 +4628,15 @@ std::vector<Mapping> OrganizerCore::fileMapping(const QString& dataPath,
   std::vector<Mapping> result;
 
   for (const FileEntryPtr& current : directoryEntry->getFiles()) {
-    bool isArchive = false;
-    int const origin     = current->getOrigin(isArchive);
+    bool isArchive   = false;
+    int const origin = current->getOrigin(isArchive);
     if (isArchive || (origin == 0)) {
       continue;
     }
 
-    QString const originPath = QString::fromStdWString(base->getOriginByID(origin).getPath());
-    QString const fileName   = QString::fromStdWString(current->getName());
+    QString const originPath =
+        QString::fromStdWString(base->getOriginByID(origin).getPath());
+    QString const fileName = QString::fromStdWString(current->getName());
     //    QString fileName = ToQString(current->getName());
     QString const source = originPath + relPath + fileName;
     QString const target = dataPath + relPath + fileName;
@@ -4452,12 +4649,14 @@ std::vector<Mapping> OrganizerCore::fileMapping(const QString& dataPath,
   for (const auto& d : directoryEntry->getSubDirectories()) {
     int const origin = d->anyOrigin();
 
-    QString const originPath = QString::fromStdWString(base->getOriginByID(origin).getPath());
-    QString const dirName    = QString::fromStdWString(d->getName());
-    QString const source     = originPath + relPath + dirName;
-    QString const target     = dataPath + relPath + dirName;
+    QString const originPath =
+        QString::fromStdWString(base->getOriginByID(origin).getPath());
+    QString const dirName = QString::fromStdWString(d->getName());
+    QString const source  = originPath + relPath + dirName;
+    QString const target  = dataPath + relPath + dirName;
 
-    bool const writeDestination = (base == directoryEntry) && (origin == createDestination);
+    bool const writeDestination =
+        (base == directoryEntry) && (origin == createDestination);
 
     result.push_back({source, target, true, writeDestination});
     std::vector<Mapping> subRes =

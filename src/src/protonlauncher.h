@@ -31,13 +31,11 @@ public:
   ProtonLauncher& addEnvVar(const QString& key, const QString& value);
   ProtonLauncher& setUseTerminal(bool useTerminal);
 
-  // Bind-mount `source` over `target` inside a per-launch user+mount
-  // namespace so the game's view of `target` redirects to `source`.  Used to
-  // make `<prefix>/__MO_Saves` resolve to the profile's saves dir without
-  // symlinks (which Wine can accidentally replace with a real directory).
-  // Both paths must already exist before launch; the mount is torn down
-  // automatically when the game process tree exits.
-  ProtonLauncher& setSavesBindMount(const QString& source, const QString& target);
+  // Bind-mount `source` over every case-variant target inside a per-launch
+  // user+mount namespace. Wine path lookup is case-insensitive, so mounting
+  // only one Linux spelling would leave a bypass into global saves. All paths
+  // must already exist; mounts disappear with the game process tree.
+  ProtonLauncher& setSavesBindMounts(const QString& source, const QStringList& targets);
   ProtonLauncher& setUsvfsRequest(const QString& requestPath);
 
   // True iff the running kernel supports unprivileged user namespaces with
@@ -62,12 +60,12 @@ private:
   QStringList m_wrapperCommands;
   bool m_useSteamDrm{true};
   bool m_useSLR = true;
-  QString m_storeVariant; // "GOG", "Epic", or empty for Steam
+  QString m_storeVariant;  // "GOG", "Epic", or empty for Steam
   QMap<QString, QString> m_envVars;
   QMap<QString, QString> m_wrapperEnvVars;
   bool m_useTerminal = false;
   QString m_bindMountSource;
-  QString m_bindMountTarget;
+  QStringList m_bindMountTargets;
   QString m_usvfsRequestPath;
 };
 

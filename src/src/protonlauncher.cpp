@@ -697,11 +697,17 @@ ProtonLauncher& ProtonLauncher::setUseTerminal(bool useTerminal)
   return *this;
 }
 
-ProtonLauncher& ProtonLauncher::setSavesBindMount(const QString& source,
-                                                   const QString& target)
+ProtonLauncher& ProtonLauncher::setSavesBindMounts(
+    const QString& source, const QStringList& targets)
 {
   m_bindMountSource = source.trimmed();
-  m_bindMountTarget = target.trimmed();
+  m_bindMountTargets.clear();
+  for (const QString& target : targets) {
+    const QString cleaned = target.trimmed();
+    if (!cleaned.isEmpty() && !m_bindMountTargets.contains(cleaned)) {
+      m_bindMountTargets.append(cleaned);
+    }
+  }
   return *this;
 }
 
@@ -737,6 +743,16 @@ bool ProtonLauncher::unprivilegedBindMountSupported()
 process_lifetime::LaunchReceipt ProtonLauncher::launch() const
 {
   process_lifetime::LaunchReceipt receipt;
+
+  const bool bindRequested = !m_bindMountSource.isEmpty() ||
+                             !m_bindMountTargets.isEmpty();
+  if (bindRequested &&
+      (m_bindMountSource.isEmpty() || m_bindMountTargets.isEmpty() ||
+       m_protonPath.isEmpty())) {
+    MOBase::log::error(
+        "Saves bind mount requires an actual Proton launch; refusing direct fallback");
+    return {};
+  }
 
   if (!m_protonPath.isEmpty()) {
     return launchWithProton(receipt) ? receipt
@@ -822,8 +838,8 @@ bool ProtonLauncher::launchWithProton(
   QStringList pressureVesselImportantPaths;
   pressureVesselImportantPaths << m_binary << launchBinary << m_usvfsRequestPath
                                << usvfsBundlePath << m_workingDir << m_gameDirectory
-                               << m_prefixPath << m_bindMountSource
-                               << m_bindMountTarget;
+                               << m_prefixPath << m_bindMountSource;
+  pressureVesselImportantPaths.append(m_bindMountTargets);
 
   // If SLR is enabled, wrap the whole proton invocation inside the
   // pressure-vessel container provided by SteamLinuxRuntime_sniper.
@@ -1044,27 +1060,31 @@ bool ProtonLauncher::launchWithProton(
   // process tree and is torn down automatically on exit.  Must happen
   // AFTER wrapProgram but BEFORE startWithEnv so that SLR/pressure-vessel
   // inherits the mount from the outer namespace.
-  if (!m_bindMountSource.isEmpty() && !m_bindMountTarget.isEmpty() &&
-      unprivilegedBindMountSupported()) {
+  if (!m_bindMountSource.isEmpty() && !m_bindMountTargets.isEmpty()) {
+    if (!unprivilegedBindMountSupported()) {
+      MOBase::log::error("Saves bind mount was required, but unprivileged user "
+                         "namespaces are no longer available; refusing to launch");
+      return false;
+    }
     const QString unshareBin = QStandardPaths::findExecutable("unshare");
+    if (unshareBin.isEmpty()) {
+      MOBase::log::error("Saves bind mount was required, but 'unshare' is unavailable; "
+                         "refusing to launch");
+      return false;
+    }
     QStringList newArgs;
     newArgs << "--user" << "--mount" << "-r" << "--"
             << "/bin/sh" << "-c"
-            << R"(mount --bind "$1" "$2" && shift 2 && exec "$@")"
+            << R"(source=$1; shift; while [ "$1" != "--" ]; do mount --bind "$source" "$1" || exit; shift; done; shift; exec "$@")"
             << "_mo2bind"
-            << m_bindMountSource
-            << m_bindMountTarget
-            << program;
+            << m_bindMountSource;
+    newArgs.append(m_bindMountTargets);
+    newArgs << "--" << program;
     newArgs.append(arguments);
     program   = unshareBin;
     arguments = newArgs;
-    MOBase::log::info("Saves bind mount: '{}' -> '{}'", m_bindMountSource,
-                      m_bindMountTarget);
-  } else if (!m_bindMountSource.isEmpty()) {
-    MOBase::log::warn("Saves bind mount requested but unprivileged user "
-                      "namespaces unavailable; game will write to prefix "
-                      "'{}' directly",
-                      m_bindMountTarget);
+    MOBase::log::info("Saves bind mounts: '{}' -> [{}]", m_bindMountSource,
+                      m_bindMountTargets.join(QStringLiteral(", ")));
   }
 
   MOBase::log::info("Proton launch: '{}' run '{}'", protonScript, m_binary);

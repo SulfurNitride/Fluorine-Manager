@@ -3,7 +3,9 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QHash>
 #include <QList>
+#include <QLockFile>
 #include <QObject>
 #include <QSettings>
 #include <QString>
@@ -324,8 +326,7 @@ public:
                  const QList<MOBase::ExecutableForcedLoadSetting>& forcedLibraries,
                  bool useProton, const QString& launchToken, bool ownsVfs,
                  QString* usvfsRequestPath = nullptr,
-                 QString* saveBindMountSource = nullptr,
-                 QString* saveBindMountTarget = nullptr);
+                 spawn::SaveDeploymentReceipt* saveDeployment = nullptr);
 
   bool checkGameRegistryKey();
 
@@ -358,6 +359,7 @@ public:
       const QFileInfo& binary, DWORD exitCode, bool unmountVfs = true,
       const QString& launchToken = {}, const QString& profileName = {},
       bool triggerRefresh = true,
+      spawn::SaveDeploymentReceipt saveDeployment = {},
       std::function<void()> refreshComplete = {},
       std::function<void(bool refreshScheduled)> cleanupComplete = {});
 
@@ -366,7 +368,9 @@ public:
   void abortProcessLaunchPreparation(const QString& launchToken,
                                      const QString& profileName,
                                      bool ownsVfs,
-                                     QString usvfsRequestPath = {}) noexcept;
+                                     QString usvfsRequestPath = {},
+                                     spawn::SaveDeploymentReceipt
+                                         saveDeployment = {}) noexcept;
 
   // Schedules only the refresh portion of afterRun(). Each completion callback
   // is tied to the directory-refresh generation that includes this request;
@@ -588,16 +592,15 @@ signals:
 
 private:
   struct AfterRunWork;
+  struct AbortedLaunchWork;
   AfterRunResult continueAfterRun(const std::shared_ptr<AfterRunWork>& work,
                                   bool retry, unsigned int retryCount);
   bool continueVfsPreviewTeardown(const QString& launchToken,
                                   const QString& profileName, bool retry,
                                   unsigned int retryCount);
-  void continueAbortedLaunchTeardown(const QString& launchToken,
-                                     const QString& profileName, bool ownsVfs,
-                                     const QString& usvfsRequestPath,
-                                     bool retry,
-                                     unsigned int retryCount);
+  void continueAbortedLaunchTeardown(
+      const std::shared_ptr<AbortedLaunchWork>& work, bool retry,
+      unsigned int retryCount);
 
   void startAfterRunRefreshBatch(
       std::vector<AfterRunRefreshQueue::Request> requests);
@@ -662,6 +665,7 @@ private:
 
   std::shared_ptr<Profile> m_CurrentProfile;
   ProcessLaunchContextTracker m_ProcessLaunchContext;
+  QHash<QString, std::shared_ptr<QLockFile>> m_SaveDeploymentLocks;
   bool m_CurrentProfileSavedForShutdown = false;
 
   Settings& m_Settings;
