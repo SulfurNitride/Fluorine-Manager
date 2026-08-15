@@ -26,7 +26,8 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 
 class GameGamebryo;
 
-class GamebryoLocalSavegames : public MOBase::LocalSavegames
+class GamebryoLocalSavegames : public MOBase::LocalSavegames,
+                               public MOBase::LocalSavegamesRouting
 {
 
 public:
@@ -34,6 +35,8 @@ public:
 
   virtual MappingType mappings(const QDir& profileSaveDir) const override;
   virtual bool prepareProfile(MOBase::IProfile* profile) override;
+  QString routingIniName() const override;
+  QByteArray routingPath() const override;
 
 protected:
   // return the path from the local game directory to the local saves folder

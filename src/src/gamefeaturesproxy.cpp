@@ -133,6 +133,7 @@ private:
 };
 
 class LocalSavegamesProxy final : public MOBase::LocalSavegames,
+                                  public MOBase::LocalSavegamesRouting,
                                   public ProxiedGameFeature
 {
 public:
@@ -152,6 +153,18 @@ public:
     m_MutationGate->runIfAllowed(
         [&] { result = m_Proxied->prepareProfile(profile); });
     return result;
+  }
+  QString routingIniName() const override
+  {
+    const auto* routing =
+        dynamic_cast<const MOBase::LocalSavegamesRouting*>(m_Proxied.get());
+    return routing != nullptr ? routing->routingIniName() : QString{};
+  }
+  QByteArray routingPath() const override
+  {
+    const auto* routing =
+        dynamic_cast<const MOBase::LocalSavegamesRouting*>(m_Proxied.get());
+    return routing != nullptr ? routing->routingPath() : QByteArray{};
   }
   std::shared_ptr<MOBase::GameFeature> proxiedFeature() const override
   {

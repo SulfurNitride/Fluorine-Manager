@@ -65,6 +65,97 @@ QString absolutePath(const QString &path) {
   return QDir::cleanPath(QFileInfo(path).absoluteFilePath());
 }
 
+bool isWithin(const QString &rootPath, const QString &candidatePath) {
+  const QString root = absolutePath(rootPath);
+  const QString candidate = absolutePath(candidatePath);
+  return !root.isEmpty() &&
+         (candidate == root || candidate.startsWith(root + QDir::separator()));
+}
+
+QString canonicalWithMissingTail(const QString &path) {
+  QFileInfo current(absolutePath(path));
+  QStringList tail;
+  while (!current.exists() && !current.isSymLink() &&
+         !current.fileName().isEmpty()) {
+    tail.prepend(current.fileName());
+    current = QFileInfo(current.absolutePath());
+  }
+  QString resolved = current.canonicalFilePath();
+  if (resolved.isEmpty())
+    resolved = current.absoluteFilePath();
+  for (const QString &component : tail)
+    resolved = QDir(resolved).filePath(component);
+  return QDir::cleanPath(resolved);
+}
+
+bool physicallyWithin(const QString &rootPath, const QString &candidatePath) {
+  const QString root = canonicalWithMissingTail(rootPath);
+  const QString candidate = canonicalWithMissingTail(candidatePath);
+  const QString relative = QDir(root).relativeFilePath(candidate);
+  return relative != QStringLiteral("..") &&
+         !relative.startsWith(QStringLiteral("../")) &&
+         !QDir::isAbsolutePath(relative);
+}
+
+Result resolvedRoute(const QString &iniPath, const QByteArray &route,
+                     const QString &allowedRoot, QString &resolved) {
+  resolved.clear();
+  if (route.isEmpty() || route.size() > 32 * 1024 || route.contains('\0') ||
+      route.contains('\r') || route.contains('\n') ||
+      (!route.endsWith('\\') && !route.endsWith('/'))) {
+    return fail(QStringLiteral("Invalid managed save route."));
+  }
+
+  const QString decoded = QString::fromUtf8(route);
+  if (decoded.toUtf8() != route) {
+    return fail(QStringLiteral("Managed save route is not valid UTF-8."));
+  }
+  QString normalized = decoded;
+  normalized.replace('\\', '/');
+  if (QDir::isAbsolutePath(normalized) ||
+      normalized.contains(QChar(':')) ||
+      QDir::cleanPath(normalized) == QStringLiteral(".")) {
+    return fail(QStringLiteral("Managed save route must be relative."));
+  }
+
+  const QString iniParent = absolutePath(QFileInfo(iniPath).absolutePath());
+  const QString lexicalResolved =
+      absolutePath(QDir(iniParent).filePath(normalized));
+  if (!allowedRoot.isEmpty() &&
+      (!isWithin(allowedRoot, iniParent) ||
+       !isWithin(allowedRoot, lexicalResolved) ||
+       !physicallyWithin(allowedRoot, iniParent) ||
+       !physicallyWithin(allowedRoot,
+                         QFileInfo(lexicalResolved).absolutePath()))) {
+    resolved.clear();
+    return fail(QStringLiteral("Managed save route escapes its Wine prefix."));
+  }
+  resolved = lexicalResolved;
+  return ok();
+}
+
+bool legacyRouteTargetsDirectory(const QString &iniPath, QByteArray route,
+                                 const QString &saveDirectory) {
+  route = route.trimmed();
+  if (route.isEmpty() || route.contains('\0') || route.contains('\r') ||
+      route.contains('\n')) {
+    return false;
+  }
+  const QString decoded = QString::fromUtf8(route);
+  if (decoded.toUtf8() != route)
+    return false;
+  QString normalized = decoded;
+  normalized.replace('\\', '/');
+  if (QDir::isAbsolutePath(normalized) || normalized.contains(QChar(':')))
+    return false;
+
+  const QString resolved = absolutePath(
+      QDir(QFileInfo(iniPath).absolutePath()).filePath(normalized));
+  const QString target = absolutePath(saveDirectory);
+  return resolved.compare(target, Qt::CaseInsensitive) == 0 ||
+         canonicalWithMissingTail(resolved) == canonicalWithMissingTail(target);
+}
+
 QStringList caseVariants(const QString &path) {
   const QFileInfo info(absolutePath(path));
   const QDir directory(info.absolutePath());
@@ -541,6 +632,368 @@ Result readValue(const QString &iniPath, const QByteArray &section,
   return valueFromLines(splitLines(bytes), section, key, value);
 }
 
+Result routeFor(const QString &iniPath, const QString &saveDirectory,
+                const QString &allowedRoot, const QByteArray &explicitRoute,
+                QByteArray &route) {
+  route.clear();
+  const QString target = absolutePath(saveDirectory);
+  if (!isWithin(allowedRoot, target)) {
+    return fail(QStringLiteral("Managed save target escapes its Wine prefix."));
+  }
+
+  QByteArray candidate = explicitRoute;
+  if (candidate.isEmpty()) {
+    const QString iniParent = absolutePath(QFileInfo(iniPath).absolutePath());
+    QString relative = QDir(iniParent).relativeFilePath(target);
+    relative = QDir::cleanPath(relative);
+    relative.replace('/', '\\');
+    if (!relative.endsWith('\\'))
+      relative.append('\\');
+    candidate = relative.toUtf8();
+  }
+
+  QString resolved;
+  Result result = resolvedRoute(iniPath, candidate, allowedRoot, resolved);
+  if (!result)
+    return result;
+  if (resolved != target) {
+    return fail(QStringLiteral("Managed save route targets another directory."));
+  }
+  route = candidate;
+  return ok();
+}
+
+Result routeTargetsDirectory(const QString &iniPath, const QByteArray &route,
+                             const QString &saveDirectory,
+                             const QString &allowedRoot, bool &matches) {
+  matches = false;
+  QString configured = QString::fromUtf8(route.trimmed());
+  configured.replace('\\', '/');
+  if (QDir::isAbsolutePath(configured) || configured.contains(QChar(':')))
+    return ok();
+  QString resolved;
+  const Result result = resolvedRoute(iniPath, route.trimmed(), allowedRoot,
+                                      resolved);
+  if (!result)
+    return result;
+  const QString target = absolutePath(saveDirectory);
+  if (resolved.compare(target, Qt::CaseInsensitive) == 0) {
+    matches = true;
+    return ok();
+  }
+  if (canonicalWithMissingTail(resolved) == canonicalWithMissingTail(target)) {
+    matches = true;
+    return ok();
+  }
+  if (!allowedRoot.isEmpty() && !physicallyWithin(allowedRoot, resolved)) {
+    return fail(QStringLiteral("Configured save route escapes its Wine prefix."));
+  }
+  return ok();
+}
+
+Result familyTargetsDirectory(const QString &iniPath,
+                              const QString &saveDirectory,
+                              const QString &allowedRoot, bool &matches) {
+  matches = false;
+  QStringList effectiveVariants;
+  for (const QString &variant : caseVariants(iniPath)) {
+    QString effective;
+    Result result = effectiveCaseVariant(iniPath, variant, effective);
+    if (!result)
+      return result;
+    if (effective.isEmpty() || effectiveVariants.contains(effective))
+      continue;
+    effectiveVariants.append(effective);
+
+    Value localPath;
+    result = readValue(effective, "General", "sLocalSavePath", localPath);
+    if (!result)
+      return result;
+    if (!localPath.present)
+      continue;
+    bool variantMatches = false;
+    result = routeTargetsDirectory(effective, localPath.bytes, saveDirectory,
+                                   allowedRoot, variantMatches);
+    if (!result)
+      return result;
+    if (variantMatches) {
+      matches = true;
+      return ok();
+    }
+  }
+  return ok();
+}
+
+Result restoreConfirmedLegacyReceipt(const QString &iniPath,
+                                     const QString &receiptPath,
+                                     const QString &routeContextIni,
+                                     const QByteArray &managedRoute,
+                                     const QString &saveDirectory,
+                                     const QString &allowedRoot) {
+  bool managedRouteValid = false;
+  Result result = routeTargetsDirectory(routeContextIni, managedRoute,
+                                        saveDirectory, allowedRoot,
+                                        managedRouteValid);
+  if (!result)
+    return result;
+  if (!managedRouteValid) {
+    return fail(QStringLiteral("Legacy recovery route does not target the "
+                               "managed save directory."));
+  }
+
+  QByteArray receiptBytes;
+  bool receiptPresent = false;
+  result = readRegularFile(receiptPath, MaximumReceiptBytes,
+                           /*allowMissing=*/false, receiptBytes,
+                           receiptPresent);
+  if (!result || !receiptPresent)
+    return result ? fail(QStringLiteral("Legacy save receipt is missing."))
+                  : result;
+
+  const QList<Line> receiptLines = splitLines(receiptBytes);
+  Value savedLocalPath;
+  Value savedUseMyGames;
+  result = valueFromLines(receiptLines, "General", "sLocalSavePath",
+                          savedLocalPath);
+  if (!result)
+    return result;
+  result = valueFromLines(receiptLines, "General", "bUseMyGamesDirectory",
+                          savedUseMyGames);
+  if (!result)
+    return result;
+  if (!savedLocalPath.present && !savedUseMyGames.present) {
+    return fail(QStringLiteral("Legacy save receipt contains no restorable "
+                               "routing values."));
+  }
+
+  auto sameValue = [](const Value &left, const Value &right) {
+    return left.present == right.present &&
+           (!left.present || left.bytes == right.bytes);
+  };
+  if (savedLocalPath.present) {
+    if (legacyRouteTargetsDirectory(routeContextIni, savedLocalPath.bytes,
+                                    saveDirectory)) {
+      return fail(QStringLiteral("Legacy receipt saved the managed route as "
+                                 "its original value; preserving it for "
+                                 "manual recovery."));
+    }
+  }
+
+  struct PendingRestore {
+    QString path;
+    QByteArray expected;
+  };
+  PendingRestore pending;
+  bool needsRestore = false;
+
+  // The legacy receipt was written for one exact INI spelling. It contains no
+  // case-family manifest, so it cannot authorize rewriting a distinct sibling
+  // that happens to contain the same temporary route. Resolve only a strict
+  // same-directory case alias of the selected path and reject another managed
+  // real variant as ambiguous.
+  QString selected;
+  result = effectiveCaseVariant(iniPath, iniPath, selected);
+  if (!result)
+    return result;
+  if (selected.isEmpty()) {
+    return fail(QStringLiteral("Legacy routing target is missing."));
+  }
+
+  QStringList effectiveVariants;
+  for (const QString &variant : caseVariants(iniPath)) {
+    QString effective;
+    result = effectiveCaseVariant(iniPath, variant, effective);
+    if (!result)
+      return result;
+    if (effective.isEmpty() || effectiveVariants.contains(effective))
+      continue;
+    effectiveVariants.append(effective);
+
+    if (effective == selected)
+      continue;
+
+    Value siblingLocalPath;
+    result = readValue(effective, "General", "sLocalSavePath",
+                       siblingLocalPath);
+    if (!result)
+      return result;
+    bool siblingTargetsManaged = false;
+    if (siblingLocalPath.present) {
+      result = routeTargetsDirectory(routeContextIni, siblingLocalPath.bytes,
+                                     saveDirectory, allowedRoot,
+                                     siblingTargetsManaged);
+      if (!result)
+        return result;
+    }
+    if (siblingTargetsManaged) {
+      return fail(QStringLiteral("Legacy routing receipt is ambiguous because "
+                                 "distinct INI '%1' also selects the managed "
+                                 "route.")
+                      .arg(effective));
+    }
+  }
+
+  QByteArray currentBytes;
+  bool currentPresent = false;
+  result = readRegularFile(selected, MaximumIniBytes,
+                           /*allowMissing=*/false, currentBytes,
+                           currentPresent);
+  if (!result || !currentPresent)
+    return result ? fail(QStringLiteral("Legacy routing target is missing."))
+                  : result;
+  const QList<Line> currentLines = splitLines(currentBytes);
+  Value currentLocalPath;
+  Value currentUseMyGames;
+  result = valueFromLines(currentLines, "General", "sLocalSavePath",
+                          currentLocalPath);
+  if (!result)
+    return result;
+  result = valueFromLines(currentLines, "General", "bUseMyGamesDirectory",
+                          currentUseMyGames);
+  if (!result)
+    return result;
+
+  const bool localRestored = sameValue(currentLocalPath, savedLocalPath);
+  const bool useRestored = sameValue(currentUseMyGames, savedUseMyGames);
+  if (!localRestored || !useRestored) {
+    bool localActive = false;
+    if (currentLocalPath.present) {
+      result = routeTargetsDirectory(routeContextIni, currentLocalPath.bytes,
+                                     saveDirectory, allowedRoot, localActive);
+      if (!result)
+        return result;
+    }
+    const bool useActive = currentUseMyGames.present &&
+                           currentUseMyGames.bytes.trimmed() == "1";
+    if ((localActive || localRestored) && (useActive || useRestored) &&
+        (localActive || useActive)) {
+      pending = {selected, currentBytes};
+      needsRestore = true;
+    } else if (localActive || useActive) {
+      return fail(QStringLiteral("Legacy routing target '%1' conflicts with "
+                                 "its saved values.")
+                      .arg(selected));
+    } else {
+      return fail(QStringLiteral("The selected INI does not contain the legacy "
+                                 "managed route or its saved values."));
+    }
+  }
+
+  if (needsRestore) {
+    result = publishValues(pending.path, savedLocalPath, savedUseMyGames,
+                           &pending.expected);
+    if (!result) {
+      result.recoveryRequired = true;
+      return result;
+    }
+  }
+
+  QString detail;
+  if (!safeLeaf(receiptPath, /*allowMissing=*/false, detail) ||
+      !QFile::remove(receiptPath)) {
+    return fail(QStringLiteral("Routing values were restored, but legacy "
+                               "receipt '%1' could not be retired: %2")
+                    .arg(receiptPath, detail),
+                true);
+  }
+  return ok();
+}
+
+Result clearConfirmedLegacyRoute(const QString &iniPath,
+                                 const QString &routeContextIni,
+                                 const QByteArray &managedRoute,
+                                 const QString &saveDirectory,
+                                 const QString &allowedRoot) {
+  bool expectedTargetsManaged = false;
+  Result result = routeTargetsDirectory(routeContextIni, managedRoute,
+                                        saveDirectory, allowedRoot,
+                                        expectedTargetsManaged);
+  if (!result)
+    return result;
+  if (!expectedTargetsManaged) {
+    return fail(QStringLiteral("Legacy recovery route does not target the "
+                               "managed save directory."));
+  }
+
+  QString selected;
+  result = effectiveCaseVariant(iniPath, iniPath, selected);
+  if (!result)
+    return result;
+  if (selected.isEmpty())
+    return fail(QStringLiteral("Legacy routing target is missing."));
+
+  QStringList effectiveVariants;
+  for (const QString &variant : caseVariants(iniPath)) {
+    QString effective;
+    result = effectiveCaseVariant(iniPath, variant, effective);
+    if (!result)
+      return result;
+    if (effective.isEmpty() || effectiveVariants.contains(effective))
+      continue;
+    effectiveVariants.append(effective);
+    if (effective == selected)
+      continue;
+
+    Value siblingLocalPath;
+    result = readValue(effective, "General", "sLocalSavePath",
+                       siblingLocalPath);
+    if (!result)
+      return result;
+    bool siblingTargetsManaged = false;
+    if (siblingLocalPath.present) {
+      result = routeTargetsDirectory(routeContextIni, siblingLocalPath.bytes,
+                                     saveDirectory, allowedRoot,
+                                     siblingTargetsManaged);
+      if (!result)
+        return result;
+    }
+    if (siblingTargetsManaged) {
+      return fail(QStringLiteral("Legacy routing state is ambiguous because "
+                                 "distinct INI '%1' also selects the managed "
+                                 "route.")
+                      .arg(effective));
+    }
+  }
+
+  QByteArray currentBytes;
+  bool currentPresent = false;
+  result = readRegularFile(selected, MaximumIniBytes,
+                           /*allowMissing=*/false, currentBytes,
+                           currentPresent);
+  if (!result || !currentPresent)
+    return result ? fail(QStringLiteral("Legacy routing target is missing."))
+                  : result;
+  const QList<Line> lines = splitLines(currentBytes);
+  Value localPath;
+  Value useMyGames;
+  result = valueFromLines(lines, "General", "sLocalSavePath", localPath);
+  if (!result)
+    return result;
+  result = valueFromLines(lines, "General", "bUseMyGamesDirectory",
+                          useMyGames);
+  if (!result)
+    return result;
+
+  bool currentTargetsManaged = false;
+  if (localPath.present) {
+    result = routeTargetsDirectory(routeContextIni, localPath.bytes,
+                                   saveDirectory, allowedRoot,
+                                   currentTargetsManaged);
+    if (!result)
+      return result;
+  }
+  if (!currentTargetsManaged || !useMyGames.present ||
+      useMyGames.bytes.trimmed() != "1") {
+    return fail(QStringLiteral("Receipt-less legacy recovery requires the "
+                               "exact managed routing pair."));
+  }
+
+  result = publishValues(selected, Value{}, Value{}, &currentBytes);
+  if (!result)
+    result.recoveryRequired = true;
+  return result;
+}
+
 Result pendingOwner(const QString &iniPath, QString &ownerId, bool &present) {
   Snapshot snapshot;
   Result result = loadReceipt(iniPath, snapshot, present);
@@ -551,12 +1004,19 @@ Result pendingOwner(const QString &iniPath, QString &ownerId, bool &present) {
   return result;
 }
 
-Result activate(const QString &iniPath, const QString &ownerId) {
+Result activate(const QString &iniPath, const QString &ownerId,
+                const QByteArray &route, const QString &saveDirectory,
+                const QString &allowedRoot) {
   if (ownerId.trimmed().isEmpty())
     return fail(QStringLiteral("Empty routing owner."));
+  QByteArray validatedRoute;
+  Result result = routeFor(iniPath, saveDirectory, allowedRoot, route,
+                           validatedRoute);
+  if (!result)
+    return result;
   Snapshot existing;
   bool receiptPresent = false;
-  Result result = loadReceipt(iniPath, existing, receiptPresent);
+  result = loadReceipt(iniPath, existing, receiptPresent);
   if (!result)
     return result;
   if (receiptPresent) {
@@ -610,13 +1070,29 @@ Result activate(const QString &iniPath, const QString &ownerId) {
     originals.append(std::move(original));
   }
 
+  for (const VariantSnapshot &variant : snapshot.variants) {
+    if (!variant.localPath.present)
+      continue;
+    bool alreadyManaged = false;
+    result = routeTargetsDirectory(variant.path, variant.localPath.bytes,
+                                   saveDirectory, allowedRoot,
+                                   alreadyManaged);
+    if (!result)
+      return result;
+    if (alreadyManaged) {
+      return fail(QStringLiteral("Refusing to adopt an unowned managed save "
+                                 "route from '%1'.")
+                      .arg(variant.path));
+    }
+  }
+
   result = writeReceipt(iniPath, snapshot);
   if (!result)
     return result;
 
   for (qsizetype index = 0; index < snapshot.variants.size(); ++index) {
     result = publishValues(snapshot.variants[index].path,
-                           Value{true, "__MO_Saves\\"}, Value{true, "1"},
+                           Value{true, validatedRoute}, Value{true, "1"},
                            &originals[index],
                            /*restoreHeaderEnding=*/false,
                            /*preserveModificationTime=*/true);

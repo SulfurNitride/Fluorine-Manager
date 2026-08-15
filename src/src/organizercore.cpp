@@ -94,6 +94,7 @@
 #include <cstddef>
 #include <cstring>  // for memset, wcsrchr
 
+#include <algorithm>
 #include <atomic>
 #include <boost/algorithm/string/predicate.hpp>
 #include <exception>
@@ -470,6 +471,31 @@ QString resolveAbsoluteSaveDir(const WinePrefix& prefix, const IPluginGame* mana
   log::debug("resolveAbsoluteSaveDir: fallback -> '{}'", fallback);
   return fallback;
 }
+
+namespace
+{
+QStringList legacySavePathReceipts(const QString& profilesRoot)
+{
+  QStringList receipts;
+  const QDir root(profilesRoot);
+  for (const QFileInfo& profile :
+       root.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden |
+                          QDir::System)) {
+    const QFileInfo receipt(QDir(profile.absoluteFilePath()).filePath(
+        QStringLiteral("savepath.ini")));
+    if (receipt.exists() || receipt.isSymLink()) {
+      receipts.append(receipt.absoluteFilePath());
+    }
+  }
+  return receipts;
+}
+
+QString profileIniSource(const Profile& profile, const QString& iniName)
+{
+  return MOBase::resolveFileCaseInsensitive(
+      QDir(profile.absolutePath()).filePath(QFileInfo(iniName).fileName()));
+}
+}  // namespace
 
 void migrateGameLocalSavesFromOverwrite(const IPluginGame* game,
                                         const QString& overwriteDir)
@@ -3494,12 +3520,45 @@ bool OrganizerCore::beforeRun(
         const QString absoluteSaveDir = resolveAbsoluteSaveDir(
             prefix, managedGame(), localSavesFeature.get(), launchProfile);
         log::info("Wine prefix save target: '{}'", absoluteSaveDir);
-        const QStringList managedIniFiles = managedGame()->iniFiles();
+        QStringList managedIniFiles = managedGame()->iniFiles();
+        QString routingIniName =
+            managedIniFiles.isEmpty() ? QString{} : managedIniFiles.first();
+        QByteArray explicitSaveRoute;
+        if (const auto* routing =
+                dynamic_cast<const LocalSavegamesRouting*>(
+                    localSavesFeature.get())) {
+          const QString contractIni = routing->routingIniName().trimmed();
+          if (!contractIni.isEmpty()) {
+            routingIniName = contractIni;
+            const bool alreadyManaged =
+                std::any_of(managedIniFiles.cbegin(), managedIniFiles.cend(),
+                            [&contractIni](const QString& existing) {
+                              return existing.compare(contractIni,
+                                                      Qt::CaseInsensitive) == 0;
+                            });
+            if (!alreadyManaged) {
+              managedIniFiles.append(contractIni);
+            }
+          }
+          explicitSaveRoute = routing->routingPath();
+        }
         const QString prefixIni =
-            managedIniFiles.isEmpty()
+            routingIniName.isEmpty()
                 ? QString{}
                 : QDir(resolvePrefixGameDocumentsDir(prefix, dataDirName))
-                      .filePath(QFileInfo(managedIniFiles.first()).fileName());
+                      .filePath(QFileInfo(routingIniName).fileName());
+        QByteArray managedSaveRoute;
+        if (!prefixIni.isEmpty() && !absoluteSaveDir.isEmpty()) {
+          const auto routeResult = WineSaveRouting::routeFor(
+              prefixIni, absoluteSaveDir, prefix.driveC(),
+              explicitSaveRoute, managedSaveRoute);
+          if (!routeResult) {
+            log::error("Refusing launch because the managed save route could "
+                       "not be validated: {}",
+                       routeResult.error);
+            return false;
+          }
+        }
 
         // Serialize every launch that can touch this physical Wine save path,
         // including launches with local saves disabled. A persisted owner or
@@ -3665,7 +3724,7 @@ bool OrganizerCore::beforeRun(
               resolvePrefixGameDocumentsDir(prefix, dataDirName);
           int deployedIniCount = 0;
           for (const QString& iniFile : managedIniFiles) {
-            const QString sourceIni = launchProfile->absoluteIniFilePath(iniFile);
+            const QString sourceIni = profileIniSource(*launchProfile, iniFile);
             const QString targetIni =
                 QDir(targetIniBase).filePath(QFileInfo(iniFile).fileName());
             log::info("INI deploy target: '{}' -> '{}' (exists={})", sourceIni,
@@ -3696,6 +3755,107 @@ bool OrganizerCore::beforeRun(
           log::debug("Profile local settings not enabled, skipping INI deployment. "
                      "documentsDirectory='{}'",
                      managedGame()->documentsDirectory().absolutePath());
+        }
+
+        // The old Gamebryo profile callback persisted this route outside the
+        // prefix lease and recorded its originals in a target-less
+        // profile/savepath.ini. Such a receipt cannot prove whether it owned
+        // the profile INI or the shared prefix INI. Never snapshot the stale
+        // route as a new launch's original or guess which legacy receipt to
+        // restore; preserve both for explicit recovery.
+        if (!prefixIni.isEmpty() && !managedSaveRoute.isEmpty()) {
+          bool targetsManagedDirectory = false;
+          const auto routeIdentity = WineSaveRouting::familyTargetsDirectory(
+              prefixIni, absoluteSaveDir, prefix.driveC(),
+              targetsManagedDirectory);
+          if (!routeIdentity) {
+            log::error("Refusing launch because save routing in '{}' could not "
+                       "be authenticated: {}",
+                       prefixIni, routeIdentity.error);
+            return false;
+          }
+          if (targetsManagedDirectory) {
+            const QStringList legacyReceipts =
+                legacySavePathReceipts(m_Settings.paths().profiles());
+            const QString currentLegacyReceipt =
+                QDir(launchProfile->absolutePath()).filePath(
+                    QStringLiteral("savepath.ini"));
+            const QFileInfo currentReceiptInfo(currentLegacyReceipt);
+            if (m_UserInterface != nullptr) {
+              const QString recoveryTarget =
+                  launchProfile->localSettingsEnabled()
+                      ? profileIniSource(*launchProfile, routingIniName)
+                      : prefixIni;
+              QWidget* parent = m_UserInterface->mainWindow();
+              if (currentReceiptInfo.exists() ||
+                  currentReceiptInfo.isSymLink()) {
+                const auto choice = QMessageBox::question(
+                    parent, tr("Legacy Save Routing"),
+                    tr("Fluorine found an older local-save receipt for profile "
+                       "\"%1\". The old format does not identify which INI it "
+                       "changed.\n\nRestore its saved values to:\n%2\n\nNo "
+                       "other INI will be changed. This launch will be canceled; "
+                       "retry it after recovery.")
+                        .arg(launchProfile->name(), recoveryTarget),
+                    QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+                if (choice == QMessageBox::Yes) {
+                  const auto recovery =
+                      WineSaveRouting::restoreConfirmedLegacyReceipt(
+                          recoveryTarget, currentLegacyReceipt, prefixIni,
+                          managedSaveRoute, absoluteSaveDir, prefix.driveC());
+                  if (recovery) {
+                    log::info("Restored legacy save routing in '{}' and retired "
+                              "receipt '{}'; canceling this launch for a clean "
+                              "retry",
+                              recoveryTarget, currentLegacyReceipt);
+                    return false;
+                  }
+                  QMessageBox::warning(
+                      parent, tr("Legacy Save Routing"),
+                      tr("The legacy routing values could not be restored. No "
+                         "receipt was discarded.\n\n%1")
+                          .arg(recovery.error));
+                }
+              } else if (legacyReceipts.isEmpty()) {
+                const auto choice = QMessageBox::question(
+                    parent, tr("Legacy Save Routing"),
+                    tr("Fluorine found an older managed save route without a "
+                       "recovery receipt. This can occur when both original "
+                       "routing keys were absent.\n\nRemove only the exact "
+                       "managed routing pair from:\n%1\n\nNo other INI will be "
+                       "changed. This launch will be canceled; retry it after "
+                       "recovery.")
+                        .arg(recoveryTarget),
+                    QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+                if (choice == QMessageBox::Yes) {
+                  const auto recovery =
+                      WineSaveRouting::clearConfirmedLegacyRoute(
+                          recoveryTarget, prefixIni, managedSaveRoute,
+                          absoluteSaveDir, prefix.driveC());
+                  if (recovery) {
+                    log::info("Removed receipt-less legacy save routing from "
+                              "'{}'; canceling this launch for a clean retry",
+                              recoveryTarget);
+                    return false;
+                  }
+                  QMessageBox::warning(
+                      parent, tr("Legacy Save Routing"),
+                      tr("The receipt-less legacy routing pair could not be "
+                         "removed. No other INI was changed.\n\n%1")
+                          .arg(recovery.error));
+                }
+              }
+            }
+            log::error(
+                "Refusing launch because '{}' already selects the unowned "
+                "managed save route '{}'. Legacy savepath.ini receipts have "
+                "no target identity and were preserved for explicit recovery: {}",
+                prefixIni, QString::fromUtf8(managedSaveRoute),
+                legacyReceipts.isEmpty()
+                    ? QStringLiteral("none found")
+                    : legacyReceipts.join(QStringLiteral(", ")));
+            return false;
+          }
         }
 
         if (launchProfile->localSavesEnabled()) {
@@ -3752,7 +3912,9 @@ bool OrganizerCore::beforeRun(
           // profile-specific saves, even when localSettingsEnabled() is off.
           if (!prefixIni.isEmpty()) {
             saveDeployment->prefixIni = prefixIni;
-            const auto routing = WineSaveRouting::activate(prefixIni, launchToken);
+            const auto routing = WineSaveRouting::activate(
+                prefixIni, launchToken, managedSaveRoute, absoluteSaveDir,
+                prefix.driveC());
             saveDeployment->iniPatched = routing.recoveryRequired;
             if (!routing) {
               log::error("Refusing launch because '{}' could not be routed "
@@ -3760,34 +3922,8 @@ bool OrganizerCore::beforeRun(
                          prefixIni, routing.error);
               return false;
             }
-            log::debug("Patched prefix INI '{}': sLocalSavePath=__MO_Saves\\",
-                       prefixIni);
-          }
-        } else {
-          // Preserve the game's configured save route when profile-local
-          // saves are disabled. An unowned __MO_Saves value can be residue
-          // from an older interrupted deployment; never guess a replacement
-          // for it or launch against the stale profile path.
-          if (!prefixIni.isEmpty() && QFileInfo::exists(prefixIni)) {
-            WineSaveRouting::Value localPath;
-            const auto route = WineSaveRouting::readValue(
-                prefixIni, QByteArrayLiteral("General"),
-                QByteArrayLiteral("sLocalSavePath"), localPath);
-            if (!route) {
-              log::error("Refusing launch because save routing in '{}' could "
-                         "not be validated: {}",
-                         prefixIni, route.error);
-              return false;
-            }
-            if (localPath.present &&
-                localPath.bytes.trimmed().compare(QByteArrayLiteral("__MO_Saves\\"),
-                                                  Qt::CaseInsensitive) == 0) {
-              log::error("Refusing launch because '{}' still selects the "
-                         "unowned __MO_Saves route; recover the prior launch "
-                         "before disabling profile-local saves",
-                         prefixIni);
-              return false;
-            }
+            log::debug("Patched prefix INI '{}': sLocalSavePath={}", prefixIni,
+                       QString::fromUtf8(managedSaveRoute));
           }
         }
       } else {

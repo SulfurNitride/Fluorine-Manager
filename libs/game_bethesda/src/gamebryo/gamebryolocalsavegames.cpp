@@ -53,8 +53,26 @@ QDir GamebryoLocalSavegames::localGameDirectory() const
   return QDir(m_Game->myGamesPath()).absolutePath();
 }
 
+QString GamebryoLocalSavegames::routingIniName() const
+{
+  return m_IniFileName;
+}
+
+QByteArray GamebryoLocalSavegames::routingPath() const
+{
+  return localSavesDummy().toUtf8();
+}
+
 bool GamebryoLocalSavegames::prepareProfile(MOBase::IProfile* profile)
 {
+#ifndef _WIN32
+  // Fluorine owns Wine save routing as a launch-scoped transaction. Persisting
+  // __MO_Saves here would mutate the prefix during profile selection, outside
+  // the prefix lease, and would leave another owner for launch teardown to
+  // guess. mappings() remains the authoritative save-directory contract.
+  Q_UNUSED(profile);
+  return false;
+#else
   bool enable = profile->localSavesEnabled();
 
   QString basePath    = profile->localSettingsEnabled()
@@ -124,4 +142,5 @@ bool GamebryoLocalSavegames::prepareProfile(MOBase::IProfile* profile)
   }
 
   return enable != alreadyEnabled;
+#endif
 }

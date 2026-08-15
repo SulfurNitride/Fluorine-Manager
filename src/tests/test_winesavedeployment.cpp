@@ -27,6 +27,21 @@
 namespace {
 
 const QString Owner = QStringLiteral("test-launch-owner");
+const QByteArray DefaultRoute = QByteArrayLiteral("__MO_Saves\\");
+
+WineSaveRouting::Result activateDefaultRoute(const QString &ini) {
+  const QString parent = QFileInfo(ini).absolutePath();
+  return WineSaveRouting::activate(
+      ini, Owner, DefaultRoute, QDir(parent).filePath("__MO_Saves"), parent);
+}
+
+WineSaveRouting::Result restoreLegacyRoute(const QString &ini,
+                                           const QString &receipt) {
+  const QString parent = QFileInfo(ini).absolutePath();
+  return WineSaveRouting::restoreConfirmedLegacyReceipt(
+      ini, receipt, ini, DefaultRoute, QDir(parent).filePath("__MO_Saves"),
+      parent);
+}
 
 bool writeBytes(const QString &path, QByteArrayView bytes) {
   if (!QDir().mkpath(QFileInfo(path).absolutePath()))
@@ -1009,7 +1024,7 @@ TEST(WineProfileIniSync, RoutingSanitizesNewestReplacedCaseVariant) {
       "[General]\nsLocalSavePath=Saves\\\nbUseMyGamesDirectory=0\n";
   ASSERT_TRUE(writeBytes(profile, "profile-old"));
   ASSERT_TRUE(writeBytes(exact, original));
-  auto routing = WineSaveRouting::activate(exact, Owner);
+  auto routing = activateDefaultRoute(exact);
   ASSERT_TRUE(routing) << qPrintable(routing.error);
   ASSERT_TRUE(writeBytes(
       lower, "[General]\nsLocalSavePath=__MO_Saves\\\nbUseMyGamesDirectory=1\n"
@@ -1050,7 +1065,7 @@ TEST(WineProfileIniSync, RoutingRestoreAcceptsOwnedCaseAlias) {
   auto result = WineProfileIniSync::deploy(profile, exact, Owner, deployment);
   ASSERT_TRUE(result) << qPrintable(result.error);
   ASSERT_TRUE(QFileInfo(lower).isSymLink());
-  auto routing = WineSaveRouting::activate(exact, Owner);
+  auto routing = activateDefaultRoute(exact);
   ASSERT_TRUE(routing) << qPrintable(routing.error);
   routing = WineSaveRouting::restore(exact, Owner);
   ASSERT_TRUE(routing) << qPrintable(routing.error);
@@ -1079,7 +1094,7 @@ TEST(WineProfileIniSync, DeletedSessionIniDoesNotReplaceTheProfile) {
   auto result = WineProfileIniSync::deploy(profile, exact, Owner, deployment);
   ASSERT_TRUE(result) << qPrintable(result.error);
   ASSERT_TRUE(QFileInfo(lower).isSymLink());
-  auto routing = WineSaveRouting::activate(exact, Owner);
+  auto routing = activateDefaultRoute(exact);
   ASSERT_TRUE(routing) << qPrintable(routing.error);
   ASSERT_TRUE(QFile::remove(exact));
   ASSERT_TRUE(QFileInfo(lower).isSymLink());
@@ -1227,7 +1242,7 @@ TEST(WineSaveRouting, PreservesTrailingBackslashAndAdjacentKeys) {
   ASSERT_TRUE(value.present);
   EXPECT_EQ(value.bytes, "Saves\\");
 
-  result = WineSaveRouting::activate(ini, Owner);
+  result = activateDefaultRoute(ini);
   ASSERT_TRUE(result) << qPrintable(result.error);
   ASSERT_TRUE(result.recoveryRequired);
   result = WineSaveRouting::readValue(ini, "General", "sLocalSavePath", value);
@@ -1246,6 +1261,326 @@ TEST(WineSaveRouting, PreservesTrailingBackslashAndAdjacentKeys) {
   ASSERT_TRUE(result) << qPrintable(result.error);
   EXPECT_EQ(readBytes(ini), original);
   EXPECT_FALSE(QFileInfo::exists(WineSaveRouting::receiptPathFor(ini)));
+}
+
+TEST(WineSaveRouting, DerivesAndAuthenticatesStandardManagedRoute) {
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const QString drive = temporary.filePath("prefix/drive_c");
+  const QString parent =
+      QDir(drive).filePath("users/steamuser/Documents/My Games/Game");
+  const QString ini = QDir(parent).filePath("Game.ini");
+  const QString saves = QDir(parent).filePath("__MO_Saves");
+  ASSERT_TRUE(QDir().mkpath(saves));
+
+  QByteArray route;
+  auto result = WineSaveRouting::routeFor(ini, saves, drive, {}, route);
+  ASSERT_TRUE(result) << qPrintable(result.error);
+  EXPECT_EQ(route, DefaultRoute);
+  bool matches = false;
+  result = WineSaveRouting::routeTargetsDirectory(ini, route, saves, drive,
+                                                  matches);
+  ASSERT_TRUE(result);
+  EXPECT_TRUE(matches);
+}
+
+TEST(WineSaveRouting, DetectsManagedRouteAcrossTheWholeCaseFamily) {
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const QString drive = temporary.filePath("prefix/drive_c");
+  const QString parent =
+      QDir(drive).filePath("users/steamuser/Documents/My Games/Game");
+  const QString exact = QDir(parent).filePath("Game.ini");
+  const QString lower = QDir(parent).filePath("game.ini");
+  const QString saves = QDir(parent).filePath("__MO_Saves");
+  ASSERT_TRUE(QDir().mkpath(saves));
+  const QByteArray exactBytes =
+      "[General]\nsLocalSavePath=Saves\\\nExact=keep\n";
+  const QByteArray lowerBytes =
+      "[General]\nsLocalSavePath=__mo_saves\\\nLower=keep\n";
+  ASSERT_TRUE(writeBytes(exact, exactBytes));
+  ASSERT_TRUE(writeBytes(lower, lowerBytes));
+
+  bool matches = false;
+  auto result = WineSaveRouting::familyTargetsDirectory(
+      exact, saves, drive, matches);
+  ASSERT_TRUE(result) << qPrintable(result.error);
+  EXPECT_TRUE(matches);
+
+  result = WineSaveRouting::activate(exact, Owner, DefaultRoute, saves,
+                                     drive);
+  EXPECT_FALSE(result);
+  EXPECT_EQ(readBytes(exact), exactBytes);
+  EXPECT_EQ(readBytes(lower), lowerBytes);
+  EXPECT_FALSE(QFileInfo::exists(WineSaveRouting::receiptPathFor(exact)));
+}
+
+TEST(WineSaveRouting, DetectsLowerOnlyManagedRoute) {
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const QString drive = temporary.filePath("prefix/drive_c");
+  const QString parent =
+      QDir(drive).filePath("users/steamuser/Documents/My Games/Game");
+  const QString exact = QDir(parent).filePath("Game.ini");
+  const QString lower = QDir(parent).filePath("game.ini");
+  const QString saves = QDir(parent).filePath("__MO_Saves");
+  ASSERT_TRUE(QDir().mkpath(saves));
+  ASSERT_TRUE(writeBytes(
+      lower, "[General]\nsLocalSavePath=__MO_Saves\\\nLower=keep\n"));
+
+  bool matches = false;
+  const auto result = WineSaveRouting::familyTargetsDirectory(
+      exact, saves, drive, matches);
+  ASSERT_TRUE(result) << qPrintable(result.error);
+  EXPECT_TRUE(matches);
+}
+
+TEST(WineSaveRouting, PreservesValidatedEnderalGogSiblingRoute) {
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const QString drive = temporary.filePath("prefix/drive_c");
+  const QString myGames =
+      QDir(drive).filePath("users/steamuser/Documents/My Games");
+  const QString ini =
+      QDir(myGames).filePath("Enderal Special Edition GOG/Enderal.ini");
+  const QString saves =
+      QDir(myGames).filePath("Enderal Special Edition/__MO_Saves");
+  const QByteArray enderalRoute =
+      QByteArrayLiteral("..\\Enderal Special Edition\\__MO_Saves\\");
+  ASSERT_TRUE(QDir().mkpath(QFileInfo(ini).absolutePath()));
+  ASSERT_TRUE(QDir().mkpath(saves));
+  const QByteArray original =
+      "[General]\r\nsLocalSavePath=Saves\\\r\nAdjacent=keep";
+  ASSERT_TRUE(writeBytes(ini, original));
+
+  QByteArray route;
+  auto result = WineSaveRouting::routeFor(ini, saves, drive, enderalRoute,
+                                          route);
+  ASSERT_TRUE(result) << qPrintable(result.error);
+  EXPECT_EQ(route, enderalRoute);
+  EXPECT_FALSE(
+      WineSaveRouting::routeFor(ini, saves, drive, DefaultRoute, route));
+
+  result = WineSaveRouting::activate(ini, Owner, enderalRoute, saves, drive);
+  ASSERT_TRUE(result) << qPrintable(result.error);
+  EXPECT_NE(readBytes(ini).indexOf("sLocalSavePath=" + enderalRoute), -1);
+  result = WineSaveRouting::restore(ini, Owner);
+  ASSERT_TRUE(result) << qPrintable(result.error);
+  EXPECT_EQ(readBytes(ini), original);
+}
+
+TEST(WineSaveRouting, RejectsAbsoluteControlAndOutOfPrefixRoutes) {
+  QTemporaryDir temporary;
+  QTemporaryDir external;
+  ASSERT_TRUE(temporary.isValid());
+  ASSERT_TRUE(external.isValid());
+  const QString drive = temporary.filePath("prefix/drive_c");
+  const QString parent = QDir(drive).filePath("users/steamuser/Documents");
+  const QString ini = QDir(parent).filePath("Game.ini");
+  const QString managed = QDir(parent).filePath("__MO_Saves");
+  ASSERT_TRUE(QDir().mkpath(parent));
+  ASSERT_TRUE(QDir().mkpath(managed));
+  ASSERT_TRUE(writeBytes(ini, "[General]\n"));
+
+  QByteArray route;
+  EXPECT_FALSE(WineSaveRouting::routeFor(
+      ini, external.path(), drive, QByteArrayLiteral("outside\\"), route));
+  EXPECT_FALSE(WineSaveRouting::activate(
+      ini, Owner, QByteArrayLiteral("C:\\outside\\"), managed, drive));
+  EXPECT_FALSE(WineSaveRouting::activate(
+      ini, Owner, QByteArrayLiteral("bad\nroute\\"), managed, drive));
+  EXPECT_FALSE(QFileInfo::exists(WineSaveRouting::receiptPathFor(ini)));
+}
+
+TEST(WineSaveRouting, RestoresUserConfirmedLegacyReceiptAtomically) {
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const QString ini = temporary.filePath("Game.ini");
+  const QString receipt = temporary.filePath("savepath.ini");
+  ASSERT_TRUE(writeBytes(
+      ini, "[General]\r\nsLocalSavePath=__MO_Saves\\\r\n"
+           "bUseMyGamesDirectory=1\r\nAdjacent=keep"));
+  ASSERT_TRUE(writeBytes(
+      receipt, "[General]\nsLocalSavePath=Saves\\\n"
+               "bUseMyGamesDirectory=0\n"));
+
+  auto result = restoreLegacyRoute(ini, receipt);
+  ASSERT_TRUE(result) << qPrintable(result.error);
+  EXPECT_FALSE(QFileInfo::exists(receipt));
+  const QByteArray restored = readBytes(ini);
+  EXPECT_NE(restored.indexOf("sLocalSavePath=Saves\\\r\n"), -1);
+  EXPECT_NE(restored.indexOf("bUseMyGamesDirectory=0\r\n"), -1);
+  EXPECT_NE(restored.indexOf("Adjacent=keep"), -1);
+}
+
+TEST(WineSaveRouting, LegacyRecoveryUsesTheDeployedRouteContext) {
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const QString drive = temporary.filePath("prefix/drive_c");
+  const QString prefixParent =
+      QDir(drive).filePath("users/steamuser/Documents/My Games/Game");
+  const QString prefixIni = QDir(prefixParent).filePath("Game.ini");
+  const QString saves = QDir(prefixParent).filePath("__MO_Saves");
+  const QString profileIni = temporary.filePath("profiles/Default/Game.ini");
+  const QString receipt = temporary.filePath("profiles/Default/savepath.ini");
+  const QByteArray current =
+      "[General]\nsLocalSavePath=__MO_Saves\\\n"
+      "bUseMyGamesDirectory=1\nProfile=keep\n";
+  ASSERT_TRUE(QDir().mkpath(saves));
+  ASSERT_TRUE(writeBytes(prefixIni, current));
+  ASSERT_TRUE(writeBytes(profileIni, current));
+  ASSERT_TRUE(writeBytes(
+      receipt, "[General]\nsLocalSavePath=Saves\\\n"
+               "bUseMyGamesDirectory=0\n"));
+
+  const auto result = WineSaveRouting::restoreConfirmedLegacyReceipt(
+      profileIni, receipt, prefixIni, DefaultRoute, saves, drive);
+  ASSERT_TRUE(result) << qPrintable(result.error);
+  EXPECT_FALSE(QFileInfo::exists(receipt));
+  EXPECT_NE(readBytes(profileIni).indexOf("sLocalSavePath=Saves\\\n"), -1);
+  EXPECT_NE(readBytes(profileIni).indexOf("Profile=keep\n"), -1);
+  EXPECT_EQ(readBytes(prefixIni), current);
+}
+
+TEST(WineSaveRouting, ClearsConfirmedReceiptlessLegacyPair) {
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const QString drive = temporary.filePath("prefix/drive_c");
+  const QString prefixParent =
+      QDir(drive).filePath("users/steamuser/Documents/My Games/Game");
+  const QString prefixIni = QDir(prefixParent).filePath("Game.ini");
+  const QString saves = QDir(prefixParent).filePath("__MO_Saves");
+  const QString profileIni = temporary.filePath("profiles/Default/Game.ini");
+  ASSERT_TRUE(QDir().mkpath(saves));
+  ASSERT_TRUE(writeBytes(
+      profileIni, "[General]\nsLocalSavePath=__MO_Saves\\\n"
+                  "bUseMyGamesDirectory=1\nAdjacent=keep\n"));
+
+  const auto result = WineSaveRouting::clearConfirmedLegacyRoute(
+      profileIni, prefixIni, DefaultRoute, saves, drive);
+  ASSERT_TRUE(result) << qPrintable(result.error);
+  WineSaveRouting::Value value;
+  ASSERT_TRUE(WineSaveRouting::readValue(
+      profileIni, "General", "sLocalSavePath", value));
+  EXPECT_FALSE(value.present);
+  ASSERT_TRUE(WineSaveRouting::readValue(
+      profileIni, "General", "bUseMyGamesDirectory", value));
+  EXPECT_FALSE(value.present);
+  EXPECT_NE(readBytes(profileIni).indexOf("Adjacent=keep\n"), -1);
+}
+
+TEST(WineSaveRouting, LegacyRecoveryPreservesConflictingTargetAndReceipt) {
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const QString ini = temporary.filePath("Game.ini");
+  const QString receipt = temporary.filePath("savepath.ini");
+  const QByteArray current =
+      "[General]\nsLocalSavePath=Other\\\nbUseMyGamesDirectory=1\n";
+  const QByteArray saved =
+      "[General]\nsLocalSavePath=Saves\\\nbUseMyGamesDirectory=0\n";
+  ASSERT_TRUE(writeBytes(ini, current));
+  ASSERT_TRUE(writeBytes(receipt, saved));
+
+  const auto result = restoreLegacyRoute(ini, receipt);
+  EXPECT_FALSE(result);
+  EXPECT_EQ(readBytes(ini), current);
+  EXPECT_EQ(readBytes(receipt), saved);
+}
+
+TEST(WineSaveRouting, LegacyRecoveryRejectsAmbiguousCaseSibling) {
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const QString exact = temporary.filePath("Game.ini");
+  const QString lower = temporary.filePath("game.ini");
+  const QString receipt = temporary.filePath("savepath.ini");
+  const QByteArray exactCurrent =
+      "[General]\nsLocalSavePath=__MO_Saves\\\n"
+      "bUseMyGamesDirectory=1\nExact=keep\n";
+  const QByteArray lowerCurrent =
+      "[General]\nsLocalSavePath=__mo_saves\\\n"
+      "bUseMyGamesDirectory=1\nLower=keep\n";
+  const QByteArray saved =
+      "[General]\nsLocalSavePath=Saves\\\n"
+      "bUseMyGamesDirectory=0\n";
+  ASSERT_TRUE(writeBytes(exact, exactCurrent));
+  ASSERT_TRUE(writeBytes(lower, lowerCurrent));
+  ASSERT_TRUE(writeBytes(receipt, saved));
+
+  const auto result = restoreLegacyRoute(exact, receipt);
+  EXPECT_FALSE(result);
+  EXPECT_EQ(readBytes(exact), exactCurrent);
+  EXPECT_EQ(readBytes(lower), lowerCurrent);
+  EXPECT_EQ(readBytes(receipt), saved);
+}
+
+TEST(WineSaveRouting, LegacyRecoveryPreservesManagedOriginalReceipt) {
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const QString ini = temporary.filePath("Game.ini");
+  const QString receipt = temporary.filePath("savepath.ini");
+  const QByteArray current =
+      "[General]\nsLocalSavePath=__MO_Saves\\\n"
+      "bUseMyGamesDirectory=1\nAdjacent=keep\n";
+  const QByteArray saved =
+      "[General]\nsLocalSavePath=.\\__mo_saves/\n"
+      "bUseMyGamesDirectory=0\n";
+  ASSERT_TRUE(writeBytes(ini, current));
+  ASSERT_TRUE(writeBytes(receipt, saved));
+
+  const auto result = restoreLegacyRoute(ini, receipt);
+  EXPECT_FALSE(result);
+  EXPECT_EQ(readBytes(ini), current);
+  EXPECT_EQ(readBytes(receipt), saved);
+}
+
+TEST(WineSaveRouting, LegacyRecoveryCanRestoreAnOriginallyMissingKey) {
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const QString ini = temporary.filePath("Game.ini");
+  const QString receipt = temporary.filePath("savepath.ini");
+  ASSERT_TRUE(writeBytes(
+      ini, "[General]\nsLocalSavePath=__MO_Saves\\\n"
+           "bUseMyGamesDirectory=1\nAdjacent=keep\n"));
+  ASSERT_TRUE(writeBytes(
+      receipt, "[General]\nbUseMyGamesDirectory=0\n"));
+
+  const auto result = restoreLegacyRoute(ini, receipt);
+  ASSERT_TRUE(result) << qPrintable(result.error);
+  WineSaveRouting::Value value;
+  ASSERT_TRUE(WineSaveRouting::readValue(
+      ini, "General", "sLocalSavePath", value));
+  EXPECT_FALSE(value.present);
+  ASSERT_TRUE(WineSaveRouting::readValue(
+      ini, "General", "bUseMyGamesDirectory", value));
+  ASSERT_TRUE(value.present);
+  EXPECT_EQ(value.bytes, "0");
+  EXPECT_FALSE(QFileInfo::exists(receipt));
+}
+
+TEST(WineSaveRouting, LegacyRecoveryRestoresEmptyAndUnterminatedValues) {
+  for (const QByteArray savedPath :
+       {QByteArray{}, QByteArrayLiteral("Saves")}) {
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+    const QString ini = temporary.filePath("Game.ini");
+    const QString receipt = temporary.filePath("savepath.ini");
+    ASSERT_TRUE(writeBytes(
+        ini, "[General]\nsLocalSavePath=__MO_Saves\\\n"
+             "bUseMyGamesDirectory=1\nAdjacent=keep\n"));
+    ASSERT_TRUE(writeBytes(
+        receipt,
+        QByteArrayLiteral("[General]\nsLocalSavePath=") + savedPath +
+            QByteArrayLiteral("\nbUseMyGamesDirectory=0\n")));
+
+    const auto result = restoreLegacyRoute(ini, receipt);
+    ASSERT_TRUE(result) << qPrintable(result.error);
+    WineSaveRouting::Value value;
+    ASSERT_TRUE(WineSaveRouting::readValue(
+        ini, "General", "sLocalSavePath", value));
+    ASSERT_TRUE(value.present);
+    EXPECT_EQ(value.bytes, savedPath);
+    EXPECT_FALSE(QFileInfo::exists(receipt));
+  }
 }
 
 TEST(WineSaveRouting, DistinctCaseVariantsRestoreTheirOwnValues) {
@@ -1273,7 +1608,7 @@ TEST(WineSaveRouting, DistinctCaseVariantsRestoreTheirOwnValues) {
                                     QFileDevice::FileModificationTime));
   lowerFile.close();
 
-  auto result = WineSaveRouting::activate(exact, Owner);
+  auto result = activateDefaultRoute(exact);
   ASSERT_TRUE(result) << qPrintable(result.error);
   EXPECT_NE(readBytes(exact).indexOf("sLocalSavePath=__MO_Saves\\"), -1);
   EXPECT_NE(readBytes(lower).indexOf("sLocalSavePath=__MO_Saves\\"), -1);
@@ -1297,7 +1632,7 @@ TEST(WineSaveRouting, MissingKeysRemainMissingAfterRestore) {
   ASSERT_TRUE(temporary.isValid());
   const QString ini = temporary.filePath("Game.ini");
   ASSERT_TRUE(writeBytes(ini, "[General]\nAdjacent=keep\n"));
-  auto result = WineSaveRouting::activate(ini, Owner);
+  auto result = activateDefaultRoute(ini);
   ASSERT_TRUE(result) << qPrintable(result.error);
   result = WineSaveRouting::restore(ini, Owner);
   ASSERT_TRUE(result) << qPrintable(result.error);
@@ -1320,7 +1655,7 @@ TEST(WineSaveRouting, PreservesBomAndRecognizesFirstSection) {
       "\xEF\xBB\xBF[General]\r\nsLocalSavePath=Custom\\\r\n";
   ASSERT_TRUE(writeBytes(ini, original));
 
-  auto result = WineSaveRouting::activate(ini, Owner);
+  auto result = activateDefaultRoute(ini);
   ASSERT_TRUE(result) << qPrintable(result.error);
   EXPECT_EQ(readBytes(ini).count("[General]"), 1);
   result = WineSaveRouting::restore(ini, Owner);
@@ -1335,7 +1670,7 @@ TEST(WineSaveRouting, TerminatesExistingSectionBeforeInsertingKeys) {
   const QByteArray original = "[General]";
   ASSERT_TRUE(writeBytes(ini, original));
 
-  auto result = WineSaveRouting::activate(ini, Owner);
+  auto result = activateDefaultRoute(ini);
   ASSERT_TRUE(result) << qPrintable(result.error);
   const QByteArray active = readBytes(ini);
   EXPECT_TRUE(active.startsWith("[General]\n"));
@@ -1350,7 +1685,7 @@ TEST(WineSaveRouting, WrongOwnerCannotRestoreReceipt) {
   ASSERT_TRUE(temporary.isValid());
   const QString ini = temporary.filePath("Game.ini");
   ASSERT_TRUE(writeBytes(ini, "[General]\nsLocalSavePath=Saves\\\n"));
-  ASSERT_TRUE(WineSaveRouting::activate(ini, Owner));
+  ASSERT_TRUE(activateDefaultRoute(ini));
   const auto result =
       WineSaveRouting::restore(ini, QStringLiteral("another-owner"));
   EXPECT_FALSE(result);
@@ -1358,6 +1693,68 @@ TEST(WineSaveRouting, WrongOwnerCannotRestoreReceipt) {
 }
 
 #ifdef Q_OS_UNIX
+TEST(WineSaveRouting, AuthenticatesInPrefixRouteAliasesAndRejectsEscapes) {
+  QTemporaryDir temporary;
+  QTemporaryDir external;
+  ASSERT_TRUE(temporary.isValid());
+  ASSERT_TRUE(external.isValid());
+  const QString drive = temporary.filePath("prefix/drive_c");
+  const QString parent =
+      QDir(drive).filePath("users/steamuser/Documents/My Games/Game");
+  const QString ini = QDir(parent).filePath("Game.ini");
+  const QString saves = QDir(parent).filePath("__MO_Saves");
+  const QString alias = QDir(parent).filePath("Legacy");
+  ASSERT_TRUE(QDir().mkpath(saves));
+  ASSERT_EQ(::symlink(QFile::encodeName(saves).constData(),
+                      QFile::encodeName(alias).constData()),
+            0);
+  ASSERT_TRUE(
+      writeBytes(ini, "[General]\nsLocalSavePath=Legacy\\\n"));
+
+  bool matches = false;
+  auto result = WineSaveRouting::familyTargetsDirectory(
+      ini, saves, drive, matches);
+  ASSERT_TRUE(result) << qPrintable(result.error);
+  EXPECT_TRUE(matches);
+
+  ASSERT_TRUE(QFile::remove(alias));
+  ASSERT_EQ(::symlink(QFile::encodeName(external.path()).constData(),
+                      QFile::encodeName(alias).constData()),
+            0);
+  matches = false;
+  result = WineSaveRouting::familyTargetsDirectory(ini, saves, drive,
+                                                   matches);
+  EXPECT_FALSE(result);
+  EXPECT_FALSE(matches);
+}
+
+TEST(WineSaveRouting, ActivatesAfterManagedLeafBecomesProfileLink) {
+  QTemporaryDir temporary;
+  QTemporaryDir profile;
+  ASSERT_TRUE(temporary.isValid());
+  ASSERT_TRUE(profile.isValid());
+  const QString drive = temporary.filePath("prefix/drive_c");
+  const QString parent =
+      QDir(drive).filePath("users/steamuser/Documents/My Games/Game");
+  const QString ini = QDir(parent).filePath("Game.ini");
+  const QString saves = QDir(parent).filePath("__MO_Saves");
+  ASSERT_TRUE(QDir().mkpath(saves));
+  ASSERT_TRUE(writeBytes(
+      ini, "[General]\nsLocalSavePath=Saves\\\nbUseMyGamesDirectory=0\n"));
+
+  QByteArray route;
+  ASSERT_TRUE(WineSaveRouting::routeFor(ini, saves, drive, {}, route));
+  ASSERT_TRUE(QDir().rmdir(saves));
+  ASSERT_EQ(::symlink(QFile::encodeName(profile.path()).constData(),
+                      QFile::encodeName(saves).constData()),
+            0);
+
+  auto result = WineSaveRouting::activate(ini, Owner, route, saves, drive);
+  ASSERT_TRUE(result) << qPrintable(result.error);
+  result = WineSaveRouting::restore(ini, Owner);
+  ASSERT_TRUE(result) << qPrintable(result.error);
+}
+
 TEST(WineSaveRouting, RejectsLinkedAndSpecialIniLeavesWithoutFollowing) {
   QTemporaryDir temporary;
   QTemporaryDir external;
@@ -1369,13 +1766,13 @@ TEST(WineSaveRouting, RejectsLinkedAndSpecialIniLeavesWithoutFollowing) {
   ASSERT_EQ(::symlink(QFile::encodeName(outside).constData(),
                       QFile::encodeName(linked).constData()),
             0);
-  auto result = WineSaveRouting::activate(linked, Owner);
+  auto result = activateDefaultRoute(linked);
   EXPECT_FALSE(result);
   EXPECT_EQ(readBytes(outside), "[General]\nsLocalSavePath=outside\\\n");
 
   const QString fifo = temporary.filePath("routing.ini");
   ASSERT_EQ(::mkfifo(QFile::encodeName(fifo).constData(), 0600), 0);
-  result = WineSaveRouting::activate(fifo, Owner);
+  result = activateDefaultRoute(fifo);
   EXPECT_FALSE(result);
   struct stat status;
   ASSERT_EQ(::lstat(QFile::encodeName(fifo).constData(), &status), 0);
