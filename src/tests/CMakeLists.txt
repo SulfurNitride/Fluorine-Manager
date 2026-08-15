@@ -70,6 +70,15 @@ set_tests_properties(test_collection_surface PROPERTIES
     TIMEOUT 10
 )
 add_test(
+    NAME test_instance_unregister_surface
+    COMMAND ${Python3_EXECUTABLE} -m unittest -v
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_instance_unregister_surface.py
+)
+set_tests_properties(test_instance_unregister_surface PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    TIMEOUT 10
+)
+add_test(
     NAME test_nexus_cache_surface
     COMMAND ${Python3_EXECUTABLE} -m unittest -v
             ${CMAKE_CURRENT_SOURCE_DIR}/test_nexus_cache_surface.py
@@ -1333,6 +1342,27 @@ target_link_libraries(test_profilerename PRIVATE
 add_test(NAME test_profilerename COMMAND test_profilerename)
 set_tests_properties(test_profilerename PROPERTIES TIMEOUT 10)
 
+add_executable(test_instanceunregister EXCLUDE_FROM_ALL
+    test_instanceunregister.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/instanceunregister.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/instancepathidentity.cpp
+)
+set_target_properties(test_instanceunregister PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_instanceunregister PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_instanceunregister PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_instanceunregister COMMAND test_instanceunregister)
+set_tests_properties(test_instanceunregister PROPERTIES TIMEOUT 10)
+
 add_executable(test_morrowindpluginlistwriter EXCLUDE_FROM_ALL
     test_morrowindpluginlistwriter.cpp
     ${CMAKE_SOURCE_DIR}/libs/game_bethesda/src/games/morrowind/morrowindpluginlistwriter.cpp
@@ -1492,7 +1522,7 @@ add_custom_target(fluorine-tests
             test_downloadwritelifecycle test_nexuscachedirectory
             test_transactionalwritefile test_registry test_wineregistryfile
             test_protondxvkconfig test_gamebryoiniseeder test_texteditorsave
-            test_profilemodlistrename test_profilerename
+            test_profilemodlistrename test_profilerename test_instanceunregister
             test_morrowindpluginlistwriter test_winepluginlistsync
             test_winesavedeployment test_winesavetargetresolver
             test_prefixsymlinktransaction)

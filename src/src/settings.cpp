@@ -18,6 +18,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include "settings.h"
+#include "instanceunregister.h"
 #include <fluorine_build_info.h>
 #include "categoryassignmentpolicy.h"
 #include "env.h"
@@ -3081,25 +3082,66 @@ QStringList GlobalSettings::portableInstances()
   return settings().value("PortableInstances").toStringList();
 }
 
-void GlobalSettings::addPortableInstance(const QString& path)
+bool GlobalSettings::addPortableInstance(const QString& path)
 {
-  g_GlobalSettingsWriteBarrier.runIfAllowed([&] {
-    const QString canonical = QDir(path).absolutePath();
-    QStringList list = portableInstances();
-    if (!list.contains(canonical)) {
-      list.append(canonical);
-      settings().setValue("PortableInstances", list);
+  bool saved = false;
+  const bool admitted = g_GlobalSettingsWriteBarrier.runIfAllowed([&] {
+    auto backend = std::make_unique<QSettings>(QStringLiteral("Mod Organizer Team"),
+                                               QStringLiteral("Mod Organizer"));
+    const auto result = InstanceUnregister::updatePortableRegistration(
+        *backend, path, /*registered=*/true);
+    saved = static_cast<bool>(result);
+    if (!saved) {
+      log::error("could not register portable instance '{}': {}", path,
+                 result.error);
+      if (result.status == InstanceUnregister::RegistryStatus::RollbackFailed) {
+        (void)backend.release();
+        g_GlobalSettingsWriteBarrier.suppress();
+      }
     }
   });
+  return admitted && saved;
 }
 
-void GlobalSettings::removePortableInstance(const QString& path)
+bool GlobalSettings::removePortableInstance(const QString& path)
 {
-  g_GlobalSettingsWriteBarrier.runIfAllowed([&] {
-    const QString canonical = QDir(path).absolutePath();
-    QStringList list = portableInstances();
-    if (list.removeAll(canonical) > 0) {
-      settings().setValue("PortableInstances", list);
+  bool saved = false;
+  const bool admitted = g_GlobalSettingsWriteBarrier.runIfAllowed([&] {
+    auto backend = std::make_unique<QSettings>(QStringLiteral("Mod Organizer Team"),
+                                               QStringLiteral("Mod Organizer"));
+    const auto result = InstanceUnregister::updatePortableRegistration(
+        *backend, path, /*registered=*/false);
+    saved = static_cast<bool>(result);
+    if (!saved) {
+      log::error("could not unregister portable instance '{}': {}", path,
+                 result.error);
+      if (result.status == InstanceUnregister::RegistryStatus::RollbackFailed) {
+        (void)backend.release();
+        g_GlobalSettingsWriteBarrier.suppress();
+      }
     }
   });
+  return admitted && saved;
+}
+
+bool GlobalSettings::replacePortableInstance(const QString& oldPath,
+                                             const QString& newPath)
+{
+  bool saved = false;
+  const bool admitted = g_GlobalSettingsWriteBarrier.runIfAllowed([&] {
+    auto backend = std::make_unique<QSettings>(QStringLiteral("Mod Organizer Team"),
+                                               QStringLiteral("Mod Organizer"));
+    const auto result = InstanceUnregister::replacePortableRegistration(
+        *backend, oldPath, newPath);
+    saved = static_cast<bool>(result);
+    if (!saved) {
+      log::error("could not update renamed portable instance '{}' -> '{}': {}",
+                 oldPath, newPath, result.error);
+      if (result.status == InstanceUnregister::RegistryStatus::RollbackFailed) {
+        (void)backend.release();
+        g_GlobalSettingsWriteBarrier.suppress();
+      }
+    }
+  });
+  return admitted && saved;
 }

@@ -322,8 +322,10 @@ public:
   // persistent registry of portable instance paths (stored in GlobalSettings)
   //
   static QStringList registeredPortablePaths() ;
-  static void registerPortableInstance(const QString& path);
-  static void unregisterPortableInstance(const QString& path);
+  static bool registerPortableInstance(const QString& path);
+  static bool unregisterPortableInstance(const QString& path);
+  static bool replacePortableInstance(const QString& oldPath,
+                                      const QString& newPath);
 
 private:
   InstanceManager();

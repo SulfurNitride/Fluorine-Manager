@@ -3,6 +3,7 @@
 #include "filesystemutilities.h"
 #include "instancepathidentity.h"
 #include "instancemanager.h"
+#include "instanceunregister.h"
 #include "plugincontainer.h"
 #include "restarttransaction.h"
 #include "selectiondialog.h"
@@ -25,6 +26,8 @@
 #include <log.h>
 #include "slrmanager.h"
 #include <report.h>
+
+#include <algorithm>
 #include <utility.h>
 
 using namespace MOBase;
@@ -292,16 +295,24 @@ void InstanceManagerDialog::updateInstances()
   });
 
   // add registered portable instances (non-default paths)
-  const QString defaultPortable = QDir(InstanceManager::portablePath()).absolutePath();
+  const QString defaultPortable =
+      QDir(InstanceManager::portablePath()).absolutePath();
+  QStringList addedPortablePaths;
   for (const auto& path : InstanceManager::registeredPortablePaths()) {
-    // skip the default portable path (handled separately below)
-    if (QDir(path).absolutePath() == defaultPortable) {
+    // Skip the default portable path and physical aliases of it (handled
+    // separately below), as well as duplicate spellings of one portable root.
+    if (instance_path::sameDirectoryOrPath(path, defaultPortable) ||
+        std::any_of(addedPortablePaths.cbegin(), addedPortablePaths.cend(),
+                    [&](const QString& added) {
+                      return instance_path::sameDirectoryOrPath(path, added);
+                    })) {
       continue;
     }
     // skip paths where ModOrganizer.ini no longer exists
     if (!QFileInfo::exists(QDir(path).filePath("ModOrganizer.ini"))) {
       continue;
     }
+    addedPortablePaths.append(path);
     m_instances.push_back(std::make_unique<Instance>(path, true));
   }
 
@@ -534,9 +545,22 @@ void InstanceManagerDialog::rename()
 
   // portable instances are tracked by absolute path in GlobalSettings; update
   // the registry so the renamed dir keeps showing up in the list.
-  if (wasPortable) {
-    InstanceManager::unregisterPortableInstance(src);
-    InstanceManager::registerPortableInstance(dest);
+  if (wasPortable && !InstanceManager::replacePortableInstance(src, dest)) {
+    const auto rollback = shell::Rename(QFileInfo(dest), QFileInfo(src), false);
+    QMessageBox::critical(
+        this, tr("Rename instance"),
+        rollback
+            ? tr("The portable instance registry could not be saved. The "
+                 "directory rename was rolled back.")
+            : tr("The portable instance registry could not be saved, and the "
+                 "directory rename could not be rolled back: %1\n\nThe "
+                 "instance remains at: %2")
+                  .arg(rollback.toString(), dest));
+    if (!rollback) {
+      updateInstances();
+      updateList();
+    }
+    return;
   }
 
   // updating ui
@@ -589,11 +613,26 @@ void InstanceManagerDialog::removeFromList()
     return;
   }
 
+  if (i->isPortable() && instance_path::sameDirectoryOrPath(
+                             i->directory(), InstanceManager::portablePath())) {
+    QMessageBox::information(
+        this, tr("Remove from list"),
+        tr("The built-in portable instance is discovered from the application "
+           "directory and cannot be removed from the list."));
+    return;
+  }
+
   const auto r = QMessageBox::question(
       this, tr("Remove from list"),
-      tr("Remove \"%1\" from the instance list?\n\n"
-         "No files will be deleted.")
-          .arg(i->displayName()),
+      i->isPortable()
+          ? tr("Remove \"%1\" from the instance list?\n\n"
+               "No files will be deleted.")
+                .arg(i->displayName())
+          : tr("Remove \"%1\" from the instance list?\n\n"
+               "No files will be deleted. Its ModOrganizer.ini will be renamed "
+               "to ModOrganizer.ini.disabled; rename it back manually to "
+               "restore this global instance.")
+                .arg(i->displayName()),
       QMessageBox::Yes | QMessageBox::Cancel);
 
   if (r != QMessageBox::Yes) {
@@ -605,15 +644,28 @@ void InstanceManagerDialog::removeFromList()
   }
 
   if (i->isPortable()) {
-    InstanceManager::unregisterPortableInstance(i->directory());
+    if (!InstanceManager::unregisterPortableInstance(i->directory())) {
+      QMessageBox::critical(
+          this, tr("Remove from list"),
+          tr("The portable instance registry could not be saved. The list was "
+             "not refreshed."));
+      return;
+    }
   } else {
     // for global instances, rename the INI so it's no longer auto-discovered
     const QString ini = i->iniPath();
-    if (!ini.isEmpty() && QFile::exists(ini)) {
-      if (!validateFilesystemTargets({ini}, tr("Remove from list"))) {
-        return;
-      }
-      QFile::rename(ini, ini + ".disabled");
+    if (ini.isEmpty() || !validateFilesystemTargets({ini},
+                                                     tr("Remove from list"))) {
+      return;
+    }
+    const auto disabled = InstanceUnregister::disableGlobalIni(ini);
+    if (!disabled) {
+      QMessageBox::critical(
+          this, tr("Remove from list"),
+          tr("The instance could not be removed from the list. No existing "
+             "disabled INI was replaced.\n\n%1\n\nSource: %2\nDestination: %3")
+              .arg(disabled.error, disabled.sourcePath, disabled.disabledPath));
+      return;
     }
   }
 
@@ -714,8 +766,14 @@ void InstanceManagerDialog::deleteInstance()
   }
 
   // unregister portable instance from the persistent list
-  if (i->isPortable()) {
-    InstanceManager::singleton().unregisterPortableInstance(i->directory());
+  if (i->isPortable() &&
+      !InstanceManager::singleton().unregisterPortableInstance(i->directory())) {
+    QMessageBox::warning(
+        this, tr("Deleting instance"),
+        tr("The instance files were deleted, but its portable-list entry could "
+           "not be removed. Fluorine will ignore the stale entry while the INI "
+           "is absent. Remove the stale entry after registry access is "
+           "restored."));
   }
 
   // updating ui
@@ -956,6 +1014,16 @@ void InstanceManagerDialog::fillData(const Instance& ii)
 
   setButtonsEnabled(true);
 
+  const bool builtInPortable =
+      ii.isPortable() && instance_path::sameDirectoryOrPath(
+                             ii.directory(), InstanceManager::portablePath());
+  ui->removeFromList->setEnabled(!builtInPortable);
+  ui->removeFromList->setToolTip(
+      builtInPortable
+          ? tr("The built-in portable instance is always discovered from the "
+               "application directory.")
+          : QString{});
+
   const auto& m = InstanceManager::singleton();
 
   ui->rename->setEnabled(!ii.isActive());
@@ -1035,16 +1103,21 @@ void InstanceManagerDialog::openExistingPortable()
 
   // Register the portable instance so it persists in the sidebar
   auto& m = InstanceManager::singleton();
-  InstanceManager::registerPortableInstance(dir);
+  if (!InstanceManager::registerPortableInstance(dir)) {
+    QMessageBox::critical(
+        this, tr("Open existing portable"),
+        tr("The portable instance registry could not be saved. The list was "
+           "not refreshed."));
+    return;
+  }
 
   // Refresh the instance list and select the newly added entry
   updateInstances();
   updateList();
 
   // Find and select the new instance by directory
-  const QString canonical = QDir(dir).absolutePath();
   for (std::size_t i = 0; i < m_instances.size(); ++i) {
-    if (QDir(m_instances[i]->directory()).absolutePath() == canonical) {
+    if (instance_path::sameDirectoryOrPath(m_instances[i]->directory(), dir)) {
       select(i);
       break;
     }

@@ -1073,8 +1073,10 @@ public:
 
   // persistent registry of portable instance paths
   static QStringList portableInstances();
-  static void addPortableInstance(const QString& path);
-  static void removePortableInstance(const QString& path);
+  static bool addPortableInstance(const QString& path);
+  static bool removePortableInstance(const QString& path);
+  static bool replacePortableInstance(const QString& oldPath,
+                                      const QString& newPath);
 
 private:
   static QSettings settings();

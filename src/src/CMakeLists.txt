@@ -77,6 +77,7 @@ list(APPEND ORGANIZER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/legacyflatpakmigration.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/instancegeneralsettings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/instancepathidentity.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/instanceunregister.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lootmanager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/multiprocessprotocol.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nexuscachedirectory.cpp

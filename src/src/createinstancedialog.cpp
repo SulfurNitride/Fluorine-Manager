@@ -393,6 +393,17 @@ void CreateInstanceDialog::finish()
       if (launcher.status == portable_launcher_script::Status::Failed) {
         logCreation(tr("Warning: %1").arg(launcher.error));
       }
+
+      // Persist non-default portable instances before committing newly
+      // created directories. A registry failure then follows the existing
+      // creation rollback instead of leaving an unlisted finished instance.
+      const auto defaultPortable =
+          QDir(InstanceManager::singleton().portablePath()).absolutePath();
+      if (QDir(ci.dataPath).absolutePath() != defaultPortable &&
+          !InstanceManager::singleton().registerPortableInstance(ci.dataPath)) {
+        logCreation(tr("The portable instance registry could not be saved."));
+        throw Failed();
+      }
     }
 
     // committing all the directories so they don't get deleted
@@ -401,15 +412,6 @@ void CreateInstanceDialog::finish()
     }
 
     logCreation(tr("Done."));
-
-    // register non-default portable instances so they appear in the sidebar
-    if (ci.type == Portable) {
-      const auto defaultPortable =
-          QDir(InstanceManager::singleton().portablePath()).absolutePath();
-      if (QDir(ci.dataPath).absolutePath() != defaultPortable) {
-        InstanceManager::singleton().registerPortableInstance(ci.dataPath);
-      }
-    }
 
     // launch the new instance
     if (ui->launch->isChecked()) {

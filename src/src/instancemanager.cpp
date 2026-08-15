@@ -747,14 +747,23 @@ QStringList InstanceManager::registeredPortablePaths()
   return GlobalSettings::portableInstances();
 }
 
-void InstanceManager::registerPortableInstance(const QString& path)
+bool InstanceManager::registerPortableInstance(const QString& path)
 {
-  GlobalSettings::addPortableInstance(path);
+  if (instance_path::sameDirectoryOrPath(path, portablePath())) {
+    return true;
+  }
+  return GlobalSettings::addPortableInstance(path);
 }
 
-void InstanceManager::unregisterPortableInstance(const QString& path)
+bool InstanceManager::unregisterPortableInstance(const QString& path)
 {
-  GlobalSettings::removePortableInstance(path);
+  return GlobalSettings::removePortableInstance(path);
+}
+
+bool InstanceManager::replacePortableInstance(const QString& oldPath,
+                                              const QString& newPath)
+{
+  return GlobalSettings::replacePortableInstance(oldPath, newPath);
 }
 
 std::unique_ptr<Instance> selectInstance()
