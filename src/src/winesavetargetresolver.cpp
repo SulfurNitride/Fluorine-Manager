@@ -155,13 +155,17 @@ Plan resolve(const QString &prefixDriveRoot, const QString &prefixUserRoot,
                      .kind = Kind::PrefixRouted,
                      .livePath = QDir::cleanPath(translated),
                      .topologyRoot = canonicalWithMissingTail(prefixDriveRoot)};
-      } else if (allowFixedGameDirectory) {
+      } else if (!allowFixedGameDirectory &&
+                 samePath(mapping.destination, gameSavesPath)) {
+        candidate = {.success = true,
+                     .kind = Kind::VfsOwned,
+                     .livePath = physicalGameSaves,
+                     .topologyRoot = physicalGameRoot};
+      } else {
         return failure(
             QStringLiteral(
                 "Profile save mapping targets unsupported directory '%1'.")
                 .arg(mapping.destination));
-      } else {
-        continue;
       }
     }
 

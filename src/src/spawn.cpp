@@ -21,7 +21,6 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "env.h"
 #include "envmodule.h"
-#include "fluorineconfig.h"
 #include "processlifetime.h"
 #include "protonlauncher.h"
 #include "rootprocesscompletion.h"
@@ -191,83 +190,6 @@ uint32_t parseSteamAppId(const QString& steamAppId)
   return (ok ? n : 0u);
 }
 
-QString firstExistingSetting(const QSettings& settings, const QStringList& keys)
-{
-  for (const QString& key : keys) {
-    const QString value = settings.value(key).toString().trimmed();
-    if (!value.isEmpty()) {
-      return value;
-    }
-  }
-
-  return {};
-}
-
-QString resolvePrefixPath()
-{
-  // The Fluorine config is authoritative: it's the prefix the user
-  // explicitly created through Settings > Proton and that Fluorine itself
-  // initialises with wineboot/DLL installs. Always prefer it.
-  if (auto cfg = FluorineConfig::load(); cfg.has_value() && cfg->prefixExists()) {
-    MOBase::log::debug("resolvePrefixPath: using Fluorine config prefix '{}'",
-                       cfg->prefix_path);
-    return cfg->prefix_path.trimmed();
-  }
-
-  const Settings* settings = Settings::maybeInstance();
-  if (settings == nullptr) {
-    return {};
-  }
-
-  // Fallbacks, in priority order. `fluorine/prefix_path` is set only by
-  // explicit user action (CLI `--prefix` or the instance creation wizard),
-  // so we trust it above the `Settings/*` keys that game-detection can
-  // populate automatically with an external manager's prefix (Heroic,
-  // Bottles, Lutris). Those external prefixes are fine as discovery hints
-  // but must not silently override the user's chosen Fluorine prefix —
-  // see issue #52.
-  const QSettings instanceSettings(settings->filename(), QSettings::IniFormat);
-  const QString explicitPath =
-      instanceSettings.value("fluorine/prefix_path").toString().trimmed();
-  if (!explicitPath.isEmpty()) {
-    MOBase::log::debug("resolvePrefixPath: using explicit fluorine/prefix_path '{}'",
-                       explicitPath);
-    return explicitPath;
-  }
-
-  const QString fallback = firstExistingSetting(
-      instanceSettings, {"Settings/proton_prefix_path", "Settings/prefix_path",
-                         "Proton/prefix_path"});
-  if (!fallback.isEmpty()) {
-    MOBase::log::warn(
-        "resolvePrefixPath: falling back to auto-detected prefix '{}' — this "
-        "may point at an external manager's prefix (Heroic/Bottles). Create a "
-        "Fluorine prefix in Settings > Proton to override.",
-        fallback);
-  }
-  return fallback;
-}
-
-QString resolveProtonPath()
-{
-  if (auto cfg = FluorineConfig::load(); cfg.has_value()) {
-    const QString protonPath = cfg->proton_path.trimmed();
-    if (!protonPath.isEmpty()) {
-      return protonPath;
-    }
-  }
-
-  const Settings* settings = Settings::maybeInstance();
-  if (settings == nullptr) {
-    return {};
-  }
-
-  const QSettings instanceSettings(settings->filename(), QSettings::IniFormat);
-  return firstExistingSetting(
-      instanceSettings,
-      {"Settings/proton_path", "Proton/path", "fluorine/proton_path"});
-}
-
 int spawn(const SpawnParameters& sp,
           process_lifetime::LaunchReceipt& receipt)
 {
@@ -302,6 +224,31 @@ int spawn(const SpawnParameters& sp,
   }
 
   if (sp.useProton) {
+    const WineRuntimeConfig::Snapshot activeRuntime =
+        WineRuntimeConfig::current();
+    QString runtimeError;
+    if (!sp.wineRuntime.prefixError.isEmpty() ||
+        sp.wineRuntime.prefixPath.isEmpty() ||
+        !sp.wineRuntime.protonError.isEmpty() ||
+        sp.wineRuntime.protonPath.isEmpty()) {
+      MOBase::log::error("Prepared Wine runtime is incomplete: {}",
+                         !sp.wineRuntime.prefixError.isEmpty()
+                             ? sp.wineRuntime.prefixError
+                         : !sp.wineRuntime.protonError.isEmpty()
+                             ? sp.wineRuntime.protonError
+                             : QStringLiteral("prefix or Proton path is empty"));
+      return ENOENT;
+    }
+    if (sp.wineRuntime.generation == 0 ||
+        activeRuntime.generation != sp.wineRuntime.generation ||
+        !WineRuntimeConfig::revalidate(sp.wineRuntime, &runtimeError)) {
+      MOBase::log::error("Wine runtime changed after launch preparation: {}",
+                         runtimeError.isEmpty()
+                             ? QStringLiteral("setup generation mismatch")
+                             : runtimeError);
+      return ESTALE;
+    }
+
     // Read per-instance settings from the instance INI (not the global QSettings).
     const Settings* instanceForLaunch = Settings::maybeInstance();
     bool useSteamDrm                  = true;
@@ -316,7 +263,7 @@ int spawn(const SpawnParameters& sp,
         .setStoreVariant(storeVariant)
         .setUseSLR(true);
 
-    const QString configuredPrefix = resolvePrefixPath();
+    const QString configuredPrefix = sp.wineRuntime.prefixPath;
     QString prefixPath = configuredPrefix;
     if (sp.saveDeployment.mode != SaveDeploymentMode::None) {
       prefixPath = sp.saveDeployment.prefixPath;
@@ -340,9 +287,10 @@ int spawn(const SpawnParameters& sp,
     } else {
       MOBase::log::info("Using Wine prefix: {}", prefixPath);
       launcher.setPrefix(prefixPath);
+      launcher.setCompatDataPath(sp.wineRuntime.compatDataPath);
     }
 
-    const QString protonPath = resolveProtonPath();
+    const QString protonPath = sp.wineRuntime.protonPath;
     if (!protonPath.isEmpty()) {
       launcher.setProtonPath(protonPath);
     }
@@ -578,7 +526,7 @@ process_lifetime::LaunchReceipt startBinary(QWidget* parent,
   const auto e = spawn::spawn(sp, receipt);
 
   if (e != 0) {
-    if (e == ENOENT && sp.useProton && !FluorineConfig::isSetup()) {
+    if (e == ENOENT && sp.useProton && sp.wineRuntime.prefixPath.isEmpty()) {
       QMessageBox::critical(
           parent, QObject::tr("No Wine Prefix"),
           QObject::tr("No Wine prefix has been configured for this instance.\n\n"

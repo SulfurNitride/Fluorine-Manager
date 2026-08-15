@@ -16,6 +16,8 @@
 #include <uibase/log.h>
 #include <uibase/transactionalwritefile.h>
 
+#include <memory>
+
 namespace
 {
 constexpr const char* BackupIniSuffix = ".mo2linux_backup";
@@ -52,8 +54,13 @@ QStringList findCaseVariants(const QString& path)
 
 }  // namespace
 
-WinePrefix::WinePrefix(const QString& prefixPath)
-    : m_prefixPath(QDir::cleanPath(prefixPath))
+WinePrefix::WinePrefix(const QString& prefixPath,
+                       const QString& userProfilePath)
+    : m_prefixPath(QDir::cleanPath(prefixPath)),
+      m_userProfilePath(userProfilePath.isEmpty()
+                            ? QDir(QDir::cleanPath(prefixPath))
+                                  .filePath("drive_c/users/steamuser")
+                            : QDir::cleanPath(userProfilePath))
 {
   MOBase::log::debug("WinePrefix: initialized with path '{}'", m_prefixPath);
 }
@@ -70,7 +77,7 @@ QString WinePrefix::driveC() const
 
 QString WinePrefix::documentsPath() const
 {
-  return QDir(driveC()).filePath("users/steamuser/Documents");
+  return QDir(m_userProfilePath).filePath("Documents");
 }
 
 QString WinePrefix::myGamesPath() const
@@ -80,12 +87,12 @@ QString WinePrefix::myGamesPath() const
 
 QString WinePrefix::appdataLocal() const
 {
-  return QDir(driveC()).filePath("users/steamuser/AppData/Local");
+  return QDir(m_userProfilePath).filePath("AppData/Local");
 }
 
 QString WinePrefix::userProfilePath() const
 {
-  return QDir(driveC()).filePath("users/steamuser");
+  return m_userProfilePath;
 }
 
 bool WinePrefix::deployPlugins(const QStringList& plugins, const QString& dataDir,
@@ -279,6 +286,7 @@ void WinePrefix::restoreStaleBackups() const
   }
 
   QLockFile prefixLease(WineSaveDeployment::leasePathFor(m_prefixPath, QString{}));
+  prefixLease.setStaleLockTime(0);
   if (!prefixLease.tryLock(0) &&
       (!prefixLease.removeStaleLockFile() || !prefixLease.tryLock(0))) {
     MOBase::log::warn(
@@ -539,19 +547,27 @@ bool WinePrefix::readHklmValues(QList<WineRegistryFile::Query>& queries,
 }
 
 bool WinePrefix::writeHklmValues(const QList<WineRegistryFile::Update>& updates,
-                                 QString* error) const
+                                 QString* error, bool prefixLeaseHeld) const
 {
-  QLockFile prefixLease(WineSaveDeployment::leasePathFor(m_prefixPath, QString{}));
-  if (!prefixLease.tryLock(0) &&
-      (!prefixLease.removeStaleLockFile() || !prefixLease.tryLock(0)))
+  std::unique_ptr<QLockFile> prefixLease;
+  if (!prefixLeaseHeld)
   {
-    if (error != nullptr)
+    prefixLease = std::make_unique<QLockFile>(
+        WineSaveDeployment::leasePathFor(m_prefixPath, QString{}));
+    prefixLease->setStaleLockTime(0);
+    if (!prefixLease->tryLock(0) &&
+        (!prefixLease->removeStaleLockFile() || !prefixLease->tryLock(0)))
     {
-      *error = QStringLiteral("The Wine prefix is active in another Fluorine process.");
+      if (error != nullptr)
+      {
+        *error =
+            QStringLiteral("The Wine prefix is active in another Fluorine process.");
+      }
+      return false;
     }
-    return false;
   }
-  if (WineSaveDeployment::hasPersistedSessionLease(m_prefixPath))
+  if (!prefixLeaseHeld &&
+      WineSaveDeployment::hasPersistedSessionLease(m_prefixPath))
   {
     if (error != nullptr)
     {
@@ -570,20 +586,29 @@ bool WinePrefix::writeHklmValues(const QList<WineRegistryFile::Update>& updates,
   return static_cast<bool>(result);
 }
 
-bool WinePrefix::pruneExtraDrives(QStringList& removed, QString* error) const
+bool WinePrefix::pruneExtraDrives(QStringList& removed, QString* error,
+                                  bool prefixLeaseHeld) const
 {
   removed.clear();
-  QLockFile prefixLease(WineSaveDeployment::leasePathFor(m_prefixPath, QString{}));
-  if (!prefixLease.tryLock(0) &&
-      (!prefixLease.removeStaleLockFile() || !prefixLease.tryLock(0)))
+  std::unique_ptr<QLockFile> prefixLease;
+  if (!prefixLeaseHeld)
   {
-    if (error != nullptr)
+    prefixLease = std::make_unique<QLockFile>(
+        WineSaveDeployment::leasePathFor(m_prefixPath, QString{}));
+    prefixLease->setStaleLockTime(0);
+    if (!prefixLease->tryLock(0) &&
+        (!prefixLease->removeStaleLockFile() || !prefixLease->tryLock(0)))
     {
-      *error = QStringLiteral("The Wine prefix is active in another Fluorine process.");
+      if (error != nullptr)
+      {
+        *error =
+            QStringLiteral("The Wine prefix is active in another Fluorine process.");
+      }
+      return false;
     }
-    return false;
   }
-  if (WineSaveDeployment::hasPersistedSessionLease(m_prefixPath))
+  if (!prefixLeaseHeld &&
+      WineSaveDeployment::hasPersistedSessionLease(m_prefixPath))
   {
     if (error != nullptr)
     {

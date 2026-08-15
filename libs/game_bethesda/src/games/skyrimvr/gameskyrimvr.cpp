@@ -53,6 +53,7 @@ QString GameSkyrimVR::identifyGamePath() const
 
 QDir GameSkyrimVR::savesDirectory() const
 {
+  if (m_MyGamesPath.isEmpty()) return {};
   return QDir(m_MyGamesPath + "/Saves");
 }
 
@@ -296,10 +297,12 @@ QDir GameSkyrimVR::gameDirectory() const
 MappingType GameSkyrimVR::mappings() const
 {
   MappingType result;
+  const QString appData = localAppFolder();
+  if (appData.isEmpty()) return result;
 
   for (const QString& profileFile : {"plugins.txt", "loadorder.txt"}) {
     result.push_back({m_Organizer->profilePath() + "/" + profileFile,
-                      localAppFolder() + "/" + gameName() + "/" + profileFile, false});
+                      QDir(appData).filePath(gameName() + "/" + profileFile), false});
   }
 
   return result;

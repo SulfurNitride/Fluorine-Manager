@@ -29,6 +29,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <unistd.h>
 
 #include "wineprofileinisync.h"
+#include "wineruntimeconfig.h"
 #include <cstdint>
 
 class QProcess;
@@ -54,6 +55,9 @@ struct SaveDeploymentReceipt
 {
   SaveDeploymentMode mode{SaveDeploymentMode::None};
   QString prefixPath;
+  WineRuntimeConfig::Snapshot wineRuntime;
+  QString runtimeUserProfilePath;
+  QStringList pluginDataDirNames;
   QString profileRoot;
   QString livePath;
   // Physical root that owns the save topology. Ordinarily this is drive_c;
@@ -74,6 +78,7 @@ struct SaveDeploymentReceipt
   bool sessionLeasePublished{false};
   bool secondarySessionLeasePublished{false};
   bool fixedGameDirectory{false};
+  bool pluginProjectionOwned{false};
   bool topologyRestored{false};
   bool deploymentCleanupPending{false};
 
@@ -141,6 +146,9 @@ struct SpawnParameters
   // after spawn so a delayed wait cannot attach launch metadata to a newer
   // process that happens to receive the same PID.
   std::uint64_t lifetimeRootStartTime = 0;
+  // Immutable setup-generation authority captured before launch reservation.
+  // No launch participant may re-read mutable INI/JSON configuration.
+  WineRuntimeConfig::Snapshot wineRuntime;
 };
 
 bool checkSteam(QWidget* parent, const SpawnParameters& sp, const QDir& gameDirectory,

@@ -22,6 +22,7 @@ namespace WineSaveTargetResolver {
 enum class Kind {
   PrefixRouted,
   FixedGameDirectory,
+  VfsOwned,
 };
 
 struct Plan {
@@ -36,8 +37,9 @@ struct Plan {
 
 // Resolves the exact profile-save mapping before falling back to the ordinary
 // Bethesda Wine-user layout. A matching mapping with an unsupported target is
-// an error: silently inventing a different destination would create two save
-// owners.
+// an error unless it is the plugin-authorized exact save target, in which case
+// the launch VFS remains its sole owner. Silently inventing a different
+// destination would create two save owners.
 Plan resolve(const QString &prefixDriveRoot, const QString &prefixUserRoot,
              const QString &prefixMyGamesRoot, const QString &fallbackGameName,
              const QString &gameRoot, const QString &gameSavesPath,

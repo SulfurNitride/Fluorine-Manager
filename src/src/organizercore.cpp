@@ -9,7 +9,6 @@
 #include "envmodule.h"
 #include "filedialogmemory.h"
 #include "fluorine_build_info.h"
-#include "fluorineconfig.h"
 #include "fluorineupdater.h"
 #include "guessedvalue.h"
 #include "imodinterface.h"
@@ -45,6 +44,7 @@
 #include "vfsbackend.h"
 #include "virtualfiletree.h"
 #include "wineprefix.h"
+#include "wineruntimeconfig.h"
 #include "winesavedeployment.h"
 #include "winesaverouting.h"
 #include "winesavetargetresolver.h"
@@ -341,38 +341,6 @@ QStringList toStringList(InputIterator current, InputIterator end)
   return result;
 }
 
-QString resolveWinePrefixPath(const Settings& settings, const IPluginGame* managedGame)
-{
-  if (managedGame != nullptr && managedGame->isNativeLinux()) {
-    return {};
-  }
-
-  if (auto cfg = FluorineConfig::load(); cfg.has_value() && cfg->prefixExists()) {
-    return cfg->prefix_path.trimmed();
-  }
-
-  // Same precedence rule as spawn.cpp's resolvePrefixPath: explicit
-  // fluorine/prefix_path wins over the legacy Settings/* keys, which may
-  // have been auto-populated with an external manager's prefix (Heroic,
-  // Bottles). Without this, switching instances or rebuilding the Fluorine
-  // config can silently drop us onto the wrong prefix (issue #52).
-  const QSettings instanceSettings(settings.filename(), QSettings::IniFormat);
-  const QString explicitPath =
-      instanceSettings.value("fluorine/prefix_path").toString().trimmed();
-  if (!explicitPath.isEmpty()) {
-    return explicitPath;
-  }
-  for (const auto& key :
-       {"Settings/proton_prefix_path", "Settings/prefix_path", "Proton/prefix_path"}) {
-    const QString value = instanceSettings.value(key).toString().trimmed();
-    if (!value.isEmpty()) {
-      return value;
-    }
-  }
-
-  return {};
-}
-
 QString resolveWineDataDirName(const IPluginGame* managedGame)
 {
   if (managedGame == nullptr) {
@@ -382,19 +350,17 @@ QString resolveWineDataDirName(const IPluginGame* managedGame)
   // Primary: the My Games subfolder name matches the AppData/Local folder
   // for almost every Bethesda game.
   const QDir docsDir = managedGame->documentsDirectory();
-  if (docsDir.exists()) {
-    const QString docsLeaf = docsDir.dirName().trimmed();
-    if (!docsLeaf.isEmpty() && docsLeaf != QStringLiteral(".")) {
-      return docsLeaf;
-    }
+  const QString docsLeaf = docsDir.dirName().trimmed();
+  if (!docsLeaf.isEmpty() && docsLeaf != QStringLiteral(".")) {
+    return docsLeaf;
   }
 
   // Fallback: gameShortName is used by the base Gamebryo mappings() for
   // the AppData/Local folder and matches for most games.
   const QString shortName = managedGame->gameShortName();
   if (!shortName.isEmpty()) {
-    log::warn("resolveWineDataDirName: documentsDirectory() is empty or "
-              "invalid, falling back to gameShortName '{}'",
+    log::warn("resolveWineDataDirName: documentsDirectory() has no usable leaf, "
+              "falling back to gameShortName '{}'",
               shortName);
     return shortName;
   }
@@ -405,10 +371,143 @@ QString resolveWineDataDirName(const IPluginGame* managedGame)
   return managedGame->gameName();
 }
 
-QString resolvePrefixGameDocumentsDir(const WinePrefix& prefix,
-                                      const QString& dataDirName)
+QStringList resolveWinePluginDataDirs(const MappingType& mappings,
+                                      const QString& appDataLocal,
+                                      const IPluginGame* managedGame)
 {
-  return QDir(prefix.myGamesPath()).filePath(dataDirName);
+  QStringList result;
+  const QString base = QDir::cleanPath(QFileInfo(appDataLocal).absoluteFilePath());
+  for (const Mapping& mapping : mappings) {
+    if (mapping.isDirectory ||
+        QFileInfo(mapping.source).fileName().compare(
+            "plugins.txt", Qt::CaseInsensitive) != 0 ||
+        QFileInfo(mapping.destination).fileName().compare(
+            "plugins.txt", Qt::CaseInsensitive) != 0) {
+      continue;
+    }
+    const QString destinationParent =
+        QDir::cleanPath(QFileInfo(mapping.destination).absolutePath());
+    const QString relative = QDir(base).relativeFilePath(destinationParent);
+    if (relative.isEmpty() || relative == "." || relative == ".." ||
+        relative.startsWith("../") || QDir::isAbsolutePath(relative)) {
+      continue;
+    }
+    if (std::none_of(result.cbegin(), result.cend(),
+                     [&relative](const QString& existing) {
+                       return existing.compare(relative,
+                                               Qt::CaseInsensitive) == 0;
+                     })) {
+      result.append(relative);
+    }
+  }
+
+  const QString selectedLeaf = resolveWineDataDirName(managedGame);
+  for (const QString& candidate : result) {
+    if (candidate.compare(selectedLeaf, Qt::CaseInsensitive) == 0) {
+      return {candidate};
+    }
+  }
+
+  // Plugin-list publication is still a single-destination lifecycle. Prefer
+  // the selected game's exact AppData mapping (important for Epic variants),
+  // then its primary mapping, and finally the My Games-derived fallback.
+  if (!result.isEmpty()) {
+    return {result.front()};
+  }
+  return selectedLeaf.isEmpty() ? QStringList{} : QStringList{selectedLeaf};
+}
+
+QString canonicalWithMissingTail(const QString& path)
+{
+  QFileInfo current(QDir::cleanPath(QFileInfo(path).absoluteFilePath()));
+  QStringList missing;
+  while (!current.exists() && !current.isSymLink()) {
+    missing.prepend(current.fileName());
+    const QDir parent = current.dir();
+    if (parent.absolutePath() == current.absolutePath()) return {};
+    current = QFileInfo(parent.absolutePath());
+  }
+  if (current.isSymLink()) return {};
+  QString resolved = current.canonicalFilePath();
+  if (resolved.isEmpty()) return {};
+  for (const QString& component : missing) {
+    resolved = QDir(resolved).filePath(component);
+  }
+  return QDir::cleanPath(resolved);
+}
+
+QString canonicalDocumentsBridgeWithMissingTail(const QString& path)
+{
+  QFileInfo current(QDir::cleanPath(QFileInfo(path).absoluteFilePath()));
+  QStringList missing;
+  while (!current.exists() && !current.isSymLink()) {
+    missing.prepend(current.fileName());
+    const QDir parent = current.dir();
+    if (parent.absolutePath() == current.absolutePath()) return {};
+    current = QFileInfo(parent.absolutePath());
+  }
+  QString resolved = current.canonicalFilePath();
+  if (resolved.isEmpty()) return {};
+  for (const QString& component : missing) {
+    resolved = QDir(resolved).filePath(component);
+  }
+  return QDir::cleanPath(resolved);
+}
+
+QString resolvePrefixGameDocumentsDir(const WinePrefix& prefix,
+                                      const IPluginGame* managedGame)
+{
+  if (managedGame == nullptr) return {};
+  // Keep the Windows-visible lexical path inside the selected Wine user.
+  // Prefix setup may intentionally make the final game leaf a checked bridge
+  // to the game's original prefix; canonicalizing that leaf here would turn a
+  // supported bridge into an apparent escape.
+  const QString userRoot =
+      QDir::cleanPath(QFileInfo(prefix.userProfilePath()).absoluteFilePath());
+  const QString documents = QDir::cleanPath(
+      QFileInfo(managedGame->documentsDirectory().absolutePath())
+          .absoluteFilePath());
+  if (userRoot.isEmpty() || documents.isEmpty()) return {};
+  const QString relative = QDir(userRoot).relativeFilePath(documents);
+  if (relative == ".." || relative.startsWith("../") ||
+      QDir::isAbsolutePath(relative)) {
+    log::error("Refusing game documents path '{}' outside Wine user profile '{}'",
+               documents, userRoot);
+    return {};
+  }
+  return documents;
+}
+
+QString resolvePrefixGameIniTarget(const QString& documentsRoot,
+                                   const QString& iniName)
+{
+  if (documentsRoot.isEmpty() || iniName.trimmed().isEmpty()) return {};
+  const QString requested = QFileInfo(iniName).isAbsolute()
+                                ? iniName
+                                : QDir(documentsRoot).filePath(iniName);
+  const QString lexicalRoot =
+      QDir::cleanPath(QFileInfo(documentsRoot).absoluteFilePath());
+  const QString lexicalTarget =
+      QDir::cleanPath(QFileInfo(requested).absoluteFilePath());
+  const QString relative = QDir(lexicalRoot).relativeFilePath(lexicalTarget);
+  if (relative == ".." || relative.startsWith("../") ||
+      QDir::isAbsolutePath(relative)) {
+    return {};
+  }
+  // The final documents leaf may be a checked prefix-setup bridge. Resolve
+  // that one directory first, then validate the requested INI below the
+  // authenticated bridge target without following an arbitrary INI leaf.
+  const QString root = canonicalDocumentsBridgeWithMissingTail(lexicalRoot);
+  if (root.isEmpty()) return {};
+  const QString target =
+      canonicalWithMissingTail(QDir(root).filePath(relative));
+  if (target.isEmpty()) return {};
+  const QString physicalRelative = QDir(root).relativeFilePath(target);
+  if (physicalRelative == ".." || physicalRelative.startsWith("../") ||
+      QDir::isAbsolutePath(physicalRelative)) {
+    return {};
+  }
+  return target;
 }
 
 WineSaveTargetResolver::Plan resolveSaveTargetPlan(
@@ -2997,7 +3096,8 @@ ProcessRunner OrganizerCore::processRunner()
   return ProcessRunner(*this, m_UserInterface);
 }
 
-bool OrganizerCore::checkGameRegistryKey()
+bool OrganizerCore::checkGameRegistryKey(
+    const WineRuntimeConfig::Snapshot& wineRuntime)
 {
   // Map of game short names to their registry key info.
   // Format: { shortName, { subKey, valueName } }
@@ -3027,8 +3127,7 @@ bool OrganizerCore::checkGameRegistryKey()
     return true;  // unknown game, nothing to check
   }
 
-  const QString configuredPrefix =
-      resolveWinePrefixPath(m_Settings, managedGame());
+  const QString configuredPrefix = wineRuntime.prefixPath;
   if (configuredPrefix.isEmpty()) {
     return true;  // no prefix configured
   }
@@ -3040,7 +3139,7 @@ bool OrganizerCore::checkGameRegistryKey()
                configuredPrefix);
     return false;
   }
-  WinePrefix const prefix(preparedPrefix);
+  WinePrefix const prefix(preparedPrefix, wineRuntime.userProfilePath);
   if (!prefix.isValid()) {
     return true;  // prefix doesn't exist yet
   }
@@ -3113,7 +3212,8 @@ bool OrganizerCore::checkGameRegistryKey()
            registryValues[0].value},
           {wow64Key, valueName, winePath, true, registryValues[1].present,
            registryValues[1].value}};
-      if (!prefix.writeHklmValues(updates, &registryError)) {
+      if (!prefix.writeHklmValues(updates, &registryError,
+                                  /*prefixLeaseHeld=*/true)) {
         log::error("Failed to update game registry keys: {}", registryError);
         return false;
       }
@@ -3131,7 +3231,8 @@ bool OrganizerCore::beforeRun(
     const QString& customOverwrite,
     const QList<MOBase::ExecutableForcedLoadSetting>& forcedLibraries, bool useProton,
     const QString& launchToken, bool ownsVfs, QString* usvfsRequestPath,
-    spawn::SaveDeploymentReceipt* saveDeployment)
+    spawn::SaveDeploymentReceipt* saveDeployment,
+    const WineRuntimeConfig::Snapshot& wineRuntime)
 {
   saveCurrentProfile();
 
@@ -3162,8 +3263,15 @@ bool OrganizerCore::beforeRun(
         });
   };
   setIndexPublicationContext();
-  if (saveDeployment)
+  if (saveDeployment) {
     *saveDeployment = {};
+    // Retain the immutable launch-time prefix even when this launch needs no
+    // save topology. Post-run plugin projection must never re-resolve mutable
+    // configuration and redirect into a different prefix.
+    saveDeployment->prefixPath = wineRuntime.prefixPath;
+    saveDeployment->wineRuntime = wineRuntime;
+    saveDeployment->runtimeUserProfilePath = wineRuntime.userProfilePath;
+  }
   if (usvfsRequestPath)
     usvfsRequestPath->clear();
 
@@ -3207,6 +3315,24 @@ bool OrganizerCore::beforeRun(
   // A synchronous nested launch overwrites this shared publication metadata.
   // Restore the outer generation after it has reclaimed VFS ownership.
   setIndexPublicationContext();
+
+  if (useProton || !wineRuntime.prefixPath.isEmpty()) {
+    const WineRuntimeConfig::Snapshot activeRuntime =
+        WineRuntimeConfig::current();
+    QString runtimeError;
+    const bool runtimeValid =
+        WineRuntimeConfig::revalidatePrefix(wineRuntime, &runtimeError) &&
+        (!useProton ||
+         WineRuntimeConfig::revalidateProton(wineRuntime, &runtimeError));
+    if (activeRuntime.generation != wineRuntime.generation || !runtimeValid) {
+      log::error("Refusing launch because its Wine runtime setup generation "
+                 "changed: {}",
+                 runtimeError.isEmpty()
+                     ? QStringLiteral("a different instance/runtime is active")
+                     : runtimeError);
+      return false;
+    }
+  }
 
   // Pandora Behaviour Engine+ workaround: normalize paths in
   // PreviousOutput.txt to lowercase to avoid case-sensitivity issues
@@ -3265,8 +3391,53 @@ bool OrganizerCore::beforeRun(
     }
   }
 
+  // Serialize every prefix-global mutation before registry repair, drive
+  // pruning, plugin projection, INI deployment, or save topology begins.
+  // The persistent session owner is published once the exact launch plan is
+  // known; this process lock closes all cooperating setup/launch races before
+  // that point.
+  if (!wineRuntime.prefixPath.isEmpty()) {
+    if (saveDeployment == nullptr || launchToken.isEmpty()) {
+      log::error("Refusing Wine launch without prefix ownership");
+      return false;
+    }
+    const QString preparedPrefix =
+        QFileInfo(wineRuntime.prefixPath).canonicalFilePath();
+    if (preparedPrefix.isEmpty()) {
+      log::error("Refusing Wine launch because prefix '{}' has no stable "
+                 "physical identity",
+                 wineRuntime.prefixPath);
+      return false;
+    }
+    auto prefixLease = std::make_shared<QLockFile>(
+        WineSaveDeployment::leasePathFor(preparedPrefix, QString{}));
+    prefixLease->setStaleLockTime(0);
+    if (!prefixLease->tryLock(0) &&
+        (!prefixLease->removeStaleLockFile() || !prefixLease->tryLock(0))) {
+      log::error("Refusing launch because Wine prefix '{}' is owned by another "
+                 "Fluorine process",
+                 preparedPrefix);
+      return false;
+    }
+    QString prefixGenerationError;
+    if (!WineRuntimeConfig::revalidatePrefix(wineRuntime,
+                                              &prefixGenerationError)) {
+      log::error("Refusing launch because the selected Wine prefix changed "
+                 "while acquiring ownership: {}",
+                 prefixGenerationError);
+      return false;
+    }
+    if (WineSaveDeployment::hasPersistedSessionLease(preparedPrefix)) {
+      log::error("Refusing launch because Wine prefix '{}' still has an "
+                 "unresolved managed owner",
+                 preparedPrefix);
+      return false;
+    }
+    m_SaveDeploymentLocks.insert(launchToken, std::move(prefixLease));
+  }
+
   // Check the game's registry key in the Wine prefix and fix if needed.
-  if (!checkGameRegistryKey()) {
+  if (!checkGameRegistryKey(wineRuntime)) {
     return false;  // user cancelled
   }
 
@@ -3280,10 +3451,10 @@ bool OrganizerCore::beforeRun(
   // physical ownership before either VFS backend sees the mappings so there
   // is exactly one writer for the save/INI leaves during this launch.
   if (launchProfile != nullptr && managedGame() != nullptr) {
-    const QString configuredPrefix = resolveWinePrefixPath(m_Settings, managedGame());
+    const QString configuredPrefix = wineRuntime.prefixPath;
     const QString preparedPrefix = QFileInfo(configuredPrefix).canonicalFilePath();
     if (!preparedPrefix.isEmpty()) {
-      const WinePrefix prefix(preparedPrefix);
+      const WinePrefix prefix(preparedPrefix, wineRuntime.userProfilePath);
       if (prefix.isValid()) {
         const auto localSaves = gameFeatures().gameFeature<LocalSavegames>();
         const auto plan = resolveSaveTargetPlan(prefix, managedGame(),
@@ -3318,7 +3489,8 @@ bool OrganizerCore::beforeRun(
           if (useProton) {
             QStringList prunedDrives;
             QString pruneError;
-            if (!prefix.pruneExtraDrives(prunedDrives, &pruneError)) {
+            if (!prefix.pruneExtraDrives(prunedDrives, &pruneError,
+                                         /*prefixLeaseHeld=*/true)) {
               log::error("Refusing Wine launch because drive mappings could not "
                          "be normalized: {}",
                          pruneError);
@@ -3326,16 +3498,10 @@ bool OrganizerCore::beforeRun(
             }
           }
 
-          auto prefixLease = std::make_shared<QLockFile>(
-              WineSaveDeployment::leasePathFor(preparedPrefix, plan.livePath));
-          if (!prefixLease->tryLock(0) &&
-              (!prefixLease->removeStaleLockFile() || !prefixLease->tryLock(0))) {
-            log::error("Refusing launch because Wine prefix '{}' is owned by "
-                       "another Fluorine process",
-                       preparedPrefix);
+          if (!m_SaveDeploymentLocks.contains(launchToken)) {
+            log::error("Fixed save launch lost its Wine-prefix ownership");
             return false;
           }
-          m_SaveDeploymentLocks.insert(launchToken, prefixLease);
 
           const bool sharedLeaseRoot =
               WineSaveDeployment::samePhysicalDirectory(preparedPrefix,
@@ -3343,6 +3509,7 @@ bool OrganizerCore::beforeRun(
           if (!sharedLeaseRoot) {
             auto gameLease = std::make_shared<QLockFile>(
                 WineSaveDeployment::leasePathFor(plan.topologyRoot, plan.livePath));
+            gameLease->setStaleLockTime(0);
             if (!gameLease->tryLock(0) &&
                 (!gameLease->removeStaleLockFile() || !gameLease->tryLock(0))) {
               log::error("Refusing launch because fixed save root '{}' is owned by "
@@ -3479,12 +3646,72 @@ bool OrganizerCore::beforeRun(
   }
 #endif
 
+  QStringList coreOwnedIniMappingTargets;
+  if (!fixedSavePlan.has_value() && launchProfile != nullptr &&
+      launchProfile->localSettingsEnabled() && managedGame() != nullptr &&
+      !wineRuntime.prefixPath.isEmpty()) {
+    const WinePrefix prefix(wineRuntime.prefixPath,
+                            wineRuntime.userProfilePath);
+    const QString documentsRoot =
+        prefix.isValid()
+            ? resolvePrefixGameDocumentsDir(prefix, managedGame())
+            : QString{};
+    if (!documentsRoot.isEmpty()) {
+      QStringList iniFiles = managedGame()->iniFiles();
+      const auto localSaves = gameFeatures().gameFeature<LocalSavegames>();
+      if (const auto* routing = dynamic_cast<const LocalSavegamesRouting*>(
+              localSaves.get())) {
+        const QString routingIni = routing->routingIniName().trimmed();
+        if (!routingIni.isEmpty() &&
+            std::none_of(iniFiles.cbegin(), iniFiles.cend(),
+                         [&routingIni](const QString& existing) {
+                           return existing.compare(routingIni,
+                                                   Qt::CaseInsensitive) == 0;
+                         })) {
+          iniFiles.append(routingIni);
+        }
+      }
+      const QString lexicalRoot =
+          QDir::cleanPath(QFileInfo(documentsRoot).absoluteFilePath());
+      for (const QString& iniFile : iniFiles) {
+        const QString lexicalTarget = QDir::cleanPath(
+            QFileInfo(iniFile).isAbsolute()
+                ? QFileInfo(iniFile).absoluteFilePath()
+                : QDir(lexicalRoot).filePath(iniFile));
+        const QString relative =
+            QDir(lexicalRoot).relativeFilePath(lexicalTarget);
+        if (relative == QStringLiteral("..") ||
+            relative.startsWith(QStringLiteral("../")) ||
+            QDir::isAbsolutePath(relative)) {
+          log::error("Refusing local-settings launch because INI '{}' escapes "
+                     "the selected game documents directory '{}'",
+                     iniFile, lexicalRoot);
+          return false;
+        }
+        coreOwnedIniMappingTargets.append(lexicalTarget);
+      }
+    }
+  }
+
   const auto launchMappings = [&]() {
     MappingType mappings = fileMapping(profileName, customOverwrite);
     if (fixedSavePlan.has_value()) {
       mappings = WineSaveTargetResolver::filterFixedMappings(
           mappings, fixedSavePlan->livePath, fixedConfigurationRoot,
           fixedManagedIniFiles);
+    }
+    if (!coreOwnedIniMappingTargets.isEmpty()) {
+      std::erase_if(mappings, [&](const Mapping& mapping) {
+        if (mapping.isDirectory) return false;
+        const QString destination = QDir::cleanPath(
+            QFileInfo(mapping.destination).absoluteFilePath());
+        return std::any_of(
+            coreOwnedIniMappingTargets.cbegin(),
+            coreOwnedIniMappingTargets.cend(),
+            [&destination](const QString& target) {
+              return destination.compare(target, Qt::CaseInsensitive) == 0;
+            });
+      });
     }
     return mappings;
   };
@@ -3510,6 +3737,7 @@ bool OrganizerCore::beforeRun(
   m_USVFS.setDisableVfsCache(
       QSettings().value("fluorine/disable_vfs_cache", false).toBool());
 
+  MappingType effectiveLaunchMappings;
   try {
     // OpenMW and other self-managed-VFS games skip both organizer VFS
     // backends. USVFS is a Windows hooking library, so native launches always
@@ -3517,6 +3745,9 @@ bool OrganizerCore::beforeRun(
     // USVFS for Wine/Proton.
     const bool gameUsesOrganizerVfs =
         managedGame() == nullptr || managedGame()->usesVFS();
+    if (gameUsesOrganizerVfs || !wineRuntime.prefixPath.isEmpty()) {
+      effectiveLaunchMappings = launchMappings();
+    }
     const QSettings instanceIni(m_Settings.filename(), QSettings::IniFormat);
     const VfsBackend configuredBackend = parseVfsBackend(
         instanceIni.value(kVfsBackendSetting, QStringLiteral("fuse")).toString());
@@ -3535,7 +3766,7 @@ bool OrganizerCore::beforeRun(
       // the original physical destinations, so tear the preview down first.
       m_USVFS.unmount();
       const auto usvfsUnmountedAt     = std::chrono::steady_clock::now();
-      const MappingType mappings      = launchMappings();
+      const MappingType& mappings     = effectiveLaunchMappings;
       const auto usvfsMappingsBuiltAt = std::chrono::steady_clock::now();
       m_USVFS.prepareRootFilesForUsvfs(mappings);
       const auto usvfsRootPreparedAt = std::chrono::steady_clock::now();
@@ -3633,7 +3864,7 @@ bool OrganizerCore::beforeRun(
                 "request='{}', mappings={})",
                 request.instanceName, request.path, mappings.size());
     } else if (gameUsesOrganizerVfs) {
-      m_USVFS.updateMapping(launchMappings());
+      m_USVFS.updateMapping(effectiveLaunchMappings);
       m_USVFS.updateForcedLibraries(forcedLibraries);
       log::debug("beforeRun: using FUSE backend{}",
                  configuredBackend == VfsBackend::Usvfs && !useProton
@@ -3663,7 +3894,7 @@ bool OrganizerCore::beforeRun(
 
   // Deploy plugins.txt and loadorder.txt to the Wine prefix before launch.
   if (launchProfile != nullptr) {
-    const QString prefixPathStr = resolveWinePrefixPath(m_Settings, managedGame());
+    const QString prefixPathStr = wineRuntime.prefixPath;
 
     if (!prefixPathStr.isEmpty()) {
       const QString preparedPrefixPath = QFileInfo(prefixPathStr).canonicalFilePath();
@@ -3673,12 +3904,13 @@ bool OrganizerCore::beforeRun(
                    prefixPathStr);
         return false;
       }
-      WinePrefix const prefix(preparedPrefixPath);
+      WinePrefix const prefix(preparedPrefixPath, wineRuntime.userProfilePath);
       if (prefix.isValid()) {
         if (useProton && !fixedSavePlan.has_value()) {
           QStringList prunedDrives;
           QString pruneError;
-          if (!prefix.pruneExtraDrives(prunedDrives, &pruneError)) {
+          if (!prefix.pruneExtraDrives(prunedDrives, &pruneError,
+                                       /*prefixLeaseHeld=*/true)) {
             log::error("Refusing Wine launch because drive mappings could not "
                        "be normalized: {}",
                        pruneError);
@@ -3703,34 +3935,57 @@ bool OrganizerCore::beforeRun(
                     fixedSavePlan->livePath, fixedSavePlan->topologyRoot);
           return true;
         }
-        const QString dataDirName      = resolveWineDataDirName(managedGame());
-        const QString appDataLocal     = prefix.appdataLocal();
-        const QString pluginsTargetDir = QDir(appDataLocal).filePath(dataDirName);
-        const QString documentsDir = resolvePrefixGameDocumentsDir(prefix, dataDirName);
-        log::info("Wine prefix paths: AppData/Local plugins dir='{}', "
+        const QString documentsDataDirName =
+            resolveWineDataDirName(managedGame());
+        const QString appDataLocal = prefix.appdataLocal();
+        const QString profilePluginsPath = launchProfile->getPluginsFileName();
+        MappingType managedGameMappings;
+        if (const auto* mapper =
+                qobject_cast<const MOBase::IPluginFileMapper*>(managedGame())) {
+          managedGameMappings = mapper->mappings();
+        }
+        const QStringList pluginDataDirNames = resolveWinePluginDataDirs(
+            managedGameMappings, appDataLocal, managedGame());
+        const QString documentsDir =
+            resolvePrefixGameDocumentsDir(prefix, managedGame());
+        log::info("Wine prefix paths: AppData/Local plugin dirs='{}', "
                   "Documents/My Games INI dir='{}'",
-                  pluginsTargetDir, documentsDir);
+                  pluginDataDirNames.join(QStringLiteral(", ")), documentsDir);
+        if (saveDeployment != nullptr) {
+          saveDeployment->pluginDataDirNames = pluginDataDirNames;
+        }
         const auto localSavesFeature  = gameFeatures().gameFeature<LocalSavegames>();
         const auto targetPlan = resolveSaveTargetPlan(
             prefix, managedGame(), localSavesFeature.get(), launchProfile);
         if (!targetPlan ||
-            targetPlan.kind != WineSaveTargetResolver::Kind::PrefixRouted) {
+            (targetPlan.kind != WineSaveTargetResolver::Kind::PrefixRouted &&
+             targetPlan.kind != WineSaveTargetResolver::Kind::VfsOwned)) {
           log::error("Refusing launch because the Wine save target could not be "
                      "resolved: {}",
                      targetPlan.error);
           return false;
         }
-        const QString absoluteSaveDir = targetPlan.livePath;
-        log::info("Wine prefix save target: '{}'", absoluteSaveDir);
+        const bool vfsOwnedSaves =
+            targetPlan.kind == WineSaveTargetResolver::Kind::VfsOwned;
+        const QString absoluteSaveDir =
+            vfsOwnedSaves ? QString{} : targetPlan.livePath;
+        if (vfsOwnedSaves) {
+          log::info("VFS owns the game-local save target '{}'",
+                    targetPlan.livePath);
+        } else {
+          log::info("Wine prefix save target: '{}'", targetPlan.livePath);
+        }
         QStringList managedIniFiles = managedGame()->iniFiles();
-        QString routingIniName =
-            managedIniFiles.isEmpty() ? QString{} : managedIniFiles.first();
+        QString routingIniName;
         QByteArray explicitSaveRoute;
+        bool hasRoutingContract = false;
         if (const auto* routing =
                 dynamic_cast<const LocalSavegamesRouting*>(
                     localSavesFeature.get())) {
           const QString contractIni = routing->routingIniName().trimmed();
-          if (!contractIni.isEmpty()) {
+          const QByteArray contractRoute = routing->routingPath();
+          if (!contractIni.isEmpty() && !contractRoute.isEmpty()) {
+            hasRoutingContract = true;
             routingIniName = contractIni;
             const bool alreadyManaged =
                 std::any_of(managedIniFiles.cbegin(), managedIniFiles.cend(),
@@ -3742,13 +3997,18 @@ bool OrganizerCore::beforeRun(
               managedIniFiles.append(contractIni);
             }
           }
-          explicitSaveRoute = routing->routingPath();
+          explicitSaveRoute = contractRoute;
         }
         const QString prefixIni =
-            routingIniName.isEmpty()
+            !hasRoutingContract || routingIniName.isEmpty()
                 ? QString{}
-                : QDir(resolvePrefixGameDocumentsDir(prefix, dataDirName))
-                      .filePath(QFileInfo(routingIniName).fileName());
+                : resolvePrefixGameIniTarget(documentsDir, routingIniName);
+        if (hasRoutingContract && prefixIni.isEmpty()) {
+          log::error("Refusing routed local saves because INI '{}' is outside "
+                     "the selected Wine user profile",
+                     routingIniName);
+          return false;
+        }
         QByteArray managedSaveRoute;
         if (!prefixIni.isEmpty() && !absoluteSaveDir.isEmpty()) {
           const auto routeResult = WineSaveRouting::routeFor(
@@ -3762,42 +4022,45 @@ bool OrganizerCore::beforeRun(
           }
         }
 
-        // Serialize every launch that can touch this physical Wine save path,
-        // including launches with local saves disabled. A persisted owner or
-        // routing receipt from another generation is never guessed away: it
-        // may belong to a still-running child after the manager crashed.
-        if (!absoluteSaveDir.isEmpty()) {
-          if (saveDeployment == nullptr || launchToken.isEmpty()) {
-            log::error("Refusing Wine launch without save-path ownership");
-            return false;
-          }
-          const QString leasePath =
-              WineSaveDeployment::leasePathFor(preparedPrefixPath, absoluteSaveDir);
-          auto saveLease = std::make_shared<QLockFile>(leasePath);
-          if (!saveLease->tryLock(0) &&
-              (!saveLease->removeStaleLockFile() || !saveLease->tryLock(0))) {
-            log::error("Refusing launch because Wine save path '{}' is owned by "
-                       "another Fluorine process",
-                       absoluteSaveDir);
-            return false;
-          }
-          m_SaveDeploymentLocks.insert(launchToken, saveLease);
+        const QString leaseIdentityPath = targetPlan.livePath;
+        // Every Wine launch below uses prefix-global registry/plugin state,
+        // even when saves and INIs are VFS-owned. Keep one prefix-wide owner
+        // alive for the complete child lifetime.
+        const bool prefixOwnershipRequired = true;
 
-          WineSaveDeployment::PendingDeployment pending;
-          const auto pendingResult = WineSaveDeployment::pendingDeployment(
-              prefix.driveC(), absoluteSaveDir, pending);
-          if (!pendingResult) {
-            log::error("Refusing launch because Wine save recovery state is "
-                       "invalid: {}",
-                       pendingResult.error);
+        // Serialize every launch that can touch this physical Wine save path,
+        // including launches with local saves disabled. Prefix-resident INIs
+        // need the same prefix-wide lease even when the save directory itself
+        // is owned only by the VFS. A persisted owner or routing receipt from
+        // another generation is never guessed away: it may belong to a
+        // still-running child after the manager crashed.
+        if (prefixOwnershipRequired) {
+          if (saveDeployment == nullptr || launchToken.isEmpty()) {
+            log::error("Refusing Wine launch without prefix-path ownership");
             return false;
           }
-          if (pending.present) {
-            log::error("Refusing launch because Wine save state is still owned "
-                       "by launch '{}' for profile '{}'; preserve it for "
-                       "explicit recovery",
-                       pending.ownerId, pending.profileRoot);
+          if (!m_SaveDeploymentLocks.contains(launchToken)) {
+            log::error("Wine launch lost its prefix-global ownership");
             return false;
+          }
+
+          if (!absoluteSaveDir.isEmpty()) {
+            WineSaveDeployment::PendingDeployment pending;
+            const auto pendingResult = WineSaveDeployment::pendingDeployment(
+                prefix.driveC(), absoluteSaveDir, pending);
+            if (!pendingResult) {
+              log::error("Refusing launch because Wine save recovery state is "
+                         "invalid: {}",
+                         pendingResult.error);
+              return false;
+            }
+            if (pending.present) {
+              log::error("Refusing launch because Wine save state is still owned "
+                         "by launch '{}' for profile '{}'; preserve it for "
+                         "explicit recovery",
+                         pending.ownerId, pending.profileRoot);
+              return false;
+            }
           }
 
           if (!prefixIni.isEmpty()) {
@@ -3818,7 +4081,7 @@ bool OrganizerCore::beforeRun(
           }
 
           const auto sessionLease = WineSaveDeployment::beginSessionLease(
-              preparedPrefixPath, absoluteSaveDir, launchToken);
+              preparedPrefixPath, leaseIdentityPath, launchToken);
           if (!sessionLease) {
             log::error("Refusing launch because Wine save-session ownership "
                        "could not be established: {}",
@@ -3827,52 +4090,66 @@ bool OrganizerCore::beforeRun(
           }
           saveDeployment->mode                  = spawn::SaveDeploymentMode::LeaseOnly;
           saveDeployment->prefixPath            = preparedPrefixPath;
-          saveDeployment->livePath              = absoluteSaveDir;
-          saveDeployment->topologyRoot          = targetPlan.topologyRoot;
+          saveDeployment->livePath              = leaseIdentityPath;
+          saveDeployment->topologyRoot =
+              vfsOwnedSaves ? prefix.driveC() : targetPlan.topologyRoot;
           saveDeployment->leaseRoot             = preparedPrefixPath;
           saveDeployment->ownerId               = launchToken;
           saveDeployment->sessionLeasePublished = true;
         }
 
-        // If the prefix's plugin-list file is newer than the profile's
-        // (e.g. LOOT ran outside MO2 and edited it), sync back first so
-        // external edits aren't clobbered by the deploy below.
-        {
-          WinePrefix::PluginListMechanism preMech =
-              WinePrefix::PluginListMechanism::None;
-          switch (managedGame()->loadOrderMechanism()) {
-          case IPluginGame::LoadOrderMechanism::PluginsTxt:
-            preMech = WinePrefix::PluginListMechanism::PluginsTxt;
-            break;
-          case IPluginGame::LoadOrderMechanism::FileTime:
-            preMech = WinePrefix::PluginListMechanism::FileTime;
-            break;
-          case IPluginGame::LoadOrderMechanism::None:
-            break;
-          }
-          if (preMech != WinePrefix::PluginListMechanism::None) {
-            const QString profilePluginsPath = launchProfile->getPluginsFileName();
-            const QDateTime prefixMTime      = prefix.prefixPluginsMTime(dataDirName);
-            const QDateTime profileMTime = QFileInfo(profilePluginsPath).lastModified();
-            if (prefixMTime.isValid() &&
-                (!profileMTime.isValid() || prefixMTime > profileMTime)) {
-              log::info("Prefix plugins.txt newer than profile "
-                        "(prefix={}, profile={}), syncing back before deploy",
-                        prefixMTime.toString(Qt::ISODate),
-                        profileMTime.toString(Qt::ISODate));
-              if (prefix.syncPluginsBack(profilePluginsPath, dataDirName, preMech)) {
-                refreshESPList(true);
-              } else {
-                log::warn("Pre-deploy sync-back failed; proceeding with "
-                          "deploy — external edits may be lost");
-              }
-            }
-          }
+        WinePrefix::PluginListMechanism wineMech =
+            WinePrefix::PluginListMechanism::None;
+        switch (managedGame()->loadOrderMechanism()) {
+        case IPluginGame::LoadOrderMechanism::PluginsTxt:
+          wineMech = WinePrefix::PluginListMechanism::PluginsTxt;
+          break;
+        case IPluginGame::LoadOrderMechanism::FileTime:
+          wineMech = WinePrefix::PluginListMechanism::FileTime;
+          break;
+        case IPluginGame::LoadOrderMechanism::None:
+          break;
         }
 
-        // Read plugin lines from profile's plugins.txt
-        QFile pluginsFile(launchProfile->getPluginsFileName());
-        if (pluginsFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        if (wineMech != WinePrefix::PluginListMechanism::None) {
+          // If one of the exact mapped prefix files is newer (for example
+          // after external LOOT), publish the newest generation back before
+          // deployment. Failure is launch-blocking: proceeding would
+          // overwrite the only external edit.
+          QString newestDataDir;
+          QDateTime newestPrefixTime;
+          for (const QString& dataDir : pluginDataDirNames) {
+            const QDateTime candidate = prefix.prefixPluginsMTime(dataDir);
+            if (candidate.isValid() &&
+                (!newestPrefixTime.isValid() || candidate > newestPrefixTime)) {
+              newestPrefixTime = candidate;
+              newestDataDir = dataDir;
+            }
+          }
+          const QDateTime profileMTime =
+              QFileInfo(profilePluginsPath).lastModified();
+          if (newestPrefixTime.isValid() &&
+              (!profileMTime.isValid() || newestPrefixTime > profileMTime)) {
+            log::info("Prefix plugins.txt newer than profile "
+                      "(prefix={}, profile={}), syncing '{}' before deploy",
+                      newestPrefixTime.toString(Qt::ISODate),
+                      profileMTime.toString(Qt::ISODate), newestDataDir);
+            if (!prefix.syncPluginsBack(profilePluginsPath, newestDataDir,
+                                        wineMech)) {
+              log::error("Refusing launch because newer prefix plugin state "
+                         "could not be published safely");
+              return false;
+            }
+            refreshESPList(true);
+          }
+
+          QFile pluginsFile(profilePluginsPath);
+          if (!pluginsFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            log::error("Refusing launch because profile plugin list '{}' is "
+                       "unreadable",
+                       profilePluginsPath);
+            return false;
+          }
           QStringList plugins;
           QTextStream stream(&pluginsFile);
           while (!stream.atEnd()) {
@@ -3882,42 +4159,29 @@ bool OrganizerCore::beforeRun(
             }
           }
           pluginsFile.close();
+          if (plugins.isEmpty()) {
+            log::warn("Profile plugin list '{}' has no entries; preserving "
+                      "the existing prefix projection",
+                      profilePluginsPath);
+          }
 
-          if (!plugins.isEmpty()) {
-            WinePrefix::PluginListMechanism wineMech =
-                WinePrefix::PluginListMechanism::None;
-            switch (managedGame()->loadOrderMechanism()) {
-            case IPluginGame::LoadOrderMechanism::PluginsTxt:
-              wineMech = WinePrefix::PluginListMechanism::PluginsTxt;
-              break;
-            case IPluginGame::LoadOrderMechanism::FileTime:
-              wineMech = WinePrefix::PluginListMechanism::FileTime;
-              break;
-            case IPluginGame::LoadOrderMechanism::None:
-              wineMech = WinePrefix::PluginListMechanism::None;
-              break;
+          for (const QString& dataDir :
+               plugins.isEmpty() ? QStringList{} : pluginDataDirNames) {
+            if (!prefix.deployPlugins(plugins, dataDir, wineMech)) {
+              log::error("Refusing launch because {} plugins could not be "
+                         "deployed to prefix '{}' (dataDir='{}')",
+                         plugins.size(), prefixPathStr, dataDir);
+              return false;
             }
-            const QString pluginListFile =
-                wineMech == WinePrefix::PluginListMechanism::PluginsTxt
-                    ? QString("Plugins.txt")
-                    : QString("plugins.txt");
-            log::info("Deploying plugin list to '{}'",
-                      QDir(pluginsTargetDir).filePath(pluginListFile));
-            if (prefix.deployPlugins(plugins, dataDirName, wineMech)) {
-              log::debug("Deployed {} plugins to prefix '{}' (dataDirName='{}')",
-                         plugins.size(), prefixPathStr, dataDirName);
-            } else {
-              log::error("Failed to deploy {} plugins to prefix '{}' "
-                         "(dataDirName='{}')",
-                         plugins.size(), prefixPathStr, dataDirName);
+            log::debug("Deployed {} plugins to prefix '{}' (dataDir='{}')",
+                       plugins.size(), prefixPathStr, dataDir);
+            if (saveDeployment != nullptr) {
+              saveDeployment->pluginProjectionOwned = true;
             }
-          } else {
-            log::warn("Profile plugins.txt is empty or contains only comments, "
-                      "skipping plugin deployment");
           }
         }
 
-        if (launchProfile->localSettingsEnabled()) {
+        if (launchProfile->localSettingsEnabled() && !documentsDir.isEmpty()) {
           if (saveDeployment == nullptr || saveDeployment->prefixPath.isEmpty() ||
               saveDeployment->ownerId.isEmpty()) {
             log::error("Refusing local-settings deployment without Wine launch "
@@ -3925,12 +4189,22 @@ bool OrganizerCore::beforeRun(
             return false;
           }
           const QString targetIniBase =
-              resolvePrefixGameDocumentsDir(prefix, dataDirName);
+              resolvePrefixGameDocumentsDir(prefix, managedGame());
+          if (targetIniBase.isEmpty()) {
+            log::error("Refusing local-settings deployment without an "
+                       "authenticated Wine documents root");
+            return false;
+          }
           int deployedIniCount = 0;
           for (const QString& iniFile : managedIniFiles) {
             const QString sourceIni = profileIniSource(*launchProfile, iniFile);
             const QString targetIni =
-                QDir(targetIniBase).filePath(QFileInfo(iniFile).fileName());
+                resolvePrefixGameIniTarget(targetIniBase, iniFile);
+            if (targetIni.isEmpty()) {
+              log::error("Refusing unsafe INI destination '{}' under '{}'",
+                         iniFile, targetIniBase);
+              return false;
+            }
             log::info("INI deploy target: '{}' -> '{}' (exists={})", sourceIni,
                       targetIni, QFileInfo::exists(sourceIni));
             if (QFileInfo::exists(sourceIni)) {
@@ -3955,6 +4229,39 @@ bool OrganizerCore::beforeRun(
             log::debug("Deployed {} profile INI files to prefix '{}'", deployedIniCount,
                        prefixPathStr);
           }
+        } else if (launchProfile->localSettingsEnabled()) {
+          // Game-local Basic Games configuration remains VFS-owned. Prove
+          // that every requested launch-profile source maps to the exact
+          // plugin-authorized game destination; an override/current-profile
+          // mismatch must not silently run against global configuration.
+          const auto exactPath = [](const QString& path) {
+            return QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+          };
+          for (const QString& iniFile : managedIniFiles) {
+            const QString sourceIni = profileIniSource(*launchProfile, iniFile);
+            const QString targetIni =
+                managedGame()->documentsDirectory().absoluteFilePath(iniFile);
+            const bool mapped =
+                QFileInfo::exists(sourceIni) &&
+                std::any_of(effectiveLaunchMappings.cbegin(),
+                            effectiveLaunchMappings.cend(),
+                            [&](const Mapping& mapping) {
+                              return !mapping.isDirectory &&
+                                     exactPath(mapping.source) ==
+                                         exactPath(sourceIni) &&
+                                     exactPath(mapping.destination) ==
+                                         exactPath(targetIni);
+                            });
+            if (!mapped) {
+              log::error("Refusing local-settings launch because game-local "
+                         "INI '{}' has no exact launch-profile VFS mapping to "
+                         "'{}'",
+                         sourceIni, targetIni);
+              return false;
+            }
+          }
+          log::info("Game-local profile INIs are owned by exact launch VFS "
+                    "mappings");
         } else {
           log::debug("Profile local settings not enabled, skipping INI deployment. "
                      "documentsDirectory='{}'",
@@ -4062,7 +4369,11 @@ bool OrganizerCore::beforeRun(
           }
         }
 
-        if (launchProfile->localSavesEnabled()) {
+        if (launchProfile->localSavesEnabled() && vfsOwnedSaves) {
+          log::info("Leaving game-local saves to the launch VFS mapping '{}'; "
+                    "no Wine-prefix topology will be published",
+                    targetPlan.livePath);
+        } else if (launchProfile->localSavesEnabled()) {
           if (saveDeployment == nullptr || launchToken.isEmpty() ||
               absoluteSaveDir.isEmpty()) {
             log::error("Refusing local-save launch without a deployment receipt");
@@ -4251,6 +4562,81 @@ bool retireSaveSessions(spawn::SaveDeploymentReceipt& receipt)
   }
   return true;
 }
+
+bool syncOwnedPluginProjection(
+    spawn::SaveDeploymentReceipt& receipt, const QString& profilesRoot,
+    const QString& profileName, DWORD exitCode, const IPluginGame* game)
+{
+  if (!receipt.pluginProjectionOwned || receipt.fixedGameDirectory ||
+      game == nullptr) {
+    return true;
+  }
+  if (exitCode != 0) {
+    log::warn("Skipping plugins.txt sync-back because the game exited with "
+              "code {}; the profile generation is preserved",
+              exitCode);
+    return true;
+  }
+
+  QString runtimeError;
+  if (!WineRuntimeConfig::revalidatePrefix(receipt.wineRuntime,
+                                           &runtimeError)) {
+    log::error("Cannot sync the launch-owned plugin projection because the "
+               "prepared prefix changed: {}",
+               runtimeError);
+    return false;
+  }
+
+  WinePrefix::PluginListMechanism mechanism =
+      WinePrefix::PluginListMechanism::None;
+  switch (game->loadOrderMechanism()) {
+  case IPluginGame::LoadOrderMechanism::PluginsTxt:
+    mechanism = WinePrefix::PluginListMechanism::PluginsTxt;
+    break;
+  case IPluginGame::LoadOrderMechanism::FileTime:
+    mechanism = WinePrefix::PluginListMechanism::FileTime;
+    break;
+  case IPluginGame::LoadOrderMechanism::None:
+    return true;
+  }
+
+  const QString profileDirectory =
+      QDir(profilesRoot).filePath(profileName);
+  if (!QFileInfo(profileDirectory).isDir()) {
+    log::error("Cannot sync launch-owned plugins because profile '{}' no "
+               "longer exists",
+               profileName);
+    return false;
+  }
+  const QString profilePluginsPath =
+      QDir(profileDirectory).filePath(QStringLiteral("plugins.txt"));
+  WinePrefix prefix(receipt.prefixPath,
+                    receipt.wineRuntime.userProfilePath);
+  if (!prefix.isValid()) return false;
+
+  QString newestDataDir;
+  QDateTime newestTime;
+  for (const QString& dataDir : receipt.pluginDataDirNames) {
+    const QDateTime candidate = prefix.prefixPluginsMTime(dataDir);
+    if (candidate.isValid() &&
+        (!newestTime.isValid() || candidate > newestTime)) {
+      newestTime = candidate;
+      newestDataDir = dataDir;
+    }
+  }
+  if (newestDataDir.isEmpty()) {
+    log::warn("The launch-owned prefix Plugins.txt no longer exists; "
+              "preserving the profile generation");
+    return true;
+  }
+  if (!prefix.syncPluginsBack(profilePluginsPath, newestDataDir, mechanism)) {
+    log::error("Could not publish launch-owned Plugins.txt from '{}' back to "
+               "profile '{}'",
+               newestDataDir, profileName);
+    return false;
+  }
+  return true;
+}
 }  // namespace
 
 struct OrganizerCore::AbortedLaunchWork
@@ -4429,8 +4815,6 @@ struct OrganizerCore::AfterRunWork
   QString launchToken;
   QString profileName;
   bool triggerRefresh{false};
-  QString preparedWinePrefix;
-  bool fixedGameDirectory{false};
   spawn::SaveDeploymentReceipt saveDeployment;
   std::function<void()> refreshComplete;
   std::function<void(bool)> cleanupComplete;
@@ -4442,12 +4826,9 @@ OrganizerCore::AfterRunResult OrganizerCore::afterRun(
     spawn::SaveDeploymentReceipt saveDeployment, std::function<void()> refreshComplete,
     std::function<void(bool refreshScheduled)> cleanupComplete)
 {
-  const QString preparedWinePrefix = saveDeployment.prefixPath;
-  const bool fixedGameDirectory    = saveDeployment.fixedGameDirectory;
-  auto work                        = std::make_shared<AfterRunWork>(
+  auto work = std::make_shared<AfterRunWork>(
       AfterRunWork{binary, exitCode, unmountVfs, launchToken, profileName,
-                   triggerRefresh, preparedWinePrefix, fixedGameDirectory,
-                   std::move(saveDeployment), std::move(refreshComplete),
+                   triggerRefresh, std::move(saveDeployment), std::move(refreshComplete),
                    std::move(cleanupComplete)});
   return continueAfterRun(work, /*retry=*/false, /*retryCount=*/0);
 }
@@ -4505,6 +4886,12 @@ OrganizerCore::continueAfterRun(const std::shared_ptr<AfterRunWork>& work, bool 
                                           /*publishChanges=*/true)) {
             throw std::runtime_error(
                 "unable to publish and restore profile INIs after launch");
+          }
+          if (!syncOwnedPluginProjection(
+                  work->saveDeployment, m_Settings.paths().profiles(),
+                  work->profileName, work->exitCode, managedGame())) {
+            throw std::runtime_error(
+                "unable to publish launch-owned plugin state after launch");
           }
           if (!retireSaveSessions(work->saveDeployment)) {
             throw std::runtime_error("unable to retire save-session ownership");
@@ -4657,67 +5044,6 @@ OrganizerCore::continueAfterRun(const std::shared_ptr<AfterRunWork>& work, bool 
                              repair.inspected, repair.repaired, repair.skipped,
                              repair.failed, ms);
                   break;
-                }
-              }
-
-              if (launchProfile != nullptr && !work->fixedGameDirectory) {
-                const QString prefixPathStr =
-                    !work->preparedWinePrefix.isEmpty()
-                        ? work->preparedWinePrefix
-                        : resolveWinePrefixPath(m_Settings, managedGame());
-                if (!prefixPathStr.isEmpty()) {
-                  WinePrefix const prefix(prefixPathStr);
-                  if (prefix.isValid()) {
-                    const QString dataDirName = resolveWineDataDirName(managedGame());
-
-                    // Sync the game's plugin-list file back from the prefix.
-                    // LOOT and similar tools edit the deployed copy in
-                    // AppData/Local/<Game>/ — without this sync, their changes
-                    // are lost when refreshESPList rereads the untouched
-                    // profile copy and savePluginList clobbers them with the
-                    // old in-memory order.  loadorder.txt is MO2-internal and
-                    // not written to or read from the prefix.
-                    WinePrefix::PluginListMechanism wineMech =
-                        WinePrefix::PluginListMechanism::None;
-                    switch (managedGame()->loadOrderMechanism()) {
-                    case IPluginGame::LoadOrderMechanism::PluginsTxt:
-                      wineMech = WinePrefix::PluginListMechanism::PluginsTxt;
-                      break;
-                    case IPluginGame::LoadOrderMechanism::FileTime:
-                      wineMech = WinePrefix::PluginListMechanism::FileTime;
-                      break;
-                    case IPluginGame::LoadOrderMechanism::None:
-                      wineMech = WinePrefix::PluginListMechanism::None;
-                      break;
-                    }
-                    const QString profilePluginsPath =
-                        launchProfile->getPluginsFileName();
-                    // Only sync the prefix Plugins.txt back to the profile when
-                    // the game exited cleanly. Bethesda's engine rewrites
-                    // Plugins.txt as part of its shutdown sequence, and on a
-                    // crash it can serialize a partially cleared "active" set
-                    // (file lists every plugin but only a handful still carry
-                    // the leading '*'). Trusting that file would propagate the
-                    // damage into the profile via refreshESPList +
-                    // savePluginList. A non-zero exit code is a strong "do not
-                    // trust the prefix file" signal. The active-count guard
-                    // inside syncPluginsBack is a belt-and-suspenders backstop
-                    // for cases where the engine catches its own crash and
-                    // exits 0 anyway.
-                    if (work->exitCode != 0) {
-                      log::warn("Skipping plugins.txt sync-back: game exited "
-                                "with code {} "
-                                "(non-zero / abnormal). Prefix Plugins.txt may "
-                                "have been "
-                                "rewritten with a crash-time active set; "
-                                "profile preserved.",
-                                work->exitCode);
-                    } else if (!prefix.syncPluginsBack(profilePluginsPath, dataDirName,
-                                                       wineMech)) {
-                      log::warn("Failed to sync plugins.txt back from prefix '{}'",
-                                prefixPathStr);
-                    }
-                  }
                 }
               }
 

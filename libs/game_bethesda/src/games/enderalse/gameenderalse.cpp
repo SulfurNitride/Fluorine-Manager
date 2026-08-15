@@ -39,7 +39,7 @@ void GameEnderalSE::setVariant(QString variant)
 
 void GameEnderalSE::checkVariants()
 {
-  QFileInfo gog_dll(m_GamePath + "\\Galaxy64.dll");
+  QFileInfo gog_dll(QDir(m_GamePath).filePath("Galaxy64.dll"));
   if (gog_dll.exists())
     setVariant("GOG");
   else
@@ -104,6 +104,7 @@ void GameEnderalSE::setGamePath(const QString& path)
 
 QDir GameEnderalSE::savesDirectory() const
 {
+  if (m_MyGamesPath.isEmpty()) return {};
   return QDir(m_MyGamesPath + "/Saves");
 }
 
@@ -224,7 +225,8 @@ QList<PluginSetting> GameEnderalSE::settings() const
 void GameEnderalSE::initializeProfile(const QDir& path, ProfileSettings settings) const
 {
   if (settings.testFlag(IPluginGame::MODS)) {
-    copyToProfile(localAppFolder() + gameDirectoryName(), path, "plugins.txt");
+    copyToProfile(QDir(localAppFolder()).filePath(gameDirectoryName()), path,
+                  "plugins.txt");
   }
 
   if (settings.testFlag(IPluginGame::CONFIGURATION)) {
@@ -336,10 +338,12 @@ QDir GameEnderalSE::gameDirectory() const
 MappingType GameEnderalSE::mappings() const
 {
   MappingType result;
+  const QString appData = localAppFolder();
+  if (appData.isEmpty()) return result;
 
   for (const QString& profileFile : {"plugins.txt", "loadorder.txt"}) {
     result.push_back({m_Organizer->profilePath() + "/" + profileFile,
-                      localAppFolder() + "/" + gameDirectoryName() + "/" + profileFile,
+                      QDir(appData).filePath(gameDirectoryName() + "/" + profileFile),
                       false});
   }
 

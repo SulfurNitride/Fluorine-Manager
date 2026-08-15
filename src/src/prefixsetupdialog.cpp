@@ -4,6 +4,7 @@
 #include "fluorinepaths.h"
 
 #include <QDateTime>
+#include <QCloseEvent>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
@@ -239,6 +240,27 @@ void PrefixSetupDialog::showEvent(QShowEvent* event)
   }
 }
 
+void PrefixSetupDialog::reject()
+{
+  if (m_running) {
+    m_closeWhenFinished = true;
+    onCancel();
+    return;
+  }
+  QDialog::reject();
+}
+
+void PrefixSetupDialog::closeEvent(QCloseEvent* event)
+{
+  if (m_running) {
+    m_closeWhenFinished = true;
+    onCancel();
+    event->ignore();
+    return;
+  }
+  QDialog::closeEvent(event);
+}
+
 // ============================================================================
 // Slots — step progress
 // ============================================================================
@@ -360,6 +382,10 @@ void PrefixSetupDialog::onFinished(bool allSucceeded)
         tr("Setup finished with %n failure(s). You can retry or delete the prefix.",
            "", failCount));
     m_statusLabel->setStyleSheet("font-weight: bold; font-size: 13px; color: #ef5350;");
+  }
+
+  if (m_closeWhenFinished) {
+    QDialog::reject();
   }
 }
 

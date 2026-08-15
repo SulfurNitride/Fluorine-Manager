@@ -265,11 +265,13 @@ class WineSaveSurfaceTest(unittest.TestCase):
         self.assertIn("public MOBase::LocalSavegamesTopology", proxy_class)
         self.assertIn("topology->usesFixedGameDirectory()", proxy_class)
 
-        self.assertGreaterEqual(before.count("launchMappings()"), 2)
+        self.assertEqual(before.count("launchMappings()"), 1)
         self.assertRegex(
             before,
-            r"const\s+MappingType\s+mappings\s*=\s*launchMappings\(\)",
+            r"effectiveLaunchMappings\s*=\s*launchMappings\(\)",
         )
+        self.assertIn("prepareRootFilesForUsvfs(mappings)", before)
+        self.assertIn("updateMapping(effectiveLaunchMappings)", before)
 
     def test_teardown_and_abort_use_the_recorded_receipt(self):
         core = (SRC / "organizercore.cpp").read_text(encoding="utf-8")
@@ -287,7 +289,12 @@ class WineSaveSurfaceTest(unittest.TestCase):
         self.assertIn("finishProfileIniDeployment", continuation)
         self.assertLess(continuation.index("finishProfileIniDeployment"),
                         continuation.index("retireSaveSessions"))
-        self.assertIn("work->preparedWinePrefix", continuation)
+        self.assertIn("syncOwnedPluginProjection", continuation)
+        self.assertLess(continuation.index("syncOwnedPluginProjection"),
+                        continuation.index("retireSaveSessions"))
+        plugin_sync = function_body(core, "syncOwnedPluginProjection")
+        self.assertIn("receipt.wineRuntime", plugin_sync)
+        self.assertIn("WineRuntimeConfig::revalidatePrefix", plugin_sync)
         self.assertNotIn("ProtonLauncher::unprivilegedBindMountSupported()",
                          continuation)
         self.assertNotIn("undeployProfileSaves", continuation)
@@ -306,7 +313,9 @@ class WineSaveSurfaceTest(unittest.TestCase):
             encoding="utf-8"
         )
         lease = function_body(deployment, "QString leasePathFor")
-        self.assertIn(".fluorine-save-prefix.lock", lease)
+        self.assertIn(".fluorine-save-prefix-", lease)
+        self.assertIn('prefixInfo.fileName() == QStringLiteral("pfx")', lease)
+        self.assertIn("lockDirectory.cdUp()", lease)
         self.assertNotIn("physicalLiveIdentity", lease)
 
     def test_bind_request_cannot_silently_fall_back(self):
@@ -352,8 +361,10 @@ class WineSaveSurfaceTest(unittest.TestCase):
             application.index("// Restore any stale INI/save backups") :
             application.index("m_core->createDefaultProfile()")
         ]
-        self.assertLess(recovery.index('"fluorine/prefix_path"'),
-                        recovery.index('"Settings/proton_prefix_path"'))
+        self.assertIn("WineRuntimeConfig::current", recovery)
+        self.assertIn("WineRuntimeConfig::revalidate", recovery)
+        self.assertNotIn('"fluorine/prefix_path"', recovery)
+        self.assertNotIn('"Settings/proton_prefix_path"', recovery)
 
     def test_startup_does_not_claim_name_only_save_backups(self):
         source = (SRC / "wineprefix.cpp").read_text(encoding="utf-8")

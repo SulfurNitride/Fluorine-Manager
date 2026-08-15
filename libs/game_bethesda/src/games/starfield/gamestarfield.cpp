@@ -170,10 +170,12 @@ QList<PluginSetting> GameStarfield::settings() const
 MappingType GameStarfield::mappings() const
 {
   MappingType result;
+  const QString appData = localAppFolder();
+  if (appData.isEmpty()) return result;
   if (testFilePlugins().isEmpty()) {
     for (const QString& profileFile : {"plugins.txt", "loadorder.txt"}) {
       result.push_back({m_Organizer->profilePath() + "/" + profileFile,
-                        localAppFolder() + "/" + gameShortName() + "/" + profileFile,
+                        QDir(appData).filePath(gameShortName() + "/" + profileFile),
                         false});
     }
   }

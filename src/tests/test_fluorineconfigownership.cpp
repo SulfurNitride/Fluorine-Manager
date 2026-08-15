@@ -2,6 +2,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QTemporaryDir>
 #include <gtest/gtest.h>
 
@@ -72,6 +73,32 @@ TEST(FluorineConfigOwnership, DirectRootRecreationRestoresOwnershipMarker)
   EXPECT_TRUE(config.canDestroyPrefix());
   EXPECT_TRUE(
       QFile::exists(QDir(root).filePath(".fluorine-managed-prefix")));
+}
+
+TEST(FluorineConfigOwnership, FailedConventionalRecreationRemainsDestroyable)
+{
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+
+  const QByteArray oldConfigHome = qgetenv("XDG_CONFIG_HOME");
+  const QString configHome = QDir(temporary.path()).filePath("config");
+  ASSERT_TRUE(qputenv("XDG_CONFIG_HOME", configHome.toUtf8()));
+
+  const QString compatData = QDir(temporary.path()).filePath("compatdata/1234");
+  FluorineConfig config = makePrefix(compatData);
+  ASSERT_TRUE(config.markPrefixOwned());
+  ASSERT_TRUE(config.save());
+  ASSERT_TRUE(config.resetPrefixForRecreation());
+  EXPECT_FALSE(config.prefixExists());
+  EXPECT_TRUE(config.canDestroyPrefix());
+  EXPECT_TRUE(config.destroyPrefix());
+  EXPECT_FALSE(QFileInfo::exists(compatData));
+
+  if (oldConfigHome.isNull()) {
+    qunsetenv("XDG_CONFIG_HOME");
+  } else {
+    qputenv("XDG_CONFIG_HOME", oldConfigHome);
+  }
 }
 
 TEST(FluorineConfigOwnership, DeletesOnlyMarkedCompatibilityRoot)

@@ -1069,10 +1069,24 @@ std::optional<int> CreatePortableCommand::runEarly()
     ini.setValue("Settings/profile_local_inis", true);
 
     if (vm().contains("prefix")) {
-      ini.setValue("fluorine/prefix_path", QString::fromStdString(vm()["prefix"].as<std::string>()));
+      const QString value =
+          QString::fromStdString(vm()["prefix"].as<std::string>()).trimmed();
+      if (value.isEmpty()) {
+        std::cerr << "Error: --prefix must not be empty\n";
+        return 1;
+      }
+      ini.setValue("fluorine/prefix_path",
+                   QDir::cleanPath(QFileInfo(value).absoluteFilePath()));
     }
     if (vm().contains("proton")) {
-      ini.setValue("fluorine/proton_path", QString::fromStdString(vm()["proton"].as<std::string>()));
+      const QString value =
+          QString::fromStdString(vm()["proton"].as<std::string>()).trimmed();
+      if (value.isEmpty()) {
+        std::cerr << "Error: --proton must not be empty\n";
+        return 1;
+      }
+      ini.setValue("fluorine/proton_path",
+                   QDir::cleanPath(QFileInfo(value).absoluteFilePath()));
     }
     ini.sync();
     if (ini.status() != QSettings::NoError) {

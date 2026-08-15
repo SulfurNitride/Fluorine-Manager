@@ -92,6 +92,7 @@ list(APPEND ORGANIZER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/settingsdialogproton.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/unixtermination.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/wineprofileinisync.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/wineruntimeconfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/winesavedeployment.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/winesaverouting.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/winesavetargetresolver.cpp
@@ -122,6 +123,7 @@ list(APPEND ORGANIZER_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/settingsdialogproton.h
     ${CMAKE_CURRENT_SOURCE_DIR}/unixtermination.h
     ${CMAKE_CURRENT_SOURCE_DIR}/wineprofileinisync.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/wineruntimeconfig.h
     ${CMAKE_CURRENT_SOURCE_DIR}/winesavedeployment.h
     ${CMAKE_CURRENT_SOURCE_DIR}/winesaverouting.h
     ${CMAKE_CURRENT_SOURCE_DIR}/winesavetargetresolver.h

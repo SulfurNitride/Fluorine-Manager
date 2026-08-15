@@ -162,6 +162,13 @@ QString GameFallout76::gameShortName() const
   return "Fallout76";
 }
 
+QString GameFallout76::localAppName() const
+{
+  // Fallout 76 intentionally uses different Windows-visible leaves:
+  // Documents/My Games/Fallout 76 and AppData/Local/Fallout76.
+  return QStringLiteral("Fallout76");
+}
+
 QString GameFallout76::gameNexusName() const
 {
   return "Fallout76";

@@ -150,4 +150,9 @@ class Borderlands1Game(BasicGame):
     GameSaveExtension = "sav"
     GameDocumentsDirectory = "%DOCUMENTS%/My Games/Borderlands/"
     GameSavesDirectory = "%GAME_DOCUMENTS%/savedata"
-    GameIniFiles = "%GAME_DOCUMENTS%/WillowGame/Config"
+    GameIniFiles = [
+        "%GAME_DOCUMENTS%/WillowGame/Config/WillowEngine.ini",
+        "%GAME_DOCUMENTS%/WillowGame/Config/WillowGame.ini",
+        "%GAME_DOCUMENTS%/WillowGame/Config/WillowInput.ini",
+        "%GAME_DOCUMENTS%/WillowGame/Config/WillowUI.ini",
+    ]

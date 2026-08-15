@@ -192,7 +192,7 @@ TEST(WineSaveTargetResolver, RejectsUnsupportedAndConflictingMappedTargets) {
       paths.saves, paths.profileSaves, true, conflicting));
 }
 
-TEST(WineSaveTargetResolver, NonOptedGameDirectoryMappingKeepsLegacyFallback) {
+TEST(WineSaveTargetResolver, NonOptedGameDirectoryMappingRemainsVfsOwned) {
   Layout paths;
   const QString vampireRoot = QDir(paths.game).filePath("vampire");
   const QString vampireSaves = QDir(vampireRoot).filePath("SAVE");
@@ -206,11 +206,27 @@ TEST(WineSaveTargetResolver, NonOptedGameDirectoryMappingKeepsLegacyFallback) {
       vampireSaves, paths.profileSaves, false, mappings);
 
   ASSERT_TRUE(plan) << plan.error.toStdString();
-  EXPECT_EQ(plan.kind, WineSaveTargetResolver::Kind::PrefixRouted);
-  EXPECT_EQ(plan.livePath,
-            QDir(paths.myGames).filePath(QStringLiteral("Vampire/Saves")));
+  EXPECT_EQ(plan.kind, WineSaveTargetResolver::Kind::VfsOwned);
+  EXPECT_EQ(plan.livePath, QDir::cleanPath(vampireSaves));
   EXPECT_TRUE(WineSaveTargetResolver::isFixedGameDirectorySaveMapping(
       mappings.front(), paths.game, vampireSaves, paths.profileSaves));
+}
+
+TEST(WineSaveTargetResolver, AuthorizedExternalSaveMappingRemainsVfsOwned) {
+  Layout paths;
+  const QString external = paths.temporary.filePath("steam-userdata/remote");
+  ASSERT_TRUE(QDir().mkpath(external));
+  const MappingType mappings{
+      {paths.profileSaves, external, true, true},
+  };
+
+  const auto plan = WineSaveTargetResolver::resolve(
+      paths.drive, paths.user, paths.myGames, "ArkhamCity", paths.game,
+      external, paths.profileSaves, false, mappings);
+
+  ASSERT_TRUE(plan) << plan.error.toStdString();
+  EXPECT_EQ(plan.kind, WineSaveTargetResolver::Kind::VfsOwned);
+  EXPECT_EQ(plan.livePath, QFileInfo(external).canonicalFilePath());
 }
 
 TEST(WineSaveTargetResolver, FiltersOnlyTransactionOwnedDestinations) {

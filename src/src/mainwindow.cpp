@@ -3253,12 +3253,13 @@ void MainWindow::on_actionSettings_triggered()
     return;
   }
 
-  auto configurationLease = m_OrganizerCore.tryAcquireConfigurationLease();
+  auto configurationLease =
+      m_OrganizerCore.tryAcquireQuiescentConfigurationLease();
   if (!configurationLease) {
     QMessageBox::information(
-        this, tr("Settings already open"),
-        tr("Another Settings transaction is already active. Close it and try "
-           "again."));
+        this, tr("Settings unavailable"),
+        tr("Settings cannot be changed while an application is running or "
+           "another Settings transaction is active. Close it and try again."));
     return;
   }
 
@@ -3479,6 +3480,7 @@ void MainWindow::on_actionSettings_triggered()
       std::make_unique<SettingsDialog>(&m_PluginContainer, settings, this);
   const int dialogResult = dialog->exec();
   auto e = dialog->exitNeeded();
+  const bool runtimeLifecycleChanged = dialog->runtimeLifecycleChanged();
   const bool updatesSucceeded = dialog->updatesSucceeded();
   const QString updateFailureDetail = dialog->updateFailureDetail();
   rejectedProtonEditSnapshot =
@@ -3504,7 +3506,19 @@ void MainWindow::on_actionSettings_triggered()
   if (dialogResult != QDialog::Accepted) {
     // Plugin enablement and Nexus credentials can change while the modal
     // dialog is still open. Cancel must undo those live/persistent effects.
-    rollbackSettingsEdit(tr("The settings dialog was canceled"));
+    if (!rollbackSettingsEdit(tr("The settings dialog was canceled"))) {
+      return;
+    }
+    if (runtimeLifecycleChanged) {
+      const auto exitResult = ExitModOrganizer(Exit::Restart);
+      if (exitResult != ExitRequestResult::Authorized) {
+        failStopAfterSettingsRollback(
+            tr("Runtime restart required"),
+            tr("The Wine runtime was created, removed, or reset while Settings "
+               "was open. Fluorine Manager must close before another launch "
+               "can use the changed runtime."));
+      }
+    }
     return;
   }
 
@@ -3516,11 +3530,32 @@ void MainWindow::on_actionSettings_triggered()
              "were restored.")
               .arg(updateFailureDetail));
     }
+    if (runtimeLifecycleChanged) {
+      const auto exitResult = ExitModOrganizer(Exit::Restart);
+      if (exitResult != ExitRequestResult::Authorized) {
+        failStopAfterSettingsRollback(
+            tr("Runtime restart required"),
+            tr("The Wine runtime was created, removed, or reset before the "
+               "settings update failed. Fluorine Manager must close before "
+               "another launch can use the changed runtime."));
+      }
+    }
     return;
   }
 
   if (oldManagedGameDirectory != settings.game().directory()) {
     e |= Exit::Restart;
+  }
+
+  if (runtimeLifecycleChanged) {
+    const auto exitResult = ExitModOrganizer(Exit::Restart);
+    if (exitResult != ExitRequestResult::Authorized) {
+      failStopAfterSettingsRollback(
+          tr("Runtime restart required"),
+          tr("The Wine runtime changed while Settings was open. Fluorine "
+             "Manager must close before another launch can use it."));
+    }
+    return;
   }
 
   if (e.testFlag(Exit::Restart)) {

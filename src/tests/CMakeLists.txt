@@ -88,6 +88,15 @@ set_tests_properties(test_winesave_surface PROPERTIES
     TIMEOUT 10
 )
 add_test(
+    NAME test_wineruntime_surface
+    COMMAND ${Python3_EXECUTABLE} -m unittest -v
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_wineruntime_surface.py
+)
+set_tests_properties(test_wineruntime_surface PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    TIMEOUT 10
+)
+add_test(
     NAME test_profile_rename_surface
     COMMAND ${Python3_EXECUTABLE} -m unittest -v
             ${CMAKE_CURRENT_SOURCE_DIR}/test_profile_rename_surface.py
@@ -1462,7 +1471,8 @@ add_custom_target(fluorine-tests
             test_slroperationcontext test_pluginreloadpolicy test_launchlifecycle
             test_metainiutils
             test_vfs_backend
-            test_fluorineconfigownership test_protonsettingsedit
+            test_fluorineconfigownership test_wineruntimeconfig
+            test_protonsettingsedit
             test_heroicjson test_protondetection
             test_external_dir_mapping test_stalemountcleanup
             test_multiprocess test_externalmessagequeue

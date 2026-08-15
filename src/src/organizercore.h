@@ -326,9 +326,10 @@ public:
                  const QList<MOBase::ExecutableForcedLoadSetting>& forcedLibraries,
                  bool useProton, const QString& launchToken, bool ownsVfs,
                  QString* usvfsRequestPath = nullptr,
-                 spawn::SaveDeploymentReceipt* saveDeployment = nullptr);
+                 spawn::SaveDeploymentReceipt* saveDeployment = nullptr,
+                 const WineRuntimeConfig::Snapshot& wineRuntime = {});
 
-  bool checkGameRegistryKey();
+  bool checkGameRegistryKey(const WineRuntimeConfig::Snapshot& wineRuntime);
 
   bool reserveProcessLaunch(const QString& launchToken,
                             const QString& profileName, bool ownsVfs);

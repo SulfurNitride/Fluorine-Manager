@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Callable, Generic, TypeVar
 
-from PyQt6.QtCore import QDir, QFileInfo, QStandardPaths, qWarning
+from PyQt6.QtCore import QCoreApplication, QDir, QFileInfo, QStandardPaths
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QMessageBox
 
@@ -29,60 +29,51 @@ def _find_wine_userprofile() -> str | None:
     if platform.system() == "Windows":
         return None
 
-    candidates: list[str] = []
-
-    # 1. Fluorine data prefix (shared by native and Flatpak builds)
-    fluorine_pfx = os.path.expanduser(
-        "~/.local/share/fluorine/Prefix/pfx"
-    )
-    candidates.append(fluorine_pfx)
-
-    # 2. Fluorine config prefix_path
-    try:
-        config_dir = os.environ.get(
-            "XDG_CONFIG_HOME", os.path.join(str(Path.home()), ".config")
-        )
-        cfg_path = os.path.join(config_dir, "fluorine", "config.json")
-        if os.path.isfile(cfg_path):
-            import json
-
-            with open(cfg_path, "r") as f:
-                cfg = json.load(f)
-            pfx = cfg.get("prefix_path", "")
-            if pfx:
-                candidates.append(pfx)
-    except Exception:
-        pass
-
-    for pfx in candidates:
-        user_dir = os.path.join(pfx, "drive_c", "users", "steamuser")
-        if os.path.isdir(user_dir):
-            return user_dir
-
-    return None
+    app = QCoreApplication.instance()
+    if app is None:
+        return None
+    value = app.property("fluorineWineUserProfilePath")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return os.path.normpath(value.strip())
 
 
 def replace_variables(value: str, game: BasicGame) -> str:
     """Replace special paths in the given value."""
 
     if value.find("%DOCUMENTS%") != -1:
-        value = value.replace(
-            "%DOCUMENTS%",
-            QStandardPaths.writableLocation(
-                QStandardPaths.StandardLocation.DocumentsLocation
-            ),
-        )
-    if value.find("%USERPROFILE%") != -1:
-        if platform.system() != "Windows":
+        documents: str | None = None
+        if platform.system() != "Windows" and not game.isNativeLinux():
             wine_profile = _find_wine_userprofile()
             if wine_profile:
-                value = value.replace("%USERPROFILE%", wine_profile)
-            else:
-                qWarning(
-                    "No Wine/Proton prefix found. "
-                    "Ensure a prefix is configured in Settings > Proton."
+                documents = os.path.join(wine_profile, "Documents")
+        else:
+            documents = QStandardPaths.writableLocation(
+                QStandardPaths.StandardLocation.DocumentsLocation
+            )
+        if documents:
+            value = value.replace("%DOCUMENTS%", documents)
+        else:
+            raise RuntimeError(
+                "The selected instance has no valid Wine Documents path for "
+                "%DOCUMENTS%."
+            )
+    if value.find("%USERPROFILE%") != -1:
+        if platform.system() != "Windows":
+            user_profile = (
+                QStandardPaths.writableLocation(
+                    QStandardPaths.StandardLocation.HomeLocation
                 )
-                value = value.replace("%USERPROFILE%", "")
+                if game.isNativeLinux()
+                else _find_wine_userprofile()
+            )
+            if user_profile:
+                value = value.replace("%USERPROFILE%", user_profile)
+            else:
+                raise RuntimeError(
+                    "The selected instance has no valid Wine user profile for "
+                    "%USERPROFILE%."
+                )
         else:
             value = value.replace(
                 "%USERPROFILE%",
@@ -176,6 +167,13 @@ class BasicGameMapping(Generic[_T]):
         # MO2 does not support Path anywhere so we always convert to str:
         elif isinstance(value, Path):
             return replace_variables(str(value), self._game)  # type: ignore
+        elif isinstance(value, list):
+            return [
+                replace_variables(item, self._game)
+                if isinstance(item, str)
+                else item
+                for item in value
+            ]  # type: ignore
 
         return value
 
@@ -278,6 +276,15 @@ class BasicGameMappings:
 
     @staticmethod
     def _default_documents_directory(game: mobase.IPluginGame):
+        if platform.system() != "Windows" and not game.isNativeLinux():
+            wine_profile = _find_wine_userprofile()
+            if not wine_profile:
+                raise RuntimeError(
+                    "The selected instance has no valid Wine Documents path."
+                )
+            return QDir(os.path.join(wine_profile, "Documents", "My Games",
+                                     game.gameName()))
+
         folders = [
             "{}/My Games/{}".format(
                 QStandardPaths.writableLocation(

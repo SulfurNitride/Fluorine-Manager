@@ -115,6 +115,7 @@ void GameSkyrimSE::setGamePath(const QString& path)
 
 QDir GameSkyrimSE::savesDirectory() const
 {
+  if (m_MyGamesPath.isEmpty()) return {};
   return QDir(m_MyGamesPath + "/Saves");
 }
 
@@ -348,10 +349,12 @@ QDir GameSkyrimSE::gameDirectory() const
 MappingType GameSkyrimSE::mappings() const
 {
   MappingType result;
+  const QString appData = localAppFolder();
+  if (appData.isEmpty()) return result;
 
   for (const QString& profileFile : {"plugins.txt", "loadorder.txt"}) {
     result.push_back({m_Organizer->profilePath() + "/" + profileFile,
-                      localAppFolder() + "/" + gameDirectoryName() + "/" + profileFile,
+                      QDir(appData).filePath(gameDirectoryName() + "/" + profileFile),
                       false});
   }
 

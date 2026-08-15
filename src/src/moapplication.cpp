@@ -37,6 +37,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "fluorinepaths.h"
 #include "fuseconnector.h"
 #include "wineprefix.h"
+#include "wineruntimeconfig.h"
 
 #include <cerrno>
 #include <filesystem>
@@ -328,6 +329,9 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
   const QString dataPath = m_instance->directory();
   setProperty("dataPath", dataPath);
   setProperty("fluorinePortableInstance", m_instance->isPortable());
+  // A reselected instance must never inherit paths published by the previous
+  // setup generation while its plugins are being discovered.
+  WineRuntimeConfig::clear();
 
   if (!setLogDirectory(dataPath)) {
     reportError(tr("Failed to create log folder."));
@@ -379,6 +383,34 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
   }
   log::getDefault().setLevel(m_settings->diagnostics().logLevel());
   log::debug("using ini at '{}'", m_settings->filename());
+
+  const WineRuntimeConfig::Snapshot wineRuntime =
+      WineRuntimeConfig::resolveInstance(m_settings->filename());
+  if (!WineRuntimeConfig::publish(wineRuntime)) {
+    reportError(tr("Failed to publish the selected instance's Wine runtime "
+                   "configuration."));
+    return 1;
+  }
+  if (!wineRuntime.prefixError.isEmpty()) {
+    log::error("Wine prefix configuration is invalid: {}",
+               wineRuntime.prefixError);
+  } else if (!wineRuntime.prefixPath.isEmpty()) {
+    log::info("Wine runtime prefix: '{}' ({})", wineRuntime.prefixPath,
+              WineRuntimeConfig::sourceName(wineRuntime.prefixSource));
+    if (wineRuntime.prefixSource ==
+        WineRuntimeConfig::Source::InstanceLegacy) {
+      log::warn("This instance is using legacy auto-detected Wine prefix '{}'. "
+                "Set fluorine/prefix_path explicitly or create an application "
+                "default in Settings > Proton to pin its authority.",
+                wineRuntime.prefixPath);
+    }
+  }
+  if (!wineRuntime.protonError.isEmpty()) {
+    log::error("Proton configuration is invalid: {}", wineRuntime.protonError);
+  } else if (!wineRuntime.protonPath.isEmpty()) {
+    log::info("Wine runtime Proton: '{}' ({})", wineRuntime.protonPath,
+              WineRuntimeConfig::sourceName(wineRuntime.protonSource));
+  }
 
   // Apply through the authoritative Settings facade after admission. This is
   // the first instance-appearance read and installs the live file watcher.
@@ -484,24 +516,24 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
   // Restore any stale INI/save backups left by a previous Wine/Proton crash.
   // Native Linux game instances do not use the prefix during launch.
   if (!m_instance->gamePlugin()->isNativeLinux()) {
-    auto prefixPath = FluorineConfig::prefixPath();
-    if (!prefixPath || prefixPath->isEmpty()) {
-      QSettings const instanceSettings(m_settings->filename(), QSettings::IniFormat);
-      for (const auto& key : {"fluorine/prefix_path", "Settings/proton_prefix_path",
-                              "Settings/prefix_path", "Proton/prefix_path"}) {
-        const QString value = instanceSettings.value(key).toString().trimmed();
-        if (!value.isEmpty()) {
-          prefixPath = value;
-          break;
-        }
-      }
-    }
-    if (prefixPath && !prefixPath->isEmpty()) {
-      WinePrefix const prefix(*prefixPath);
+    const WineRuntimeConfig::Snapshot runtime = WineRuntimeConfig::current();
+    QString runtimeError;
+    if (!runtime.prefixError.isEmpty()) {
+      log::error("Skipping Wine-prefix recovery because the selected runtime "
+                 "is invalid: {}",
+                 runtime.prefixError);
+    } else if (!runtime.prefixPath.isEmpty() &&
+               WineRuntimeConfig::revalidatePrefix(runtime, &runtimeError)) {
+      WinePrefix const prefix(runtime.prefixPath, runtime.userProfilePath);
       if (prefix.isValid()) {
-        log::info("checking for stale backup files in prefix '{}'", *prefixPath);
+        log::info("checking for stale backup files in prefix '{}'",
+                  runtime.prefixPath);
         prefix.restoreStaleBackups();
       }
+    } else if (!runtimeError.isEmpty()) {
+      log::error("Skipping Wine-prefix recovery because its setup generation "
+                 "changed: {}",
+                 runtimeError);
     }
   }
 
@@ -922,6 +954,7 @@ void MOApplication::resetForRestart()
   m_nexus    = {};
   m_settings = {};
   m_instance = {};
+  WineRuntimeConfig::clear();
 
   resetAppearance();
 

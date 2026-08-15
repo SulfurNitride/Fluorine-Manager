@@ -239,7 +239,6 @@ findProtonsForPaths(const QStringList& steamLibraries,
       protons.end());
 
   QSet<QString> seenPaths;
-  QSet<QString> seenNames;
   QVector<SteamProtonInfo> uniqueProtons;
   uniqueProtons.reserve(protons.size());
 
@@ -248,10 +247,7 @@ findProtonsForPaths(const QStringList& steamLibraries,
     const QString canonicalPath = pathInfo.canonicalFilePath();
     const QString pathKey =
         QDir::cleanPath(canonicalPath.isEmpty() ? proton.path : canonicalPath);
-    const QString nameKey = proton.name.trimmed().toCaseFolded();
-
-    if ((!pathKey.isEmpty() && seenPaths.contains(pathKey)) ||
-        (!nameKey.isEmpty() && seenNames.contains(nameKey))) {
+    if (!pathKey.isEmpty() && seenPaths.contains(pathKey)) {
       MOBase::log::debug("Skipping duplicate Proton '{}' at '{}'",
                          proton.name, proton.path);
       continue;
@@ -259,9 +255,6 @@ findProtonsForPaths(const QStringList& steamLibraries,
 
     if (!pathKey.isEmpty()) {
       seenPaths.insert(pathKey);
-    }
-    if (!nameKey.isEmpty()) {
-      seenNames.insert(nameKey);
     }
     uniqueProtons.append(std::move(proton));
   }

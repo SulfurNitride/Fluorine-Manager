@@ -11,6 +11,8 @@
 #include <QTextEdit>
 #include <QThread>
 
+class QCloseEvent;
+
 /// Modal dialog that shows step-by-step Wine prefix setup progress.
 ///
 /// Displays each setup step with status icons, a live log, and
@@ -30,9 +32,15 @@ public:
 
   /// True if all steps succeeded.
   bool succeeded() const { return m_allSucceeded; }
+  /// True only after the worker has emitted its terminal completion signal.
+  bool quiescent() const { return m_started && !m_running; }
+
+public slots:
+  void reject() override;
 
 protected:
   void showEvent(QShowEvent* event) override;
+  void closeEvent(QCloseEvent* event) override;
 
 private slots:
   void onStepStarted(int index);
@@ -64,6 +72,7 @@ private:
   bool m_allSucceeded = false;
   bool m_running      = false;
   bool m_started      = false;
+  bool m_closeWhenFinished = false;
 
   // -- worker ----------------------------------------------------------------
   PrefixSetupRunner* m_runner = nullptr;

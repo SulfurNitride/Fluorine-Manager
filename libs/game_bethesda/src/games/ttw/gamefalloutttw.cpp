@@ -62,8 +62,8 @@ void GameFalloutTTW::setVariant(QString variant)
 
 void GameFalloutTTW::checkVariants()
 {
-  QFileInfo gog_dll(m_GamePath + "\\Galaxy.dll");
-  QFileInfo epic_dll(m_GamePath + "\\EOSSDK-Win32-Shipping.dll");
+  QFileInfo gog_dll(QDir(m_GamePath).filePath("Galaxy.dll"));
+  QFileInfo epic_dll(QDir(m_GamePath).filePath("EOSSDK-Win32-Shipping.dll"));
   if (gog_dll.exists())
     setVariant("GOG");
   else if (epic_dll.exists())
@@ -131,6 +131,7 @@ void GameFalloutTTW::setGamePath(const QString& path)
 
 QDir GameFalloutTTW::savesDirectory() const
 {
+  if (m_MyGamesPath.isEmpty()) return {};
   return QDir(m_MyGamesPath + "/Saves");
 }
 
@@ -365,14 +366,16 @@ QString GameFalloutTTW::getLauncherName() const
 MappingType GameFalloutTTW::mappings() const
 {
   MappingType result;
+  const QString appData = localAppFolder();
+  if (appData.isEmpty()) return result;
 
   for (const QString& profileFile : {"plugins.txt", "loadorder.txt"}) {
     result.push_back({m_Organizer->profilePath() + "/" + profileFile,
-                      localAppFolder() + "/FalloutNV/" + profileFile, false});
+                      QDir(appData).filePath("FalloutNV/" + profileFile), false});
     if (selectedVariant() == "Epic Games") {
       result.push_back(
           {m_Organizer->profilePath() + "/" + profileFile,
-           localAppFolder() + "/" + gameDirectoryName() + "/" + profileFile, false});
+           QDir(appData).filePath(gameDirectoryName() + "/" + profileFile), false});
     }
   }
   return result;

@@ -10,6 +10,7 @@
 #include "launchlifecycle.h"
 #include "organizercore.h"
 #include "vfsbackend.h"
+#include "wineruntimeconfig.h"
 
 #include <iplugingame.h>
 #include <log.h>
@@ -1249,6 +1250,40 @@ std::optional<ProcessRunner::Results> ProcessRunner::runBinary()
   const bool ownsVfs = (game == nullptr) || game->usesVFS();
   m_ownsVfs = ownsVfs;
 
+  m_sp.wineRuntime = WineRuntimeConfig::current();
+  // A direct native launch has no Wine authority. Passing the process-global
+  // default into OrganizerCore would make OpenMW and other native games enter
+  // registry/save/INI preparation for an unrelated prefix.
+  if (game != nullptr && game->isNativeLinux() && !m_sp.useProton) {
+    m_sp.wineRuntime = {};
+  }
+  QString wineRuntimeError;
+  if (m_sp.useProton &&
+      (m_sp.wineRuntime.generation == 0 ||
+       !m_sp.wineRuntime.prefixError.isEmpty() ||
+       m_sp.wineRuntime.prefixPath.isEmpty() ||
+       !m_sp.wineRuntime.protonError.isEmpty() ||
+       m_sp.wineRuntime.protonPath.isEmpty() ||
+       !WineRuntimeConfig::revalidate(m_sp.wineRuntime,
+                                      &wineRuntimeError))) {
+    if (wineRuntimeError.isEmpty()) {
+      wineRuntimeError = !m_sp.wineRuntime.prefixError.isEmpty()
+                             ? m_sp.wineRuntime.prefixError
+                         : !m_sp.wineRuntime.protonError.isEmpty()
+                             ? m_sp.wineRuntime.protonError
+                             : QObject::tr(
+                                   "No complete Wine prefix and Proton runtime "
+                                   "is configured for this instance.");
+    }
+    log::error("Refusing Proton launch: {}", wineRuntimeError);
+    MOBase::reportError(
+        QObject::tr("The selected Wine/Proton runtime is unavailable:\n\n%1\n\n"
+                    "Correct the instance override or the application default "
+                    "in Settings > Proton, then restart Fluorine Manager.")
+            .arg(wineRuntimeError));
+    return Error;
+  }
+
   m_sp.lifetimeToken =
       QUuid::createUuid().toString(QUuid::WithoutBraces);
   if (!m_core.reserveProcessLaunch(m_sp.lifetimeToken, m_profileName,
@@ -1290,7 +1325,7 @@ std::optional<ProcessRunner::Results> ProcessRunner::runBinary()
                         m_sp.argumentList, m_profileName, m_customOverwrite,
                         m_forcedLibraries, m_sp.useProton, m_sp.lifetimeToken,
                         ownsVfs, &m_sp.usvfsRequestPath,
-                        &m_sp.saveDeployment)) {
+                        &m_sp.saveDeployment, m_sp.wineRuntime)) {
     return Error;
   }
 

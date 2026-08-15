@@ -482,6 +482,56 @@ TEST(WineSaveDeployment, DistinctSavePathsShareOnePrefixLease) {
   EXPECT_TRUE(second.tryLock(0));
 }
 
+TEST(WineSaveDeployment, PrefixLeaseSurvivesDeleteAndRecreate) {
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const QString compatData = QDir(temporary.path()).filePath("compatdata/1234");
+  const QString prefix = QDir(compatData).filePath("pfx");
+  const QString exact = QDir(prefix).filePath("drive_c/users/steamuser/Saves");
+  ASSERT_TRUE(QDir().mkpath(QFileInfo(exact).absolutePath()));
+  const QString leasePath =
+      WineSaveDeployment::leasePathFor(prefix, exact);
+  EXPECT_TRUE(QDir(prefix).relativeFilePath(leasePath).startsWith(".."));
+  EXPECT_TRUE(QDir(compatData).relativeFilePath(leasePath).startsWith(".."));
+
+  QLockFile first(leasePath);
+  ASSERT_TRUE(first.tryLock(0));
+  ASSERT_TRUE(QDir(compatData).removeRecursively());
+  ASSERT_TRUE(QDir().mkpath(QDir(prefix).filePath("drive_c")));
+
+  QLockFile second(
+      WineSaveDeployment::leasePathFor(prefix, exact));
+  EXPECT_FALSE(second.tryLock(0));
+  first.unlock();
+  EXPECT_TRUE(second.tryLock(0));
+}
+
+TEST(WineSaveDeployment, PersistedSetupOwnerSurvivesProcessLockRelease) {
+  FixturePaths paths;
+  ASSERT_TRUE(paths.temporary.isValid());
+  const QString lockPath =
+      WineSaveDeployment::leasePathFor(paths.prefix, QString{});
+  QLockFile first(lockPath);
+  ASSERT_TRUE(first.tryLock(0));
+  auto result = WineSaveDeployment::beginSessionLease(
+      paths.prefix, paths.prefix, QStringLiteral("prefix-setup-owner"));
+  ASSERT_TRUE(result) << qPrintable(result.error);
+
+  // A killed manager loses its process lock, but the durable marker must
+  // remain authoritative and prevent a replacement process from adopting the
+  // structurally valid prefix while setup descendants may still be alive.
+  first.unlock();
+  QLockFile replacement(lockPath);
+  ASSERT_TRUE(replacement.tryLock(0));
+  EXPECT_TRUE(WineSaveDeployment::hasPersistedSessionLease(paths.prefix));
+  result = WineSaveDeployment::beginSessionLease(
+      paths.prefix, paths.prefix, QStringLiteral("replacement-launch"));
+  EXPECT_FALSE(result);
+  result = WineSaveDeployment::endSessionLease(
+      paths.prefix, paths.prefix, QStringLiteral("prefix-setup-owner"));
+  EXPECT_TRUE(result) << qPrintable(result.error);
+}
+
 TEST(WineSaveDeployment, PersistedSessionLeaseCannotBeStolen) {
   FixturePaths paths;
   ASSERT_TRUE(paths.temporary.isValid());

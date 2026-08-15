@@ -7,6 +7,7 @@
 #include "restarttransaction.h"
 #include "selectiondialog.h"
 #include "settings.h"
+#include "wineruntimeconfig.h"
 #include "shared/appconfig.h"
 #include "shared/util.h"
 #include "ui_instancemanagerdialog.h"
@@ -908,8 +909,21 @@ void InstanceManagerDialog::fillData(const Instance& ii)
     const QString ini = ii.iniPath();
     if (!ini.isEmpty() && QFile::exists(ini)) {
       QSettings const s(ini, QSettings::IniFormat);
-      ui->prefixPath->setText(s.value("Settings/proton_prefix_path").toString());
-      ui->protonVersion->setText(s.value("fluorine/proton_name").toString());
+      const auto runtime = WineRuntimeConfig::resolveInstance(ini);
+      ui->prefixPath->setText(
+          runtime.prefixError.isEmpty()
+              ? runtime.prefixPath
+              : tr("Invalid: %1").arg(runtime.prefixError));
+      ui->prefixPath->setToolTip(
+          tr("Effective source: %1")
+              .arg(WineRuntimeConfig::sourceName(runtime.prefixSource)));
+      ui->protonVersion->setText(
+          runtime.protonError.isEmpty()
+              ? runtime.protonPath
+              : tr("Invalid: %1").arg(runtime.protonError));
+      ui->protonVersion->setToolTip(
+          tr("Effective source: %1")
+              .arg(WineRuntimeConfig::sourceName(runtime.protonSource)));
 
       ui->steamDrmCheckBox->blockSignals(true);
       ui->steamDrmCheckBox->setChecked(s.value("fluorine/steam_drm", true).toBool());
@@ -925,7 +939,9 @@ void InstanceManagerDialog::fillData(const Instance& ii)
 
     } else {
       ui->prefixPath->clear();
+      ui->prefixPath->setToolTip({});
       ui->protonVersion->clear();
+      ui->protonVersion->setToolTip({});
       ui->steamDrmCheckBox->blockSignals(true);
       ui->steamDrmCheckBox->setChecked(false);
       ui->steamDrmCheckBox->blockSignals(false);

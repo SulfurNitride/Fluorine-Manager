@@ -19,6 +19,7 @@
 
 #include <QDir>
 #include <QDirIterator>
+#include <QCoreApplication>
 #include <QFile>
 #include <QFileInfo>
 #include <QIcon>
@@ -101,6 +102,9 @@ QDir GameGamebryo::documentsDirectory() const
 
 QDir GameGamebryo::savesDirectory() const
 {
+  if (m_MyGamesPath.isEmpty()) {
+    return {};
+  }
   return QDir(myGamesPath() + "/Saves");
 }
 
@@ -285,6 +289,11 @@ bool GameGamebryo::prepareIni(const QString&)
   QString basePath = profile->localSettingsEnabled()
                          ? profile->absolutePath()
                          : documentsDirectory().absolutePath();
+  if (!profile->localSettingsEnabled() && m_MyGamesPath.isEmpty()) {
+    MOBase::log::error(
+        "Cannot prepare global INIs without a valid Wine Documents path");
+    return false;
+  }
 
   if (!ensureIniFilesExist(basePath)) {
     return false;
@@ -395,20 +404,12 @@ QString GameGamebryo::myGamesPath() const
 #endif
 }
 
-static QString readFluorinePrefixPath()
+static QString runtimeWineUserProfile()
 {
-  QString configRoot =
-      QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
-  if (configRoot.isEmpty())
-    configRoot = QDir::homePath() + "/.config";
-  QString configPath = QDir(configRoot).filePath("fluorine/config.json");
-  QFile f(configPath);
-  if (!f.open(QIODevice::ReadOnly))
+  const auto* application = QCoreApplication::instance();
+  if (application == nullptr)
     return {};
-  auto json = QJsonDocument::fromJson(f.readAll());
-  if (!json.isObject())
-    return {};
-  return json.object().value("prefix_path").toString().trimmed();
+  return application->property("fluorineWineUserProfilePath").toString().trimmed();
 }
 
 QString GameGamebryo::localAppFolder()
@@ -421,36 +422,17 @@ QString GameGamebryo::localAppFolder()
   }
   return result;
 #else
-  // On Linux, AppData/Local lives inside the Wine prefix.
-  const QString configuredPrefix = readFluorinePrefixPath();
-  if (!configuredPrefix.isEmpty()) {
-    const QString appDataLocal =
-        QDir(configuredPrefix).filePath("drive_c/users/steamuser/AppData/Local");
-    if (QDir(appDataLocal).exists() || QDir().mkpath(appDataLocal)) {
-      return appDataLocal;
-    }
+  // The organizer publishes the selected instance's immutable Wine user
+  // profile before plugin discovery. A missing context is an unavailable
+  // runtime, never permission to scan arbitrary Steam/Bottles prefixes or
+  // create directories as a side effect of a path query.
+  const QString userProfile = runtimeWineUserProfile();
+  if (userProfile.isEmpty()) {
+    MOBase::log::warn(
+        "localAppFolder: selected instance has no valid Wine runtime context");
+    return {};
   }
-
-  // Fallback: search Steam Proton prefixes
-  const QString steamRoot =
-      QDir::homePath() + "/.steam/steam/steamapps/compatdata";
-  QDir compatDir(steamRoot);
-  if (compatDir.exists()) {
-    for (const QString& appId :
-         compatDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
-      const QString appDataLocal = steamRoot + "/" + appId +
-                                   "/pfx/drive_c/users/steamuser/AppData/Local";
-      if (QDir(appDataLocal).exists()) {
-        return appDataLocal;
-      }
-    }
-  }
-
-  // Last resort: GenericDataLocation (won't work for Wine games but
-  // prevents crashes)
-  MOBase::log::warn("localAppFolder: could not find Wine prefix "
-                    "AppData/Local, falling back to XDG data location");
-  return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
+  return QDir(userProfile).filePath("AppData/Local");
 #endif
 }
 
@@ -458,6 +440,17 @@ void GameGamebryo::copyToProfile(QString const& sourcePath,
                                  QDir const& destinationDirectory,
                                  QString const& sourceFileName)
 {
+#ifndef _WIN32
+  if (runtimeWineUserProfile().isEmpty()) {
+    MOBase::log::warn(
+        "Skipping profile initialization without a valid Wine runtime context");
+    return;
+  }
+#endif
+  if (sourcePath.trimmed().isEmpty()) {
+    MOBase::log::warn("Skipping profile initialization from an empty source path");
+    return;
+  }
   copyToProfile(sourcePath, destinationDirectory, sourceFileName, sourceFileName);
 }
 
@@ -515,10 +508,14 @@ QString GameGamebryo::localAppName() const
 MappingType GameGamebryo::mappings() const
 {
   MappingType result;
+  const QString appData = localAppFolder();
+  if (appData.isEmpty()) {
+    return result;
+  }
 
   for (const QString& profileFile : {"plugins.txt", "loadorder.txt"}) {
     result.push_back({m_Organizer->profilePath() + "/" + profileFile,
-                      localAppFolder() + "/" + localAppName() + "/" + profileFile,
+                      QDir(appData).filePath(localAppName() + "/" + profileFile),
                       false});
   }
 
@@ -602,6 +599,7 @@ QString GameGamebryo::determineMyGamesPath(const QString& gameName,
 {
   const QString pattern = "%1/My Games/" + gameName;
 
+#ifdef _WIN32
   auto tryDir = [&](const QString& dir) -> std::optional<QString> {
     if (dir.isEmpty()) {
       return {};
@@ -614,8 +612,6 @@ QString GameGamebryo::determineMyGamesPath(const QString& gameName,
 
     return path;
   };
-
-#ifdef _WIN32
   // a) this is the way it should work. get the configured My Documents directory
   if (auto d = tryDir(getKnownFolderPath(FOLDERID_Documents, false))) {
     return *d;
@@ -631,70 +627,14 @@ QString GameGamebryo::determineMyGamesPath(const QString& gameName,
     return *d;
   }
 #else
-  // On Linux, My Games is inside the Wine prefix's Documents folder.
-  // Check common Wine prefix locations for steamuser Documents.
-  QStringList prefixDocPaths;
-
-  // First check the configured prefix from fluorine config (most reliable).
-  const QString configuredPrefix = readFluorinePrefixPath();
-  if (!configuredPrefix.isEmpty()) {
-    const QString configuredDocs =
-        QDir(configuredPrefix).filePath("drive_c/users/steamuser/Documents");
-    prefixDocPaths.append(configuredDocs);
+  Q_UNUSED(createIfMissing);
+  const QString userProfile = runtimeWineUserProfile();
+  if (userProfile.isEmpty()) {
+    MOBase::log::debug("determineMyGamesPath: no selected Wine runtime for '{}'",
+                       gameName);
+    return {};
   }
-
-  // Standard Steam Proton prefix paths
-  QString steamRoot = QDir::homePath() + "/.steam/steam/steamapps/compatdata";
-  QDir compatDir(steamRoot);
-  if (compatDir.exists()) {
-    QStringList appIds = compatDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-    for (const QString& appId : appIds) {
-      prefixDocPaths.append(steamRoot + "/" + appId +
-                            "/pfx/drive_c/users/steamuser/Documents");
-    }
-  }
-
-  // Also check XDG Documents (for native games or manual setups)
-  prefixDocPaths.append(
-      QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation));
-
-  for (const QString& docPath : prefixDocPaths) {
-    if (auto d = tryDir(docPath)) {
-      MOBase::log::debug("determineMyGamesPath: found '{}' for game '{}'", *d, gameName);
-      return *d;
-    }
-  }
-
-  // No existing directory found. By default we return the expected path
-  // (under the configured prefix) WITHOUT creating it — every Bethesda
-  // plugin constructs itself at startup, and pre-creating `My Games/<Game>`
-  // for every possible title (Fallout4, Oblivion, Morrowind, …) clutters
-  // the user's prefix with empty folders for games they don't have.
-  // See issue #55.
-  //
-  // Callers that actually need the directory (profile initialization,
-  // save writes, ini deployment) should mkpath on demand or pass
-  // createIfMissing=true explicitly.
-  if (!configuredPrefix.isEmpty()) {
-    const QString configuredDocs =
-        QDir(configuredPrefix).filePath("drive_c/users/steamuser/Documents");
-    const QString newPath = pattern.arg(configuredDocs);
-    if (createIfMissing) {
-      if (QDir().mkpath(newPath)) {
-        MOBase::log::info("determineMyGamesPath: created '{}' for game '{}'",
-                          newPath, gameName);
-        return newPath;
-      }
-    } else {
-      // Return the expected path for reference; callers may check for
-      // existence before writing.
-      return newPath;
-    }
-  }
-
-  MOBase::log::debug(
-      "determineMyGamesPath: no existing My Games path for '{}' (create=false)",
-      gameName);
+  return pattern.arg(QDir(userProfile).filePath("Documents"));
 #endif
 
   return {};

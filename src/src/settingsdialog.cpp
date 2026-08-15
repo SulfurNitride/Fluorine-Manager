@@ -86,6 +86,17 @@ void SettingsDialog::reportUpdateFailure(const QString& detail)
   }
 }
 
+void SettingsDialog::markRuntimeLifecycleChanged()
+{
+  m_runtimeLifecycleChanged = true;
+  m_exit |= Exit::Restart;
+}
+
+bool SettingsDialog::runtimeLifecycleChanged() const
+{
+  return m_runtimeLifecycleChanged;
+}
+
 bool SettingsDialog::updatesSucceeded() const
 {
   return m_updateFailureDetail.isEmpty();
@@ -94,6 +105,21 @@ bool SettingsDialog::updatesSucceeded() const
 QString SettingsDialog::updateFailureDetail() const
 {
   return m_updateFailureDetail;
+}
+
+void SettingsDialog::beginRuntimeMutation()
+{
+  m_runtimeMutationActive = true;
+}
+
+void SettingsDialog::endRuntimeMutation()
+{
+  m_runtimeMutationActive = false;
+}
+
+bool SettingsDialog::runtimeMutationActive() const
+{
+  return m_runtimeMutationActive;
 }
 
 int SettingsDialog::exec()
@@ -138,6 +164,12 @@ QString SettingsDialog::getColoredButtonStyleSheet()
 
 void SettingsDialog::accept()
 {
+  if (m_runtimeMutationActive) {
+    QMessageBox::information(
+        this, tr("Wine Runtime Busy"),
+        tr("Wait for Winetricks to finish before closing Settings."));
+    return;
+  }
   QString newModPath = ui->modDirEdit->text();
   newModPath         = PathSettings::resolve(newModPath, ui->baseDirEdit->text());
 
@@ -155,6 +187,17 @@ void SettingsDialog::accept()
   }
 
   TutorableDialog::accept();
+}
+
+void SettingsDialog::reject()
+{
+  if (m_runtimeMutationActive) {
+    QMessageBox::information(
+        this, tr("Wine Runtime Busy"),
+        tr("Wait for Winetricks to finish before closing Settings."));
+    return;
+  }
+  TutorableDialog::reject();
 }
 
 SettingsTab::SettingsTab(Settings& s, SettingsDialog& d)

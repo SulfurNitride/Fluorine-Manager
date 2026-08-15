@@ -1648,15 +1648,38 @@ Result rollbackLinks(const QString &prefixRoot, const QString &profileRoot,
 QString leasePathFor(const QString &prefixRoot, const QString &exactLivePath) {
   Q_UNUSED(exactLivePath);
   const QString canonicalPrefix = QFileInfo(prefixRoot).canonicalFilePath();
-  return QDir(canonicalPrefix.isEmpty() ? canonicalOrAbsolute(prefixRoot)
-                                        : canonicalPrefix)
-      .filePath(QStringLiteral(".fluorine-save-prefix.lock"));
+  const QString identity = canonicalPrefix.isEmpty()
+                               ? canonicalOrAbsolute(prefixRoot)
+                               : canonicalPrefix;
+  const QByteArray digest =
+      QCryptographicHash::hash(identity.toUtf8(), QCryptographicHash::Sha256)
+          .toHex()
+          .left(24);
+  QFileInfo prefixInfo(identity);
+  QDir lockDirectory = prefixInfo.dir();
+  // A configured Proton layout points at <compatdata>/pfx, while deleting the
+  // runtime removes the entire compatdata directory. Put that admission lock
+  // one level above the complete deletion boundary. Plain/direct prefixes use
+  // their ordinary parent directory.
+  if (prefixInfo.fileName() == QStringLiteral("pfx")) {
+    lockDirectory.cdUp();
+  }
+  // The lock must survive delete/recreate of every tree it protects. Keeping
+  // it outside the deletion boundary also prevents an open QLockFile from
+  // becoming an unlinked inode while a second process acquires a replacement
+  // pathname.
+  return lockDirectory.filePath(
+      QStringLiteral(".fluorine-save-prefix-%1.lock")
+          .arg(QString::fromLatin1(digest)));
 }
 
 QString sessionLeasePathFor(const QString &prefixRoot,
                             const QString &exactLivePath) {
-  return leasePathFor(prefixRoot, exactLivePath) +
-         QStringLiteral(".session.json");
+  Q_UNUSED(exactLivePath);
+  const QString canonicalPrefix = QFileInfo(prefixRoot).canonicalFilePath();
+  return QDir(canonicalPrefix.isEmpty() ? canonicalOrAbsolute(prefixRoot)
+                                        : canonicalPrefix)
+      .filePath(QStringLiteral(".fluorine-save-prefix.lock.session.json"));
 }
 
 bool hasPersistedSessionLease(const QString &prefixRoot) {

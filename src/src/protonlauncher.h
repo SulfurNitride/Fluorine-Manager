@@ -23,6 +23,7 @@ public:
   ProtonLauncher& setGameDirectory(const QString& dir);
   ProtonLauncher& setProtonPath(const QString& path);
   ProtonLauncher& setPrefix(const QString& path);
+  ProtonLauncher& setCompatDataPath(const QString& path);
   ProtonLauncher& setSteamAppId(uint32_t id);
   ProtonLauncher& setWrapper(const QString& wrapperCmd);
   ProtonLauncher& setSteamDrm(bool useSteamDrm);
@@ -56,6 +57,7 @@ private:
   QString m_gameDirectory;
   QString m_protonPath;
   QString m_prefixPath;
+  QString m_compatDataPath;
   uint32_t m_steamAppId{0};
   QStringList m_wrapperCommands;
   bool m_useSteamDrm{true};

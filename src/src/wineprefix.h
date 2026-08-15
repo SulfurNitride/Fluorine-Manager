@@ -22,7 +22,8 @@ public:
                  // (SSE/AE/FO4/Starfield)
   };
 
-  explicit WinePrefix(const QString& prefixPath);
+  explicit WinePrefix(const QString& prefixPath,
+                      const QString& userProfilePath = {});
 
   bool isValid() const;  // drive_c/ exists
   QString driveC() const;
@@ -96,11 +97,14 @@ public:
   bool readHklmValues(QList<WineRegistryFile::Query>& queries,
                       QString* error = nullptr) const;
   bool writeHklmValues(const QList<WineRegistryFile::Update>& updates,
-                       QString* error = nullptr) const;
-  bool pruneExtraDrives(QStringList& removed, QString* error = nullptr) const;
+                       QString* error = nullptr,
+                       bool prefixLeaseHeld = false) const;
+  bool pruneExtraDrives(QStringList& removed, QString* error = nullptr,
+                        bool prefixLeaseHeld = false) const;
 
 private:
   QString m_prefixPath;
+  QString m_userProfilePath;
 };
 
 #endif  // WINEPREFIX_H

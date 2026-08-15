@@ -79,20 +79,28 @@ public:
 
   void setExitNeeded(ExitFlags e);
   ExitFlags exitNeeded() const;
+  void markRuntimeLifecycleChanged();
+  bool runtimeLifecycleChanged() const;
   void reportUpdateFailure(const QString& detail);
   bool updatesSucceeded() const;
   QString updateFailureDetail() const;
+  void beginRuntimeMutation();
+  void endRuntimeMutation();
+  bool runtimeMutationActive() const;
 
   int exec() override;
 
 public slots:
   void accept() override;
+  void reject() override;
 
 private:
   Ui::SettingsDialog* ui;
   Settings& m_settings;
   std::vector<std::unique_ptr<SettingsTab>> m_tabs;
   ExitFlags m_exit;
+  bool m_runtimeLifecycleChanged{false};
+  bool m_runtimeMutationActive{false};
   PluginContainer* m_pluginContainer;
   QString m_updateFailureDetail;
 };

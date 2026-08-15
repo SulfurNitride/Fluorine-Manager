@@ -1811,13 +1811,13 @@ If you disable this feature, MO will only display official DLCs this way. Please
        <item>
         <widget class="QGroupBox" name="groupBox_62">
          <property name="title">
-          <string>Prefix Management</string>
+          <string>Application Default Wine Runtime</string>
          </property>
          <layout class="QGridLayout" name="gridLayout_37">
           <item row="0" column="0">
            <widget class="QLabel" name="label_62">
             <property name="text">
-             <string>Proton Version:</string>
+             <string>Default Proton Version:</string>
             </property>
            </widget>
           </item>
@@ -1827,7 +1827,7 @@ If you disable this feature, MO will only display official DLCs this way. Please
           <item row="1" column="0">
            <widget class="QLabel" name="label_63">
             <property name="text">
-             <string>Prefix Location:</string>
+             <string>Default Prefix Location:</string>
             </property>
            </widget>
           </item>
