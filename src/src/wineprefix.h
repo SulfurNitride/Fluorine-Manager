@@ -1,7 +1,6 @@
 #ifndef WINEPREFIX_H
 #define WINEPREFIX_H
 
-#include <QDateTime>
 #include <QList>
 #include <QString>
 #include <QStringList>
@@ -32,11 +31,6 @@ public:
   QString appdataLocal() const;     // .../AppData/Local
   QString userProfilePath() const;  // drive_c/users/steamuser
 
-  // Deploy profile files into prefix.  Only the plugin list file the game
-  // actually reads is written — loadorder.txt is MO2-internal and never
-  // belongs in AppData/Local/<Game>/.
-  bool deployPlugins(const QStringList& plugins, const QString& dataDir,
-                     PluginListMechanism mechanism) const;
   bool deployProfileIni(const QString& sourceIniPath, const QString& targetIniPath,
                         const QString& ownerId,
                         WineProfileIniSync::Deployment& deployment) const;
@@ -62,19 +56,6 @@ public:
   bool syncProfileInisBack(QList<WineProfileIniSync::Deployment>& deployments,
                            const QString& ownerId, bool publishChanges,
                            WineProfileIniSync::CleanupPhase& phase) const;
-
-  // Sync the game's plugin-list file from the prefix AppData back to the
-  // profile after a tool like LOOT may have edited it.  Picks the newest
-  // case-insensitive variant.  Only the Plugins.txt/plugins.txt file the
-  // game reads is synced — loadorder.txt is never written to the prefix
-  // and is not read back.
-  bool syncPluginsBack(const QString& profilePluginsPath, const QString& dataDir,
-                       PluginListMechanism mechanism) const;
-
-  // Last-modified time of the newest plugin-list variant in the prefix.
-  // Invalid QDateTime if no variant exists.  Used to decide whether to
-  // sync-back (prefix newer, e.g. external LOOT run) before deploying.
-  QDateTime prefixPluginsMTime(const QString& dataDir) const;
 
   // Restore any stale .mo2linux_backup INI/save files left by a crash.
   // Should be called at startup before any game runs.

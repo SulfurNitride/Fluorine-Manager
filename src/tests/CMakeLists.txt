@@ -1358,6 +1358,7 @@ set_tests_properties(test_morrowindpluginlistwriter PROPERTIES TIMEOUT 10)
 add_executable(test_winepluginlistsync EXCLUDE_FROM_ALL
     test_winepluginlistsync.cpp
     ${CMAKE_SOURCE_DIR}/src/src/winepluginlistsync.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/winepluginprojectionsync.cpp
 )
 set_target_properties(test_winepluginlistsync PROPERTIES
     AUTOMOC OFF

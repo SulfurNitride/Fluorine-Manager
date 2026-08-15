@@ -23,12 +23,14 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <QDir>
 #include <QFileInfo>
 #include <QList>
+#include <QPair>
 #include <QStringList>
 
 #include <sys/types.h>
 #include <unistd.h>
 
 #include "wineprofileinisync.h"
+#include "winepluginprojectionsync.h"
 #include "wineruntimeconfig.h"
 #include <cstdint>
 
@@ -57,7 +59,8 @@ struct SaveDeploymentReceipt
   QString prefixPath;
   WineRuntimeConfig::Snapshot wineRuntime;
   QString runtimeUserProfilePath;
-  QStringList pluginDataDirNames;
+  WinePluginProjectionSync::Deployment pluginProjection;
+  QList<QPair<QString, QString>> additionalSessionLeases;
   QString profileRoot;
   QString livePath;
   // Physical root that owns the save topology. Ordinarily this is drive_c;
@@ -78,7 +81,6 @@ struct SaveDeploymentReceipt
   bool sessionLeasePublished{false};
   bool secondarySessionLeasePublished{false};
   bool fixedGameDirectory{false};
-  bool pluginProjectionOwned{false};
   bool topologyRestored{false};
   bool deploymentCleanupPending{false};
 
@@ -97,7 +99,8 @@ struct SaveDeploymentReceipt
   {
     return mode == SaveDeploymentMode::ManagedLinks || deploymentCleanupPending ||
            iniPatched || sessionLeasePublished || secondarySessionLeasePublished ||
-           !profileIniDeployments.isEmpty();
+           !additionalSessionLeases.isEmpty() ||
+           pluginProjection.needsCleanup() || !profileIniDeployments.isEmpty();
   }
 };
 

@@ -13,8 +13,8 @@ class AuthoritativeWriteSurfaceTests(unittest.TestCase):
             "src/src/profile.cpp",
             "src/src/pluginlist.cpp",
             "src/src/mainwindow.cpp",
-            "src/src/wineprefix.cpp",
             "src/src/winepluginlistsync.cpp",
+            "src/src/winepluginprojectionsync.cpp",
             "libs/game_bethesda/src/gamebryo/gamebryogameplugins.cpp",
             "libs/game_bethesda/src/creation/creationgameplugins.cpp",
             "libs/game_bethesda/src/games/enderalse/enderalsegameplugins.cpp",
@@ -87,11 +87,13 @@ class AuthoritativeWriteSurfaceTests(unittest.TestCase):
         self.assertNotIn('settings.remove("Game Files")', morrowind)
         self.assertIn("MorrowindPluginListWriter::publish", morrowind)
 
-        wine = (ROOT / "src/src/wineprefix.cpp").read_text(encoding="utf-8")
-        sync = wine[wine.index("bool WinePrefix::syncPluginsBack") :]
-        self.assertNotIn("QFile::remove(sibling)", sync)
-        self.assertNotIn("QFile::copy(newest, sibling)", sync)
-        self.assertIn("WinePluginListSync::publish", sync)
+        projection = (
+            ROOT / "src/src/winepluginprojectionsync.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertIn("WinePluginListSync::publish", projection)
+        self.assertIn("TransactionalWriteFile transaction", projection)
+        self.assertNotIn("QIODevice::Truncate", projection)
+        self.assertNotIn("loadorder.txt", projection)
 
     def test_plugin_warnings_follow_terminal_publication(self):
         source = (

@@ -84,7 +84,7 @@ class WineSaveSurfaceTest(unittest.TestCase):
         self.assertIn("QMessageBox::question", before)
         self.assertIn("were preserved for explicit recovery", before)
         self.assertLess(before.index("pendingDeployment"),
-                        before.index("deployPlugins"))
+                        before.index("WinePluginProjectionSync::prepare"))
 
     def test_linux_gamebryo_profile_preparation_has_no_routing_side_effects(self):
         source = (GAMEBRYO / "gamebryolocalsavegames.cpp").read_text(
@@ -289,12 +289,14 @@ class WineSaveSurfaceTest(unittest.TestCase):
         self.assertIn("finishProfileIniDeployment", continuation)
         self.assertLess(continuation.index("finishProfileIniDeployment"),
                         continuation.index("retireSaveSessions"))
-        self.assertIn("syncOwnedPluginProjection", continuation)
-        self.assertLess(continuation.index("syncOwnedPluginProjection"),
+        self.assertIn("finishOwnedPluginProjection", continuation)
+        self.assertLess(continuation.index("finishOwnedPluginProjection"),
                         continuation.index("retireSaveSessions"))
-        plugin_sync = function_body(core, "syncOwnedPluginProjection")
-        self.assertIn("receipt.wineRuntime", plugin_sync)
-        self.assertIn("WineRuntimeConfig::revalidatePrefix", plugin_sync)
+        self.assertLess(continuation.index("retireSaveSessions"),
+                        continuation.index("m_PluginProjectionLocks.remove"))
+        plugin_sync = function_body(core, "finishOwnedPluginProjection")
+        self.assertIn("receipt.pluginProjection", plugin_sync)
+        self.assertIn("WinePluginProjectionSync::finish", plugin_sync)
         self.assertNotIn("ProtonLauncher::unprivilegedBindMountSupported()",
                          continuation)
         self.assertNotIn("undeployProfileSaves", continuation)
@@ -303,8 +305,21 @@ class WineSaveSurfaceTest(unittest.TestCase):
         self.assertIn("restoreSaveRouting(work->saveDeployment)", abort)
         self.assertIn("retireSaveSessions", abort)
         self.assertIn("finishProfileIniDeployment", abort)
+        self.assertIn("finishOwnedPluginProjection", abort)
         self.assertLess(abort.index("finishProfileIniDeployment"),
                         abort.index("retireSaveSessions"))
+        self.assertLess(abort.index("retireSaveSessions"),
+                        abort.index("m_PluginProjectionLocks.remove"))
+        before = function_body(core, "OrganizerCore::beforeRun")
+        physical_projection = before[
+            before.index("Prefix setup may intentionally bridge") :
+            before.index("WinePluginProjectionSync::prepare")
+        ]
+        self.assertIn("leasePathFor(root", physical_projection)
+        self.assertIn("setStaleLockTime(0)", physical_projection)
+        self.assertIn("beginSessionLease", physical_projection)
+        self.assertIn("additionalSessionLeases.append", physical_projection)
+        self.assertIn("m_PluginProjectionLocks[launchToken]", physical_projection)
         self.assertIn("observer->saveDeployment", runner)
         self.assertIn("std::move(m_sp.saveDeployment)", runner)
         self.assertNotIn("usedSaveBindMount", core + runner)

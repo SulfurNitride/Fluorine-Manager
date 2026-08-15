@@ -98,6 +98,7 @@ list(APPEND ORGANIZER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/winesavetargetresolver.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/wineregistryfile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/winepluginlistsync.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/winepluginprojectionsync.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/wineprefix.cpp)
 list(APPEND ORGANIZER_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/commandlinearguments.h
@@ -129,6 +130,7 @@ list(APPEND ORGANIZER_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/winesavetargetresolver.h
     ${CMAKE_CURRENT_SOURCE_DIR}/wineregistryfile.h
     ${CMAKE_CURRENT_SOURCE_DIR}/winepluginlistsync.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/winepluginprojectionsync.h
     ${CMAKE_CURRENT_SOURCE_DIR}/wineprefix.h)
 
 

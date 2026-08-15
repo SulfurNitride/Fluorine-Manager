@@ -168,6 +168,74 @@ ReadResult read(const QString& path)
 #endif
 }
 
+FamilyReadResult readUniqueFamily(const QString& requestedPath)
+{
+  const QFileInfo requestedInfo(requestedPath);
+  QDir directory(requestedInfo.absolutePath());
+  if (!directory.exists()) {
+    return {};
+  }
+
+  QString selectedEffective;
+  std::optional<Snapshot> selectedSnapshot;
+  const QFileInfoList entries = directory.entryInfoList(
+      QDir::AllEntries | QDir::Hidden | QDir::System |
+          QDir::NoDotAndDotDot,
+      QDir::Name);
+  for (const QFileInfo& entry : entries) {
+    if (entry.fileName().compare(requestedInfo.fileName(),
+                                 Qt::CaseInsensitive) != 0) {
+      continue;
+    }
+    QString effective;
+    if (!resolveRegularCaseAlias(entry.absoluteFilePath(), effective)) {
+      return {{}, {},
+              QObject::tr("Refusing unsafe plugin-list case variant '%1'.")
+                  .arg(entry.absoluteFilePath())};
+    }
+    const ReadResult candidate = read(entry.absoluteFilePath());
+    if (!candidate.snapshot) {
+      return {{}, {}, candidate.error};
+    }
+    const QString canonicalEffective = QFileInfo(effective).canonicalFilePath();
+    const QString normalizedEffective = canonicalEffective.isEmpty()
+                                            ? QDir::cleanPath(
+                                                  QFileInfo(effective).absoluteFilePath())
+                                            : canonicalEffective;
+    if (!selectedSnapshot) {
+      selectedEffective = normalizedEffective;
+      selectedSnapshot = candidate.snapshot;
+      continue;
+    }
+    if (normalizedEffective != selectedEffective) {
+      return {{}, {},
+              QObject::tr("Plugin-list case family for '%1' contains multiple "
+                          "independent files; preserve it for explicit recovery.")
+                  .arg(requestedPath)};
+    }
+  }
+  return {std::move(selectedSnapshot), std::move(selectedEffective), {}};
+}
+
+bool publishUniqueFamily(const QString& requestedPath, QByteArrayView contents,
+                         QString& error)
+{
+  const FamilyReadResult family = readUniqueFamily(requestedPath);
+  if (!family.error.isEmpty()) {
+    error = family.error;
+    return false;
+  }
+  const QString destination =
+      family.effectivePath.isEmpty() ? requestedPath : family.effectivePath;
+  MOBase::TransactionalWriteFile transaction(destination);
+  if (!transaction.replaceWith(contents)) {
+    error = transaction.errorString();
+    return false;
+  }
+  error.clear();
+  return true;
+}
+
 int countStarred(QByteArrayView contents)
 {
   int count = 0;

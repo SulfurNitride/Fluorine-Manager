@@ -61,7 +61,8 @@ class WineRuntimeSurfaceTest(unittest.TestCase):
         self.assertIn("mapping.destination", plugin_routes)
         self.assertIn("mapping.source", plugin_routes)
         self.assertIn("Qt::CaseInsensitive", plugin_routes)
-        self.assertIn("candidate.compare(selectedLeaf", plugin_routes)
+        self.assertIn("canonicalExpected", plugin_routes)
+        self.assertIn("return result", plugin_routes)
         documents_route = function_body(
             source, "QString resolvePrefixGameDocumentsDir"
         )
@@ -74,6 +75,23 @@ class WineRuntimeSurfaceTest(unittest.TestCase):
         self.assertIn("m_sp.wineRuntime = {}", run)
         self.assertIn("prefixOwnershipRequired = true", before)
         self.assertIn("coreOwnedIniMappingTargets", before)
+        self.assertIn("coreOwnedPluginMappingTargets", before)
+        self.assertLess(
+            before.index("coreOwnedPluginMappingTargets = pluginProjectionTargets"),
+            before.index("const auto launchMappings"),
+        )
+        launch_mappings = before[
+            before.index("const auto launchMappings") :
+            before.index("// VFS Root Builder")
+        ]
+        self.assertIn("coreOwnedPluginMappingTargets", launch_mappings)
+        self.assertIn("coreOwnedFileMappingTargets", launch_mappings)
+        self.assertIn("mapping.destination", launch_mappings)
+        self.assertIn("Qt::CaseInsensitive", launch_mappings)
+        self.assertLess(
+            before.index("const auto launchMappings"),
+            before.index("m_USVFS.updateMapping"),
+        )
         self.assertLess(
             before.index("leasePathFor(preparedPrefix"),
             before.index("checkGameRegistryKey(wineRuntime)"),

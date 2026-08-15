@@ -1,20 +1,16 @@
 #include "wineprefix.h"
-#include "winepluginlistsync.h"
 #include "wineprofileinisync.h"
 #include "wineregistryfile.h"
 #include "winesavedeployment.h"
 #include "winesaverouting.h"
 
-#include <QDateTime>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QLockFile>
-#include <QTextStream>
 #include <uibase/filesystemutilities.h>
 #include <uibase/log.h>
-#include <uibase/transactionalwritefile.h>
 
 #include <memory>
 
@@ -28,28 +24,6 @@ bool restoreBackedUpIni(const QString& liveIni, const QString& backupIni)
   if (!result)
     MOBase::log::warn("Could not restore INI backup '{}': {}", backupIni, result.error);
   return result.success;
-}
-
-// Find all files in the same directory that match the filename
-// case-insensitively. E.g. for "skyrimprefs.ini" returns {"skyrimprefs.ini",
-// "SkyrimPrefs.ini"} if both exist.
-QStringList findCaseVariants(const QString& path)
-{
-  QFileInfo info(path);
-  QDir dir(info.path());
-  if (!dir.exists()) {
-    return {};
-  }
-
-  QStringList result;
-  const QString target = info.fileName();
-  for (const QString& entry :
-       dir.entryList(QDir::Files | QDir::Hidden | QDir::System)) {
-    if (entry.compare(target, Qt::CaseInsensitive) == 0) {
-      result.append(dir.absoluteFilePath(entry));
-    }
-  }
-  return result;
 }
 
 }  // namespace
@@ -93,72 +67,6 @@ QString WinePrefix::appdataLocal() const
 QString WinePrefix::userProfilePath() const
 {
   return m_userProfilePath;
-}
-
-bool WinePrefix::deployPlugins(const QStringList& plugins, const QString& dataDir,
-                               PluginListMechanism mechanism) const
-{
-  if (!isValid()) {
-    MOBase::log::error("deployPlugins: prefix '{}' is not valid (drive_c not found)",
-                       m_prefixPath);
-    return false;
-  }
-
-  if (mechanism == PluginListMechanism::None) {
-    MOBase::log::debug("deployPlugins: game has no plugin-list mechanism, skipping");
-    return true;
-  }
-
-  const QString pluginsDir = QDir(appdataLocal()).filePath(dataDir);
-  MOBase::log::info("deployPlugins: target dir='{}', count={}, mechanism={}",
-                    pluginsDir, plugins.size(),
-                    mechanism == PluginListMechanism::PluginsTxt ? "PluginsTxt"
-                                                                 : "FileTime");
-
-  if (!QDir().mkpath(pluginsDir)) {
-    MOBase::log::error("deployPlugins: failed to create directory '{}'", pluginsDir);
-    return false;
-  }
-
-  // Clear ALL stale plugin-list files in AppData — any case of "plugins.txt"
-  // and any "loadorder.txt".  loadorder.txt is MO2-internal (profile only);
-  // leaving a stale one in the prefix confuses sync-back if mechanism changes.
-  const QString pluginsCanonical = QDir(pluginsDir).filePath("plugins.txt");
-  const QString loadOrderPath    = QDir(pluginsDir).filePath("loadorder.txt");
-  for (const QString& variant : findCaseVariants(pluginsCanonical)) {
-    MOBase::log::debug("deployPlugins: removing stale plugins variant '{}'", variant);
-    QFile::remove(variant);
-  }
-  for (const QString& variant : findCaseVariants(loadOrderPath)) {
-    MOBase::log::debug("deployPlugins: removing stale loadorder variant '{}'", variant);
-    QFile::remove(variant);
-  }
-
-  // PluginsTxt games (SSE/AE, FO4, Starfield, ...) read "Plugins.txt" with
-  // '*' prefix for enabled.  FileTime games (FNV, FO3, Skyrim LE) read
-  // lowercase "plugins.txt" listing enabled plugins only (no prefix) and
-  // derive order from file mtimes.  Lines are already in the correct game
-  // format because they come straight from the profile's plugins.txt, which
-  // MO2 writes per-game via writePluginLists().
-  const bool useCapitalP = mechanism == PluginListMechanism::PluginsTxt;
-  const QString targetPath =
-      QDir(pluginsDir).filePath(useCapitalP ? "Plugins.txt" : "plugins.txt");
-
-  QFile pluginsFile(targetPath);
-  if (!pluginsFile.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-    MOBase::log::error("deployPlugins: failed to open '{}' for writing", targetPath);
-    return false;
-  }
-
-  QTextStream pluginsStream(&pluginsFile);
-  for (const QString& plugin : plugins) {
-    pluginsStream << plugin << "\r\n";
-  }
-  pluginsFile.close();
-  MOBase::log::info("deployPlugins: wrote {} plugins to '{}'", plugins.size(),
-                    targetPath);
-
-  return true;
 }
 
 bool WinePrefix::deployProfileIni(const QString& sourceIniPath,
@@ -357,140 +265,6 @@ bool WinePrefix::syncProfileInisBack(QList<WineProfileIniSync::Deployment>& depl
     MOBase::log::error("syncProfileInisBack: {}", result.error);
   }
   return result.success;
-}
-
-QDateTime WinePrefix::prefixPluginsMTime(const QString& dataDir) const
-{
-  if (!isValid()) {
-    return {};
-  }
-  const QString pluginsDir = QDir(appdataLocal()).filePath(dataDir);
-  if (!QDir(pluginsDir).exists()) {
-    return {};
-  }
-  QDateTime newest;
-  for (const QString& v : findCaseVariants(QDir(pluginsDir).filePath("plugins.txt"))) {
-    const QDateTime t = QFileInfo(v).lastModified();
-    if (!newest.isValid() || t > newest) {
-      newest = t;
-    }
-  }
-  return newest;
-}
-
-bool WinePrefix::syncPluginsBack(const QString& profilePluginsPath,
-                                 const QString& dataDir,
-                                 PluginListMechanism mechanism) const
-{
-  if (!isValid()) {
-    MOBase::log::error("syncPluginsBack: prefix '{}' is not valid", m_prefixPath);
-    return false;
-  }
-
-  if (mechanism == PluginListMechanism::None) {
-    return true;
-  }
-
-  const QString pluginsDir = QDir(appdataLocal()).filePath(dataDir);
-  if (!QDir(pluginsDir).exists()) {
-    MOBase::log::debug("syncPluginsBack: prefix plugins dir '{}' does not exist",
-                       pluginsDir);
-    return true;
-  }
-
-  // Pick the newest case variant of the game's plugin-list file, sync it
-  // to the profile, then mirror that content into every sibling variant in
-  // the prefix so they don't drift.  LOOT edits whichever case it opened;
-  // without mirroring, the untouched sibling keeps stale content.
-  // loadorder.txt is MO2-internal — never touched in the prefix and never
-  // read back; MO2 re-derives it from the synced plugins file.
-  const QStringList variants =
-      findCaseVariants(QDir(pluginsDir).filePath("plugins.txt"));
-  if (variants.isEmpty()) {
-    MOBase::log::debug("syncPluginsBack: no plugins.txt variant found in '{}'",
-                       pluginsDir);
-    return true;
-  }
-
-  QString newest;
-  QDateTime newestTime;
-  for (const QString& v : variants) {
-    const QFileInfo fi(v);
-    if (!newestTime.isValid() || fi.lastModified() > newestTime) {
-      newestTime = fi.lastModified();
-      newest     = v;
-    }
-  }
-
-  MOBase::TransactionalWriteFile profileFile(profilePluginsPath);
-  const auto sourceRead = WinePluginListSync::read(newest);
-  if (!sourceRead.snapshot) {
-    MOBase::log::error("syncPluginsBack: {}", sourceRead.error);
-    return false;
-  }
-  const WinePluginListSync::Snapshot& sourceSnapshot = *sourceRead.snapshot;
-
-  // Active-plugin count guard.  Bethesda games rewrite Plugins.txt as part
-  // of normal shutdown, but on a crash (e.g. a buggy SKSE plugin going down
-  // mid-frame) the engine can write the file with the active set partially
-  // cleared — every plugin name still listed, but most without their leading
-  // '*'.  A naive copy-back propagates that damage into the profile, where
-  // refreshESPList re-derives state from disk and savePluginList persists
-  // the broken active list.  External edits (LOOT reordering) never drop the
-  // active count materially, so a large drop is a strong signal that this
-  // is a crash artifact, not a legitimate user-edit.  Refuse the copy in
-  // that case and let the profile's existing list stand.
-  auto countStarredLines = [](const QString& path) -> int {
-    const auto result = WinePluginListSync::read(path);
-    return result.snapshot ? WinePluginListSync::countStarred(result.snapshot->contents)
-                           : -1;
-  };
-
-  const int profileStars   = countStarredLines(profilePluginsPath);
-  const int candidateStars = WinePluginListSync::countStarred(sourceSnapshot.contents);
-  if (WinePluginListSync::isSuspiciousActiveDrop(profileStars, candidateStars)) {
-    const int absDrop = profileStars - candidateStars;
-    const double relDrop =
-        static_cast<double>(absDrop) / static_cast<double>(profileStars);
-    MOBase::log::warn(
-        "syncPluginsBack: refusing copy — active plugin count would drop "
-        "from {} to {} ({:.0f}% loss). Likely a game-crash artifact, not "
-        "a real edit. Profile preserved; prefix file left in place at '{}'.",
-        profileStars, candidateStars, relDrop * 100.0, newest);
-    return true;
-  }
-
-  MOBase::log::info("syncPluginsBack: '{}' <- '{}'", profilePluginsPath, newest);
-  QString publicationError;
-  if (!WinePluginListSync::publish(profileFile, sourceSnapshot, publicationError)) {
-    MOBase::log::error("syncPluginsBack: failed to publish '{}': {}",
-                       profilePluginsPath, publicationError);
-    return false;
-  }
-
-  bool allMirrored = true;
-  for (const QString& sibling : variants) {
-    if (sibling == newest || WinePluginListSync::isSameFile(sibling, sourceSnapshot)) {
-      continue;
-    }
-    MOBase::TransactionalWriteFile siblingFile(sibling);
-    QString siblingError;
-    if (!WinePluginListSync::publish(siblingFile, sourceSnapshot, siblingError)) {
-      MOBase::log::error("syncPluginsBack: failed to mirror '{}' into '{}': {}", newest,
-                         sibling, siblingError);
-      allMirrored = false;
-    }
-  }
-
-  // Clear any stale loadorder.txt that an older build may have written.
-  // The game never reads it; leaving it around only invites confusion.
-  for (const QString& stale :
-       findCaseVariants(QDir(pluginsDir).filePath("loadorder.txt"))) {
-    MOBase::log::debug("syncPluginsBack: removing stale loadorder variant '{}'", stale);
-    QFile::remove(stale);
-  }
-
-  return allMirrored;
 }
 
 // ── Wine registry (.reg file) access ─────────────────────────────────────────
