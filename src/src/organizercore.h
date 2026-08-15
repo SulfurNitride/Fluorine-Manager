@@ -615,7 +615,7 @@ private:
                                                   ModInfo::Ptr currentMod, int priority,
                                                   bool reinstallation);
 
-  void saveCurrentProfile();
+  [[nodiscard]] bool saveCurrentProfile();
   void storeSettings();
 
   void updateModActiveState(int index, bool active);

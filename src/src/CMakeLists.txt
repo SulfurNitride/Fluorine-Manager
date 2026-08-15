@@ -87,6 +87,7 @@ list(APPEND ORGANIZER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/prefixsetuprunner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profilemodlistrename.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profilerename.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/profiletweakmerge.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/protondxvkconfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/protonlauncher.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/runtimelock.cpp

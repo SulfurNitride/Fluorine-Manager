@@ -3061,16 +3061,17 @@ void OrganizerCore::savePluginList()
       RefreshCallbackGroup::CORE, RefreshCallbackMode::RUN_NOW_IF_POSSIBLE);
 }
 
-void OrganizerCore::saveCurrentProfile()
+bool OrganizerCore::saveCurrentProfile()
 {
   if (m_PersistenceSuppressed || m_CurrentProfile == nullptr) {
-    return;
+    return false;
   }
 
   m_CurrentProfile->writeModlist();
-  m_CurrentProfile->createTweakedIniFile();
+  const bool tweakedIniSaved = m_CurrentProfile->createTweakedIniFile();
   saveCurrentLists();
   storeSettings();
+  return tweakedIniSaved;
 }
 
 void OrganizerCore::saveCurrentProfileForShutdown()
@@ -3089,7 +3090,7 @@ void OrganizerCore::saveCurrentProfileForShutdown()
   }
 
   try {
-    saveCurrentProfile();
+    (void)saveCurrentProfile();
   } catch (const std::exception& e) {
     log::error("failed to save current profile during shutdown: {}", e.what());
   } catch (...) {
@@ -3270,7 +3271,7 @@ bool OrganizerCore::beforeRun(
     spawn::SaveDeploymentReceipt* saveDeployment,
     const WineRuntimeConfig::Snapshot& wineRuntime)
 {
-  saveCurrentProfile();
+  const bool currentProfileTweaksSaved = saveCurrentProfile();
 
   std::shared_ptr<Profile> launchProfile = m_CurrentProfile;
   if (launchProfile == nullptr || launchProfile->name() != profileName) {
@@ -3282,6 +3283,16 @@ bool OrganizerCore::beforeRun(
     }
     launchProfile =
         std::make_shared<Profile>(profileDir, managedGame(), gameFeatures());
+  }
+  const bool launchProfileTweaksSaved =
+      launchProfile == m_CurrentProfile
+          ? currentProfileTweaksSaved
+          : launchProfile->createTweakedIniFile();
+  if (!launchProfileTweaksSaved) {
+    log::error("beforeRun: the authoritative initweaks.ini generation for "
+               "profile '{}' could not be published",
+               profileName.toStdString());
+    return false;
   }
   const auto setIndexPublicationContext = [this, &profileName]() {
     const auto instance = InstanceManager::singleton().currentInstance();

@@ -24,7 +24,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "modinfo.h"
 #include "modinfoforeign.h"
 #include "profilerename.h"
-#include "registry.h"
+#include "profiletweakmerge.h"
 #include "settings.h"
 #include "settingswritebarrier.h"
 #include "profilemodlistrename.h"
@@ -404,43 +404,33 @@ void Profile::doWriteModlist()
   });
 }
 
-void Profile::createTweakedIniFile()
+bool Profile::createTweakedIniFile()
 {
   auto writeLease = g_ProfileWriteBarrier.enterIfAllowed();
   if (!writeLease) {
-    return;
+    return false;
   }
 
-  QString tweakedIni = m_Directory.absoluteFilePath("initweaks.ini");
-
-  if (QFile::exists(tweakedIni) && !shellDeleteQuiet(tweakedIni)) {
-    const auto e = GetLastError();
-    reportError(tr("failed to update tweaked ini file, wrong settings may be used: %1")
-                    .arg(QString::fromStdWString(formatSystemMessage(e))));
-    return;
-  }
+  QStringList tweakFiles;
 
   for (const auto& [priority, index] : m_ModIndexByPriority) {
     if (m_ModStatus[index].m_Enabled) {
       ModInfo::Ptr modInfo = ModInfo::getByIndex(index);
-      mergeTweaks(modInfo, tweakedIni);
+      const auto modTweaks = modInfo->getIniTweaks();
+      for (const QString& tweak : modTweaks) {
+        tweakFiles.append(tweak);
+      }
     }
   }
+  tweakFiles.append(getProfileTweaks());
 
-  mergeTweak(getProfileTweaks(), tweakedIni);
-
-  bool error = false;
-  if (!MOBase::WriteRegistryValue(
-          QStringLiteral("Archive"), QStringLiteral("bInvalidateOlderFiles"),
-          QStringLiteral("1"), tweakedIni)) {
-    error = true;
+  QString error;
+  if (!ProfileTweakMerge::publish(
+          tweakFiles, m_Directory.absoluteFilePath("initweaks.ini"), &error)) {
+    reportError(tr("failed to create tweaked ini: %1").arg(error));
+    return false;
   }
-
-  if (error) {
-    const auto e = ::GetLastError();
-    reportError(tr("failed to create tweaked ini: %1")
-                    .arg(QString::fromStdWString(formatSystemMessage(e))));
-  }
+  return true;
 }
 
 // static
@@ -887,61 +877,6 @@ std::vector<std::wstring> Profile::splitDZString(const wchar_t* buffer)
     length = wcslen(pos);
   }
   return result;
-}
-
-void Profile::mergeTweak(const QString& tweakName, const QString& tweakedIni)
-{
-  auto writeLease = g_ProfileWriteBarrier.enterIfAllowed();
-  if (!writeLease) {
-    return;
-  }
-
-  // Parse the tweak INI file line-by-line and merge each key=value into the
-  // destination using WriteRegistryValue (which uses the safe line-by-line
-  // writer that does NOT interpret backslashes as line continuations or
-  // URL-encode spaces in keys).
-  QFile sourceFile(tweakName);
-  if (!sourceFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-    if (QFileInfo::exists(tweakName)) {
-      log::warn("mergeTweak: tweak file '{}' exists but could not be opened", tweakName);
-    } else {
-      log::debug("mergeTweak: tweak file '{}' does not exist, skipping", tweakName);
-    }
-    return;
-  }
-
-  QString currentSection;
-  QTextStream stream(&sourceFile);
-  while (!stream.atEnd()) {
-    QString line = stream.readLine().trimmed();
-    if (line.isEmpty() || line.startsWith(';') || line.startsWith('#')) {
-      continue;
-    }
-    if (line.startsWith('[') && line.endsWith(']')) {
-      currentSection = line.mid(1, line.length() - 2).trimmed();
-      continue;
-    }
-    const int eqPos = line.indexOf('=');
-    if (eqPos > 0 && !currentSection.isEmpty()) {
-      const QString key   = line.left(eqPos).trimmed();
-      const QString value = line.mid(eqPos + 1).trimmed();
-      MOBase::WriteRegistryValue(currentSection, key, value, tweakedIni);
-    }
-  }
-}
-
-void Profile::mergeTweaks(ModInfo::Ptr modInfo, const QString& tweakedIni) const
-{
-  auto writeLease = g_ProfileWriteBarrier.enterIfAllowed();
-  if (!writeLease) {
-    return;
-  }
-
-  std::vector<QString> iniTweaks = modInfo->getIniTweaks();
-  for (std::vector<QString>::iterator iter = iniTweaks.begin(); iter != iniTweaks.end();
-       ++iter) {
-    mergeTweak(*iter, tweakedIni);
-  }
 }
 
 bool Profile::invalidationActive(bool* supported) const

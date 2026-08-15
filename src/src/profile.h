@@ -242,7 +242,7 @@ public:
    *
    * the tweaked ini file constructed by this file is a merger
    * of the game-ini of this profile with ini tweaks applied */
-  void createTweakedIniFile();
+  [[nodiscard]] bool createTweakedIniFile();
 
   /**
    * @brief re-read the modlist.txt and update the mod status from it
@@ -393,8 +393,6 @@ private:
   void copyFilesTo(QString& target) const;
 
   static std::vector<std::wstring> splitDZString(const wchar_t* buffer) ;
-  static void mergeTweak(const QString& tweakName, const QString& tweakedIni) ;
-  void mergeTweaks(ModInfo::Ptr modInfo, const QString& tweakedIni) const;
   void touchFile(QString fileName);
 
   static void renameModInList(QFile& modList, const QString& oldName,
