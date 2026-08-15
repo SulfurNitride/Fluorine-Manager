@@ -1389,6 +1389,23 @@ set_tests_properties(test_profile_legacy_migration_surface PROPERTIES
     TIMEOUT 10
 )
 
+add_executable(test_copydir EXCLUDE_FROM_ALL
+    test_copydir.cpp
+)
+set_target_properties(test_copydir PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_link_libraries(test_copydir PRIVATE
+    Qt6::Core
+    mo2::uibase
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_copydir COMMAND test_copydir)
+set_tests_properties(test_copydir PROPERTIES TIMEOUT 10)
+
 add_executable(test_instanceunregister EXCLUDE_FROM_ALL
     test_instanceunregister.cpp
     ${CMAKE_SOURCE_DIR}/src/src/instanceunregister.cpp
@@ -1612,7 +1629,7 @@ add_custom_target(fluorine-tests
             test_transactionalwritefile test_registry test_wineregistryfile
             test_protondxvkconfig test_gamebryoiniseeder test_texteditorsave
             test_profilemodlistrename test_profilerename
-            test_profilelegacymigration test_instanceunregister
+            test_profilelegacymigration test_copydir test_instanceunregister
             test_profiletweakmerge test_pandorapreviousoutput
             test_morrowindpluginlistwriter test_winepluginlistsync
             test_winesavedeployment test_winesavetargetresolver

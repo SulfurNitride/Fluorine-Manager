@@ -390,7 +390,7 @@ private:
 private:
   void updateIndices();
 
-  void copyFilesTo(QString& target) const;
+  bool copyFilesTo(QString& target) const;
 
   static std::vector<std::wstring> splitDZString(const wchar_t* buffer) ;
   void touchFile(QString fileName);

@@ -47,6 +47,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 #include <cstring>
 #include <filesystem>
 #include <format>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -111,34 +112,83 @@ bool removeDir(const QString& dirName)
 
 bool copyDir(const QString& sourceName, const QString& destinationName, bool merge)
 {
-  QDir sourceDir(sourceName);
-  if (!sourceDir.exists()) {
-    return false;
-  }
-  QDir destDir(destinationName);
-  if (!destDir.exists()) {
-    destDir.mkdir(destinationName);
-  } else if (!merge) {
+  const QFileInfo sourceInfo(sourceName);
+  if (!sourceInfo.exists() || !sourceInfo.isDir() || sourceInfo.isSymLink()) {
     return false;
   }
 
-  QStringList files = sourceDir.entryList(QDir::Files);
-  foreach (QString fileName, files) {
-    QString srcName  = sourceName + "/" + fileName;
-    QString destName = destinationName + "/" + fileName;
-    QFile::copy(srcName, destName);
+  const QString sourceRoot = QDir::cleanPath(sourceInfo.absoluteFilePath());
+  const QString destinationRoot =
+      QDir::cleanPath(QFileInfo(destinationName).absoluteFilePath());
+  const QString relative = QDir(sourceRoot).relativeFilePath(destinationRoot);
+  if (relative == QStringLiteral(".") ||
+      (!relative.startsWith(QStringLiteral("../")) && relative != QStringLiteral("..") &&
+       !QDir::isAbsolutePath(relative))) {
+    return false;
   }
 
-  files.clear();
-  // we leave out symlinks because that could cause an endless recursion
-  QStringList subDirs =
-      sourceDir.entryList(QDir::AllDirs | QDir::NoDotAndDotDot | QDir::NoSymLinks);
-  foreach (QString subDir, subDirs) {
-    QString srcName  = sourceName + "/" + subDir;
-    QString destName = destinationName + "/" + subDir;
-    copyDir(srcName, destName, merge);
+  QStringList created;
+  std::function<bool(const QString&, const QString&, bool)> copyDirectory;
+  copyDirectory = [&](const QString& source, const QString& destination,
+                      bool allowExisting) {
+    const QFileInfo destinationInfo(destination);
+    if (destinationInfo.exists() || destinationInfo.isSymLink()) {
+      if (!destinationInfo.isDir() || destinationInfo.isSymLink() ||
+          !allowExisting) {
+        return false;
+      }
+    } else {
+      QDir destinationParent = destinationInfo.dir();
+      if (!destinationParent.exists() ||
+          !destinationParent.mkdir(destinationInfo.fileName())) {
+        return false;
+      }
+      created.append(destinationInfo.absoluteFilePath());
+    }
+
+    const QDir sourceDir(source);
+    const QFileInfoList entries = sourceDir.entryInfoList(
+        QDir::NoDotAndDotDot | QDir::AllEntries | QDir::Hidden | QDir::System,
+        QDir::DirsFirst | QDir::Name);
+    for (const QFileInfo& entry : entries) {
+      if (entry.isSymLink()) {
+        return false;
+      }
+
+      const QString target = QDir(destination).absoluteFilePath(entry.fileName());
+      if (entry.isDir()) {
+        if (!copyDirectory(entry.absoluteFilePath(), target, allowExisting)) {
+          return false;
+        }
+      } else if (entry.isFile()) {
+        if (!QFile::copy(entry.absoluteFilePath(), target)) {
+          return false;
+        }
+        created.append(QFileInfo(target).absoluteFilePath());
+      } else {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  if (copyDirectory(sourceRoot, destinationRoot, merge)) {
+    return true;
   }
-  return true;
+
+  for (auto it = created.crbegin(); it != created.crend(); ++it) {
+    const QFileInfo entry(*it);
+    if (entry.isSymLink()) {
+      continue;
+    }
+    if (entry.isFile()) {
+      QFile::remove(entry.absoluteFilePath());
+    } else if (entry.isDir()) {
+      QDir parent = entry.dir();
+      parent.rmdir(entry.fileName());
+    }
+  }
+  return false;
 }
 
 // Linux shell operations use QFile/QDir instead of SHFileOperation

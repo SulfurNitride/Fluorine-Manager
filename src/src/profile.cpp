@@ -926,14 +926,20 @@ Profile* Profile::createPtrFrom(const QString& name, const Profile& reference,
   }
 
   QString profileDirectory = Settings::instance().paths().profiles() + "/" + name;
-  reference.copyFilesTo(profileDirectory);
+  if (!reference.copyFilesTo(profileDirectory)) {
+    throw MyException(tr("failed to copy profile to %1").arg(profileDirectory));
+  }
   return new Profile(QDir(profileDirectory), gamePlugin, reference.m_GameFeatures);
 }
 
-void Profile::copyFilesTo(QString& target) const
+bool Profile::copyFilesTo(QString& target) const
 {
-  g_ProfileWriteBarrier.runIfAllowed(
-      [&] { copyDir(m_Directory.absolutePath(), target, false); });
+  bool copied = false;
+  if (!g_ProfileWriteBarrier.runIfAllowed(
+          [&] { copied = copyDir(m_Directory.absolutePath(), target, false); })) {
+    return false;
+  }
+  return copied;
 }
 
 std::vector<std::wstring> Profile::splitDZString(const wchar_t* buffer)

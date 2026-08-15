@@ -610,6 +610,8 @@ void ModListView::onExternalFolderDropped(const QUrl& url, int priority)
   // TODO: this is currently a silent copy, which can take some time, but there is
   // no clean method to do this in uibase
   if (!copyDir(fileInfo.absoluteFilePath(), newMod->absolutePath(), true)) {
+    reportError(tr("Failed to copy the complete folder into the mod."));
+    m_core->refresh();
     return;
   }
 

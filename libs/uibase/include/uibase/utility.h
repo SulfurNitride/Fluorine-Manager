@@ -63,8 +63,9 @@ QDLLEXPORT bool removeDir(const QString& dirName);
  * @param destinationName name of the target directory
  * @param merge if true, the destination directory is allowed to exist, files will then
  *              be added to that directory. If false, the call will fail in that case
- * @return true if files were copied. This doesn't necessary mean ALL files were copied
- * @note symbolic links are not followed to prevent endless recursion
+ * @return true only if every ordinary file and directory was copied
+ * @note symbolic links and special files are rejected. A newly created destination is
+ *       removed when copying fails; a pre-existing merge destination is preserved.
  */
 QDLLEXPORT bool copyDir(const QString& sourceName, const QString& destinationName,
                         bool merge);
