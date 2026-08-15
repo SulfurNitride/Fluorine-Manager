@@ -1412,6 +1412,26 @@ target_link_libraries(test_winesavetargetresolver PRIVATE
 add_test(NAME test_winesavetargetresolver COMMAND test_winesavetargetresolver)
 set_tests_properties(test_winesavetargetresolver PROPERTIES TIMEOUT 10)
 
+add_executable(test_prefixsymlinktransaction EXCLUDE_FROM_ALL
+    test_prefixsymlinktransaction.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/prefixsymlinktransaction.cpp
+)
+set_target_properties(test_prefixsymlinktransaction PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_prefixsymlinktransaction PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_prefixsymlinktransaction PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_prefixsymlinktransaction COMMAND test_prefixsymlinktransaction)
+set_tests_properties(test_prefixsymlinktransaction PROPERTIES TIMEOUT 10)
+
 add_test(NAME test_authoritative_write_surface
     COMMAND ${Python3_EXECUTABLE} -m unittest -v
             ${CMAKE_CURRENT_SOURCE_DIR}/test_authoritative_write_surface.py
@@ -1463,4 +1483,5 @@ add_custom_target(fluorine-tests
             test_protondxvkconfig test_gamebryoiniseeder test_texteditorsave
             test_profilemodlistrename test_profilerename
             test_morrowindpluginlistwriter test_winepluginlistsync
-            test_winesavedeployment test_winesavetargetresolver)
+            test_winesavedeployment test_winesavetargetresolver
+            test_prefixsymlinktransaction)

@@ -228,6 +228,32 @@ class AuthoritativeWriteSurfaceTests(unittest.TestCase):
         self.assertIn("codec = QStringConverter::Encoding::Latin1", utility)
         self.assertIn("bool encodeTextData", utility)
 
+    def test_prefix_setup_preserves_unowned_links_and_propagates_conflicts(self):
+        facade = (ROOT / "src/src/prefixsymlinks.cpp").read_text(
+            encoding="utf-8"
+        )
+        transaction = (ROOT / "src/src/prefixsymlinktransaction.cpp").read_text(
+            encoding="utf-8"
+        )
+        runner = (ROOT / "src/src/prefixsetuprunner.cpp").read_text(
+            encoding="utf-8"
+        )
+        post_setup = runner[runner.index("bool PrefixSetupRunner::stepPostSetup"):
+                            runner.index("static void setExecPermissions")]
+
+        self.assertIn("PrefixSymlinkTransaction::apply", facade)
+        self.assertNotIn("replaceStale", facade)
+        self.assertNotIn("QFile::remove(linkPath)", facade)
+        self.assertIn("preflightLink", transaction)
+        self.assertIn("case-insensitive prefix", transaction)
+        self.assertIn("openDirectoryBelowRoot", transaction)
+        self.assertIn("AT_SYMLINK_NOFOLLOW", transaction)
+        self.assertIn("removeCreatedLink", transaction)
+        self.assertNotIn("QFile::remove", transaction)
+        self.assertIn("if (!ensureTempDirectoryChecked", post_setup)
+        self.assertIn("if (!createGameSymlinksAutoChecked", post_setup)
+        self.assertGreaterEqual(post_setup.count("return false;"), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

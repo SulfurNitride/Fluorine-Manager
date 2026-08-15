@@ -2228,11 +2228,21 @@ bool PrefixSetupRunner::stepPostSetup()
 {
   emit logMessage("Running post-setup tasks...");
 
-  // Ensure AppData temp directory exists.
-  ensureTempDirectory(m_prefixPath);
+  QString error;
+  if (!ensureTempDirectoryChecked(m_prefixPath, &error)) {
+    currentStep().errorMessage =
+        QStringLiteral("Could not prepare the Wine prefix temporary directory: "
+                       "%1")
+            .arg(error);
+    return false;
+  }
 
-  // Create game symlinks.
-  createGameSymlinksAuto(m_prefixPath);
+  if (!createGameSymlinksAutoChecked(m_prefixPath, &error)) {
+    currentStep().errorMessage =
+        QStringLiteral("Could not prepare links to existing game data: %1")
+            .arg(error);
+    return false;
+  }
 
   emit logMessage("Post-setup complete");
   return true;
