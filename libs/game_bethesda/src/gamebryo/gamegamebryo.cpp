@@ -5,6 +5,7 @@
 #include "bsainvalidation.h"
 #include "dataarchives.h"
 #include "gamebryomoddatacontent.h"
+#include "gamebryoiniseeder.h"
 #include "gamebryosavegame.h"
 #include "gameplugins.h"
 #include "iprofile.h"
@@ -285,11 +286,9 @@ bool GameGamebryo::prepareIni(const QString&)
                          ? profile->absolutePath()
                          : documentsDirectory().absolutePath();
 
-  // Ensure all INI files exist with adequate content before writing settings.
-  // On Linux, the game launcher often doesn't work properly and can't create
-  // the INI files. If an INI is missing or is a stub (< 200 bytes, meaning
-  // only MO2-written keys exist), seed it from the game's default INI template.
-  ensureIniFilesExist(basePath);
+  if (!ensureIniFilesExist(basePath)) {
+    return false;
+  }
 
   if (!iniFiles().isEmpty()) {
     // Resolve case-insensitively (e.g., fallout.ini vs Fallout.ini on Linux)
@@ -298,153 +297,37 @@ bool GameGamebryo::prepareIni(const QString&)
 
     QString setting = readIniValue(profileIni, "Launcher", "bEnableFileSelection", "0");
     if (setting.toLong() != 1) {
-      MOBase::WriteRegistryValue("Launcher", "bEnableFileSelection", "1", profileIni);
+      if (!MOBase::WriteRegistryValue("Launcher", "bEnableFileSelection", "1",
+                                      profileIni)) {
+        MOBase::log::error("Could not enable file selection in '{}'", profileIni);
+        return false;
+      }
     }
   }
 
   return true;
 }
 
-#ifndef _WIN32
-// Ensure both the canonical (proper-case) and lowercase versions of an INI file
-// exist in a directory. One will be the real file, the other a symlink.
-// This prevents case-sensitivity issues on Linux where different code paths or
-// the game itself may reference either casing.
-static void ensureCaseAliases(const QDir& dir, const QString& canonicalName,
-                              const QString& actualFileName)
+bool GameGamebryo::ensureIniFilesExist(const QString& basePath)
 {
-  QString lowerName = canonicalName.toLower();
-
-  auto ensureAlias = [&](const QString& aliasName) {
-    if (aliasName != actualFileName) {
-      QString aliasPath = dir.absoluteFilePath(aliasName);
-      if (!QFileInfo::exists(aliasPath)) {
-        QFile::link(actualFileName, aliasPath);
-      }
-    }
-  };
-
-  // Ensure the canonical (proper-case) name exists
-  ensureAlias(canonicalName);
-  // Ensure the lowercase name exists
-  if (lowerName != canonicalName) {
-    ensureAlias(lowerName);
-  }
-}
-#endif
-
-void GameGamebryo::ensureIniFilesExist(const QString& basePath)
-{
-  // Make sure the target directory exists
-  QDir baseDir(basePath);
-  if (!baseDir.exists()) {
-    baseDir.mkpath(".");
-  }
-
   for (const QString& iniFile : iniFiles()) {
-    QString targetPath = basePath + "/" + iniFile;
-    QFileInfo targetInfo(targetPath);
-
-    // Check if the target file already has adequate content
-    // (> 200 bytes = more than just MO2's BSA invalidation stub)
-    if (targetInfo.exists() && targetInfo.size() > 200) {
-      continue;
-    }
-
-#ifndef _WIN32
-    // Remove broken symlinks — QFileInfo::exists() follows symlinks and
-    // returns false for dangling ones, but QFile::copy() fails with
-    // "File exists" because the symlink inode is still there.
-    if (targetInfo.isSymLink() && !targetInfo.exists()) {
-      QFile::remove(targetPath);
-    }
-#endif
-
-#ifndef _WIN32
-    // On Linux, search for a differently-cased version of this INI file
-    // (e.g., FalloutPrefs.ini when we expect falloutprefs.ini).
-    // We can't use resolveFileCaseInsensitive here because the exact-case
-    // file might exist as an empty stub while the real one has different case.
-    QString caseMismatchPath;
-    {
-      const QString target = targetInfo.fileName();
-      const QStringList entries =
-          baseDir.entryList(QDir::Files | QDir::Hidden | QDir::System);
-      for (const QString& entry : entries) {
-        if (entry != target &&
-            entry.compare(target, Qt::CaseInsensitive) == 0) {
-          caseMismatchPath = baseDir.absoluteFilePath(entry);
-          break;
-        }
-      }
-    }
-
-    // If a differently-cased version exists with adequate content,
-    // replace the stub (if any) with a copy of the real file.
-    if (!caseMismatchPath.isEmpty()) {
-      QFileInfo altInfo(caseMismatchPath);
-      if (altInfo.exists() && altInfo.size() > 200) {
-        if (targetInfo.exists()) {
-          QFile::remove(targetPath);
-        }
-        if (QFile::copy(altInfo.absoluteFilePath(), targetPath)) {
-          QFile::setPermissions(
-              targetPath,
-              QFile::permissions(targetPath) | QFile::WriteUser | QFile::WriteOwner);
-          MOBase::log::info("Copied case-mismatched INI '{}' -> '{}'",
-                            altInfo.fileName(), iniFile);
-        } else {
-          MOBase::log::warn("Failed to copy case-mismatched INI '{}' -> '{}'",
-                            altInfo.fileName(), iniFile);
-        }
-        // Ensure both proper-case and lowercase aliases exist
-        ensureCaseAliases(baseDir, iniFile, targetInfo.fileName());
-        continue;
-      }
-    }
-#endif
-
-    // The INI doesn't exist or is a stub, and no adequate differently-cased
-    // version was found. Try to seed from the game's default INI template
-    // (e.g., Fallout_default.ini, Oblivion_default.ini).
-    QString baseName = QFileInfo(iniFile).completeBaseName();
-    QString defaultIniName = baseName + "_default.ini";
-    QString defaultIniPath =
+    const QString baseName      = QFileInfo(iniFile).completeBaseName();
+    const QString defaultIniName = baseName + "_default.ini";
+    const QString defaultIniPath =
         resolveFileCaseInsensitive(gameDirectory().absoluteFilePath(defaultIniName));
-
-    if (QFileInfo::exists(defaultIniPath)) {
-      // Remove the stub file if it exists so we can replace it
-      if (targetInfo.exists()) {
-        QFile::remove(targetPath);
-      }
-      QFile srcFile(defaultIniPath);
-      if (srcFile.copy(targetPath)) {
-        // Make the copy writable
-        QFile::setPermissions(
-            targetPath,
-            QFile::permissions(targetPath) | QFile::WriteUser | QFile::WriteOwner);
-        MOBase::log::info("Seeded '{}' from default INI '{}'", iniFile, defaultIniPath);
-      } else {
-        MOBase::log::warn("Failed to copy default INI '{}' -> '{}': {} "
-                          "(srcExists={}, srcSize={}, targetExists={}, dirExists={})",
-                          defaultIniPath, targetPath, srcFile.errorString(),
-                          QFileInfo::exists(defaultIniPath),
-                          QFileInfo(defaultIniPath).size(),
-                          QFileInfo::exists(targetPath),
-                          QFileInfo(targetPath).dir().exists());
-      }
+    const auto prepared =
+        GamebryoIniSeeder::ensure(basePath, iniFile, defaultIniPath);
+    if (!prepared.success) {
+      MOBase::log::error("Could not prepare INI '{}': {}", iniFile, prepared.error);
+      return false;
     }
-
-#ifndef _WIN32
-    // After creating/finding the INI, ensure both proper-case and lowercase
-    // versions exist so that any code path or the game itself can find it
-    // regardless of which casing it uses.
-    QFileInfo finalInfo(targetPath);
-    if (finalInfo.exists() || finalInfo.isSymLink()) {
-      ensureCaseAliases(baseDir, iniFile, finalInfo.fileName());
+    if (prepared.seeded) {
+      MOBase::log::info("Seeded '{}' atomically from '{}'", iniFile,
+                        defaultIniPath);
     }
-#endif
   }
+
+  return true;
 }
 
 QString GameGamebryo::readIniValue(const QString& iniFile, const QString& section,
@@ -603,11 +486,11 @@ void GameGamebryo::copyToProfile(QString const& sourcePath,
   }
 
 #ifndef _WIN32
-  // Ensure both proper-case and lowercase versions exist (one as symlink)
-  QFileInfo actualFile(filePath);
-  if (actualFile.exists() || actualFile.isSymLink()) {
-    ensureCaseAliases(destinationDirectory, destinationFileName,
-                      actualFile.fileName());
+  const auto prepared = GamebryoIniSeeder::ensure(
+      destinationDirectory.absolutePath(), destinationFileName, {});
+  if (!prepared.success) {
+    MOBase::log::warn("Could not prepare INI aliases for '{}': {}",
+                      destinationFileName, prepared.error);
   }
 #endif
 }

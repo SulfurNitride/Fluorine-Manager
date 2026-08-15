@@ -73,12 +73,12 @@ bool GamebryoBSAInvalidation::prepareProfile(MOBase::IProfile* profile)
                             ? profile->absolutePath()
                             : m_Game->documentsDirectory().absolutePath();
 
-  // Ensure the target INI has adequate content before writing to it.
-  // On Linux, the game launcher may not work, leaving INI files missing
-  // or as empty stubs. Seed from the game's default INI if needed.
+  // Preserve every existing INI and atomically seed only a missing family.
   const auto* gamebryo = dynamic_cast<const GameGamebryo*>(m_Game);
   if (gamebryo) {
-    const_cast<GameGamebryo*>(gamebryo)->ensureIniFilesExist(basePath);
+    if (!const_cast<GameGamebryo*>(gamebryo)->ensureIniFilesExist(basePath)) {
+      return false;
+    }
   }
 
   // Resolve case-insensitively (e.g., fallout.ini vs Fallout.ini on Linux)

@@ -1237,6 +1237,27 @@ target_link_libraries(test_protondxvkconfig PRIVATE
 add_test(NAME test_protondxvkconfig COMMAND test_protondxvkconfig)
 set_tests_properties(test_protondxvkconfig PROPERTIES TIMEOUT 15)
 
+add_executable(test_gamebryoiniseeder EXCLUDE_FROM_ALL
+    test_gamebryoiniseeder.cpp
+    ${CMAKE_SOURCE_DIR}/libs/game_bethesda/src/gamebryo/gamebryoiniseeder.cpp
+)
+set_target_properties(test_gamebryoiniseeder PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_gamebryoiniseeder PRIVATE
+    ${CMAKE_SOURCE_DIR}/libs/game_bethesda/src/gamebryo
+)
+target_link_libraries(test_gamebryoiniseeder PRIVATE
+    Qt6::Core
+    mo2::uibase
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_gamebryoiniseeder COMMAND test_gamebryoiniseeder)
+set_tests_properties(test_gamebryoiniseeder PROPERTIES TIMEOUT 15)
+
 add_executable(test_profilemodlistrename EXCLUDE_FROM_ALL
     test_profilemodlistrename.cpp
     ${CMAKE_SOURCE_DIR}/src/src/profilemodlistrename.cpp
@@ -1389,7 +1410,7 @@ set_tests_properties(test_fluorine_publisher PROPERTIES
 
 # Register a "fluorine-tests" umbrella target that builds every test exe.
 add_custom_target(fluorine-tests
-    DEPENDS organizer test_esptk_tes3 test_bsatk_extraction
+    DEPENDS organizer game_gamebryo test_esptk_tes3 test_bsatk_extraction
             test_plugincompatibility test_pluginregistrationpolicy
             test_settingsmigration test_processlifetime
             test_launchcoordination test_unixshutdown test_gamefeatureownership
@@ -1414,7 +1435,7 @@ add_custom_target(fluorine-tests
             test_instancegeneralsettings test_downloadmetadatapolicy
             test_downloadwritelifecycle test_nexuscachedirectory
             test_transactionalwritefile test_registry test_wineregistryfile
-            test_protondxvkconfig
+            test_protondxvkconfig test_gamebryoiniseeder
             test_profilemodlistrename test_profilerename
             test_morrowindpluginlistwriter test_winepluginlistsync
             test_winesavedeployment test_winesavetargetresolver)

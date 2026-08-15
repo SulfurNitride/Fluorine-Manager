@@ -26,6 +26,8 @@ add_library(game_gamebryo STATIC
     gamebryodataarchives.h
     gamebryogameplugins.cpp
     gamebryogameplugins.h
+    gamebryoiniseeder.cpp
+    gamebryoiniseeder.h
     gamebryolocalsavegames.cpp
     gamebryolocalsavegames.h
     gamebryomoddatachecker.cpp

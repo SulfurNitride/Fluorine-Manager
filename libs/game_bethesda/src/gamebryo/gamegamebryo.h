@@ -128,10 +128,9 @@ protected:
   virtual bool prepareIni(const QString& exec);
 
 public:
-  // Ensure all game INI files exist with adequate content in the given
-  // base path. On Linux, seeds missing/stub INIs from the game's default
-  // INI templates and creates case-matching symlinks if needed.
-  void ensureIniFilesExist(const QString& basePath);
+  // Preserve existing INIs and atomically seed only missing case families.
+  // Returns false when an unsafe or ambiguous family cannot be prepared.
+  bool ensureIniFilesExist(const QString& basePath);
 
 protected:
 

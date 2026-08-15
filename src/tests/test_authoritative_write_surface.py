@@ -167,6 +167,27 @@ class AuthoritativeWriteSurfaceTests(unittest.TestCase):
         self.assertIn('FileName = ".fluorine-dxvk.conf"', dxvk)
         self.assertIn("transaction.replaceWith", dxvk)
 
+    def test_gamebryo_ini_seeding_preserves_existing_generations(self):
+        game = (ROOT / "libs/game_bethesda/src/gamebryo/gamegamebryo.cpp").read_text(
+            encoding="utf-8"
+        )
+        ensure = game[game.index("bool GameGamebryo::ensureIniFilesExist"):
+                      game.index("QString GameGamebryo::readIniValue")]
+        self.assertIn("GamebryoIniSeeder::ensure", ensure)
+        self.assertNotIn("size() > 200", ensure)
+        self.assertNotIn("QFile::remove", ensure)
+
+        prepare = game[game.index("bool GameGamebryo::prepareIni"):
+                       game.index("bool GameGamebryo::ensureIniFilesExist")]
+        self.assertIn("if (!ensureIniFilesExist(basePath))", prepare)
+        self.assertIn("if (!MOBase::WriteRegistryValue", prepare)
+
+        invalidation = (
+            ROOT / "libs/game_bethesda/src/gamebryo/gamebryobsainvalidation.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertIn("if (!const_cast<GameGamebryo*>(gamebryo)->ensureIniFilesExist",
+                      invalidation)
+
 
 if __name__ == "__main__":
     unittest.main()
