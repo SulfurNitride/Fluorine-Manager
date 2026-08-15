@@ -27,6 +27,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 #include <string>
 
 #include "archive.h"
+#include "archiveoutputpath.h"
 #include "extractcallback.h"
 #include "propertyvariant.h"
 
@@ -173,14 +174,6 @@ STDMETHODIMP CArchiveExtractCallback::GetStream(UInt32 index,
     return S_OK;
   }
 
-#ifndef _WIN32
-  // Archives from Windows contain backslash path separators which are valid
-  // filename characters on Linux - convert them to forward slashes.
-  for (auto& fn : filenames) {
-    std::replace(fn.begin(), fn.end(), L'\\', L'/');
-  }
-#endif
-
   try {
     m_ProcessedFileInfo.AttribDefined =
         getOptionalProperty(index, kpidAttrib, &m_ProcessedFileInfo.Attrib);
@@ -194,9 +187,18 @@ STDMETHODIMP CArchiveExtractCallback::GetStream(UInt32 index,
     m_ProcessedFileInfo.MTimeDefined =
         getOptionalProperty(index, kpidMTime, &m_ProcessedFileInfo.MTime);
 
+    std::vector<archive_output::ValidatedPath> validatedPaths;
+    std::wstring validationError;
+    if (!archive_output::validateAll(m_DirectoryPath, filenames,
+                                     m_ProcessedFileInfo.isDir, validatedPaths,
+                                     validationError)) {
+      reportError(L"refusing unsafe archive output batch: {}", validationError);
+      return E_ABORT;
+    }
+
     if (m_ProcessedFileInfo.isDir) {
-      for (auto const& filename : filenames) {
-        auto fullpath = m_DirectoryPath / fs::path(filename).make_preferred();
+      for (auto const& validated : validatedPaths) {
+        const auto& fullpath = validated.path;
         std::error_code ec;
         std::filesystem::create_directories(fullpath, ec);
         if (ec) {
@@ -206,8 +208,8 @@ STDMETHODIMP CArchiveExtractCallback::GetStream(UInt32 index,
         m_FullProcessedPaths.push_back(fullpath);
       }
     } else {
-      for (auto const& filename : filenames) {
-        auto fullProcessedPath = m_DirectoryPath / fs::path(filename).make_preferred();
+      for (auto const& validated : validatedPaths) {
+        const auto& fullProcessedPath = validated.path;
         // If the filename contains a '/' we want to make the directory
         auto directoryPath = fullProcessedPath.parent_path();
         if (!fs::exists(directoryPath)) {

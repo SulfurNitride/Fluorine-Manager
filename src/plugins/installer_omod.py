@@ -30,6 +30,44 @@ def _log_warn(msg: str) -> None:
     print(f"[OMOD] WARNING: {msg}", file=sys.stderr)
 
 
+def _safe_member_path(root: str | Path, member: str) -> Path:
+    """Resolve an OMOD-controlled member beneath a private extraction root."""
+    if not member or "\x00" in member:
+        raise ValueError("empty or NUL-containing OMOD member path")
+
+    normalized = member.replace("\\", "/")
+    if normalized.startswith("/"):
+        raise ValueError(f"absolute OMOD member path: {member!r}")
+    if len(normalized) >= 2 and normalized[0].isalpha() and normalized[1] == ":":
+        raise ValueError(f"drive-qualified OMOD member path: {member!r}")
+
+    components = normalized.split("/")
+    if any(component in ("", ".", "..") for component in components):
+        raise ValueError(f"unsafe OMOD member path: {member!r}")
+
+    configured_root = Path(root)
+    if configured_root.is_symlink():
+        raise ValueError("OMOD extraction root is a symbolic link")
+    root_path = configured_root.resolve(strict=True)
+    if not root_path.is_dir():
+        raise ValueError("OMOD extraction root is not a real directory")
+
+    destination = root_path.joinpath(*components)
+    destination.relative_to(root_path)
+
+    current = root_path
+    for component in components[:-1]:
+        current /= component
+        if current.is_symlink():
+            raise ValueError(f"OMOD member traverses a symbolic link: {member!r}")
+        if current.exists() and not current.is_dir():
+            raise ValueError(f"OMOD member parent is not a directory: {member!r}")
+
+    if destination.is_symlink():
+        raise ValueError(f"OMOD member collides with a symbolic link: {member!r}")
+    return destination
+
+
 class OmodInstaller(mobase.IPluginInstallerCustom):
     _organizer: mobase.IOrganizer
 
@@ -123,7 +161,7 @@ class OmodInstaller(mobase.IPluginInstallerCustom):
                     lower = entry.lower()
                     if lower == "readme" or lower.startswith("readme."):
                         data = zf.read(entry)
-                        dest = Path(tmpdir) / entry
+                        dest = _safe_member_path(tmpdir, entry)
                         dest.parent.mkdir(parents=True, exist_ok=True)
                         dest.write_bytes(data)
 
@@ -175,7 +213,7 @@ class OmodInstaller(mobase.IPluginInstallerCustom):
         offset = 0
         for path, size in file_list:
             if offset + size > len(decompressed):
-                _log_warn(
+                raise ValueError(
                     f"truncated stream for {path} "
                     f"(need {size} bytes at offset {offset}, "
                     f"have {len(decompressed)})"
@@ -185,9 +223,7 @@ class OmodInstaller(mobase.IPluginInstallerCustom):
             file_data = decompressed[offset : offset + size]
             offset += size
 
-            # Normalise path separators from Windows.
-            path = path.replace("\\", "/")
-            dest = Path(out_dir) / path
+            dest = _safe_member_path(out_dir, path)
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(file_data)
 
@@ -228,6 +264,8 @@ class OmodInstaller(mobase.IPluginInstallerCustom):
             path = self._read_net_string(reader)
             _crc = struct.unpack("<I", reader.read(4))[0]
             size = struct.unpack("<q", reader.read(8))[0]
+            if size < 0:
+                raise ValueError(f"negative uncompressed size for {path!r}")
             files.append((path, size))
         return files
 
@@ -252,7 +290,9 @@ class OmodInstaller(mobase.IPluginInstallerCustom):
         if length == 0:
             return ""
         raw = reader.read(length)
-        return raw.decode("utf-8", errors="replace")
+        if len(raw) != length:
+            raise EOFError("truncated .NET string in OMOD metadata")
+        return raw.decode("utf-8")
 
     @staticmethod
     def _read_7bit_encoded_int(reader: io.BytesIO) -> int:
@@ -262,13 +302,16 @@ class OmodInstaller(mobase.IPluginInstallerCustom):
         while True:
             byte_data = reader.read(1)
             if not byte_data:
-                break
+                raise EOFError("truncated 7-bit integer in OMOD metadata")
             b = byte_data[0]
             result |= (b & 0x7F) << shift
             shift += 7
             if (b & 0x80) == 0:
-                break
-        return result
+                if result > 0x7FFFFFFF:
+                    raise ValueError("7-bit integer exceeds signed .NET range")
+                return result
+            if shift >= 35:
+                raise ValueError("invalid 7-bit integer in OMOD metadata")
 
 
 def createPlugin() -> mobase.IPlugin:

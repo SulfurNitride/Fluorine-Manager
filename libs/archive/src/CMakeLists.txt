@@ -27,6 +27,8 @@ endif()
 
 set(ARCHIVE_SOURCES
 	archive.cpp
+	archiveoutputpath.cpp
+	archiveoutputpath.h
 	compat.h
 	extractcallback.cpp
 	extractcallback.h

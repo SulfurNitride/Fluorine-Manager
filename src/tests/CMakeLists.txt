@@ -17,6 +17,16 @@ add_test(
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_openmw_cfg.py
 )
 add_test(
+    NAME test_installer_omod_safety
+    COMMAND ${Python3_EXECUTABLE} -B
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_installer_omod_safety.py -v
+)
+add_test(
+    NAME test_archive_output_surface
+    COMMAND ${Python3_EXECUTABLE} -B
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_archive_output_surface.py -v
+)
+add_test(
     NAME test_flatpak_access
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_flatpak_access.py
 )
@@ -1213,6 +1223,20 @@ target_link_libraries(test_transactionalwritefile PRIVATE
     GTest::gtest_main
 )
 add_test(NAME test_transactionalwritefile COMMAND test_transactionalwritefile)
+
+add_executable(test_archiveoutputpath EXCLUDE_FROM_ALL
+    test_archiveoutputpath.cpp
+    ${CMAKE_SOURCE_DIR}/libs/archive/src/archiveoutputpath.cpp
+)
+target_include_directories(test_archiveoutputpath PRIVATE
+    ${CMAKE_SOURCE_DIR}/libs/archive/src
+)
+target_link_libraries(test_archiveoutputpath PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_archiveoutputpath COMMAND test_archiveoutputpath)
 set_tests_properties(test_transactionalwritefile PROPERTIES TIMEOUT 15)
 
 add_executable(test_registry EXCLUDE_FROM_ALL
@@ -1626,7 +1650,8 @@ add_custom_target(fluorine-tests
             test_problemcheckrunner test_persistentcookiejar
             test_instancegeneralsettings test_downloadmetadatapolicy
             test_downloadwritelifecycle test_nexuscachedirectory
-            test_transactionalwritefile test_registry test_wineregistryfile
+            test_transactionalwritefile test_archiveoutputpath
+            test_registry test_wineregistryfile
             test_protondxvkconfig test_gamebryoiniseeder test_texteditorsave
             test_profilemodlistrename test_profilerename
             test_profilelegacymigration test_copydir test_instanceunregister
