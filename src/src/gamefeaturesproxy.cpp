@@ -134,6 +134,7 @@ private:
 
 class LocalSavegamesProxy final : public MOBase::LocalSavegames,
                                   public MOBase::LocalSavegamesRouting,
+                                  public MOBase::LocalSavegamesTopology,
                                   public ProxiedGameFeature
 {
 public:
@@ -165,6 +166,12 @@ public:
     const auto* routing =
         dynamic_cast<const MOBase::LocalSavegamesRouting*>(m_Proxied.get());
     return routing != nullptr ? routing->routingPath() : QByteArray{};
+  }
+  bool usesFixedGameDirectory() const override
+  {
+    const auto* topology =
+        dynamic_cast<const MOBase::LocalSavegamesTopology*>(m_Proxied.get());
+    return topology != nullptr && topology->usesFixedGameDirectory();
   }
   std::shared_ptr<MOBase::GameFeature> proxiedFeature() const override
   {

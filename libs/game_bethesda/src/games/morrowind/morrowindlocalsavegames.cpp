@@ -28,6 +28,14 @@ MorrowindLocalSavegames::MorrowindLocalSavegames(const MOBase::IPluginGame* game
 
 bool MorrowindLocalSavegames::prepareProfile(MOBase::IProfile* profile)
 {
+#ifndef _WIN32
+  // Linux save ownership is launch-scoped in OrganizerCore. Renaming the
+  // global directory while merely selecting a profile strands vanilla saves
+  // after a crash and races other instances. mappings() remains the exact
+  // destination contract used by the launch transaction.
+  Q_UNUSED(profile);
+  return false;
+#else
   bool dirty = false;
 
   if (profile->localSavesEnabled()) {
@@ -47,6 +55,7 @@ bool MorrowindLocalSavegames::prepareProfile(MOBase::IProfile* profile)
   }
 
   return dirty;
+#endif
 }
 
 MappingType MorrowindLocalSavegames::mappings(const QDir& profileSaveDir) const

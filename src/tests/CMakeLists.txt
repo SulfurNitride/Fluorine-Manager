@@ -1295,6 +1295,27 @@ target_link_libraries(test_winesavedeployment PRIVATE
 add_test(NAME test_winesavedeployment COMMAND test_winesavedeployment)
 set_tests_properties(test_winesavedeployment PROPERTIES TIMEOUT 20)
 
+add_executable(test_winesavetargetresolver EXCLUDE_FROM_ALL
+    test_winesavetargetresolver.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/winesavetargetresolver.cpp
+)
+set_target_properties(test_winesavetargetresolver PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_winesavetargetresolver PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_winesavetargetresolver PRIVATE
+    Qt6::Core
+    mo2::uibase
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_winesavetargetresolver COMMAND test_winesavetargetresolver)
+set_tests_properties(test_winesavetargetresolver PROPERTIES TIMEOUT 10)
+
 add_test(NAME test_authoritative_write_surface
     COMMAND ${Python3_EXECUTABLE} -m unittest -v
             ${CMAKE_CURRENT_SOURCE_DIR}/test_authoritative_write_surface.py
@@ -1345,4 +1366,4 @@ add_custom_target(fluorine-tests
             test_transactionalwritefile test_registry test_wineregistryfile
             test_profilemodlistrename
             test_morrowindpluginlistwriter test_winepluginlistsync
-            test_winesavedeployment)
+            test_winesavedeployment test_winesavetargetresolver)

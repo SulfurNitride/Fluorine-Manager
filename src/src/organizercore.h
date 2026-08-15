@@ -666,6 +666,7 @@ private:
   std::shared_ptr<Profile> m_CurrentProfile;
   ProcessLaunchContextTracker m_ProcessLaunchContext;
   QHash<QString, std::shared_ptr<QLockFile>> m_SaveDeploymentLocks;
+  QHash<QString, std::shared_ptr<QLockFile>> m_FixedSaveDeploymentLocks;
   bool m_CurrentProfileSavedForShutdown = false;
 
   Settings& m_Settings;

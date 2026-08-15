@@ -47,6 +47,7 @@
 #include "wineprefix.h"
 #include "winesavedeployment.h"
 #include "winesaverouting.h"
+#include "winesavetargetresolver.h"
 #include <ipluginmodpage.h>
 #include <questionboxmemory.h>
 #include <uibase/filesystemutilities.h>
@@ -101,6 +102,7 @@
 #include <functional>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>  //for wstring
@@ -409,67 +411,28 @@ QString resolvePrefixGameDocumentsDir(const WinePrefix& prefix,
   return QDir(prefix.myGamesPath()).filePath(dataDirName);
 }
 
-QString resolveAbsoluteSaveDir(const WinePrefix& prefix, const IPluginGame* managedGame,
-                               MOBase::LocalSavegames* localSaves,
-                               std::shared_ptr<Profile> profile)
+WineSaveTargetResolver::Plan resolveSaveTargetPlan(
+    const WinePrefix& prefix, const IPluginGame* managedGame,
+    MOBase::LocalSavegames* localSaves, const std::shared_ptr<Profile>& profile)
 {
-  if (profile == nullptr || managedGame == nullptr) {
-    const QString dataDirName = resolveWineDataDirName(managedGame);
-    return QDir(prefix.myGamesPath()).filePath(dataDirName + "/Saves");
-  }
-
-  const QString profileSaveDir = QDir(profile->absolutePath()).filePath("saves");
-
-  // Strategy 1: Use LocalSavegames::mappings() if available.
-  // Extract the user-relative portion of the destination (after
-  // drive_c/users/<name>/) and reconstruct it under our prefix's
-  // userProfilePath().
-  if (localSaves != nullptr) {
-    const MappingType mappings = localSaves->mappings(QDir(profileSaveDir));
-    for (const auto& mapping : mappings) {
-      if (!mapping.isDirectory) {
-        continue;
-      }
-
-      const QString source      = QDir::cleanPath(mapping.source);
-      const QString destination = QDir::cleanPath(mapping.destination);
-      if (source != QDir::cleanPath(profileSaveDir)) {
-        continue;
-      }
-
-      // Extract the user-relative path (after drive_c/users/<username>/)
-      static const QRegularExpression userDirRe(
-          "drive_c/users/[^/]+/(.+)", QRegularExpression::CaseInsensitiveOption);
-      const auto match = userDirRe.match(destination);
-      if (match.hasMatch()) {
-        const QString userRelative = match.captured(1);
-        const QString resolved = QDir(prefix.userProfilePath()).filePath(userRelative);
-        log::debug("resolveAbsoluteSaveDir: from mappings -> '{}'", resolved);
-        return resolved;
-      }
-    }
-  }
-
-  // Strategy 2: Use managedGame->savesDirectory()
-  {
-    const QDir savesDir     = managedGame->savesDirectory();
-    const QString savesPath = QDir::cleanPath(savesDir.absolutePath());
-    static const QRegularExpression userDirRe(
-        "drive_c/users/[^/]+/(.+)", QRegularExpression::CaseInsensitiveOption);
-    const auto match = userDirRe.match(savesPath);
-    if (match.hasMatch()) {
-      const QString userRelative = match.captured(1);
-      const QString resolved = QDir(prefix.userProfilePath()).filePath(userRelative);
-      log::debug("resolveAbsoluteSaveDir: from savesDirectory -> '{}'", resolved);
-      return resolved;
-    }
-  }
-
-  // Fallback: Documents/My Games/<dataDirName>/Saves (old Bethesda behavior)
   const QString dataDirName = resolveWineDataDirName(managedGame);
-  const QString fallback = QDir(prefix.myGamesPath()).filePath(dataDirName + "/Saves");
-  log::debug("resolveAbsoluteSaveDir: fallback -> '{}'", fallback);
-  return fallback;
+  const QString profileSaveDir =
+      profile != nullptr ? QDir(profile->absolutePath()).filePath("saves") : QString{};
+  const MappingType mappings = localSaves != nullptr && !profileSaveDir.isEmpty()
+                                   ? localSaves->mappings(QDir(profileSaveDir))
+                                   : MappingType{};
+  const auto* topology = dynamic_cast<const LocalSavegamesTopology*>(localSaves);
+  const bool allowFixedGameDirectory =
+      topology != nullptr && topology->usesFixedGameDirectory();
+  const QString gameRoot = managedGame != nullptr
+                               ? managedGame->gameDirectory().absolutePath()
+                               : QString{};
+  const QString gameSaves = managedGame != nullptr
+                                ? managedGame->savesDirectory().absolutePath()
+                                : QString{};
+  return WineSaveTargetResolver::resolve(
+      prefix.driveC(), prefix.userProfilePath(), prefix.myGamesPath(), dataDirName,
+      gameRoot, gameSaves, profileSaveDir, allowFixedGameDirectory, mappings);
 }
 
 namespace
@@ -3307,6 +3270,225 @@ bool OrganizerCore::beforeRun(
     return false;  // user cancelled
   }
 
+  std::optional<WineSaveTargetResolver::Plan> fixedSavePlan;
+  QString fixedConfigurationRoot;
+  QStringList fixedManagedIniFiles;
+
+#ifndef _WIN32
+  // Original Morrowind and similarly shaped plugins store saves and INIs in
+  // the game directory rather than the Wine user profile. Establish that
+  // physical ownership before either VFS backend sees the mappings so there
+  // is exactly one writer for the save/INI leaves during this launch.
+  if (launchProfile != nullptr && managedGame() != nullptr) {
+    const QString configuredPrefix = resolveWinePrefixPath(m_Settings, managedGame());
+    const QString preparedPrefix = QFileInfo(configuredPrefix).canonicalFilePath();
+    if (!preparedPrefix.isEmpty()) {
+      const WinePrefix prefix(preparedPrefix);
+      if (prefix.isValid()) {
+        const auto localSaves = gameFeatures().gameFeature<LocalSavegames>();
+        const auto plan = resolveSaveTargetPlan(prefix, managedGame(),
+                                                localSaves.get(), launchProfile);
+        if (!plan) {
+          log::error("Refusing launch because the save target is ambiguous: {}",
+                     plan.error);
+          return false;
+        }
+        if (plan.kind == WineSaveTargetResolver::Kind::FixedGameDirectory) {
+          if (saveDeployment == nullptr || launchToken.isEmpty()) {
+            log::error("Refusing fixed-directory save launch without ownership");
+            return false;
+          }
+
+          const QString configurationRoot =
+              managedGame()->documentsDirectory().canonicalPath();
+          const QString fixedProfileSaves =
+              QDir(launchProfile->absolutePath()).filePath("saves");
+          if (configurationRoot.isEmpty() ||
+              !WineSaveDeployment::samePhysicalDirectory(configurationRoot,
+                                                         plan.topologyRoot)) {
+            log::error("Refusing fixed-directory save launch because configuration "
+                       "root '{}' does not match topology root '{}'",
+                       managedGame()->documentsDirectory().absolutePath(),
+                       plan.topologyRoot);
+            return false;
+          }
+          fixedManagedIniFiles = managedGame()->iniFiles();
+          fixedConfigurationRoot = configurationRoot;
+
+          if (useProton) {
+            QStringList prunedDrives;
+            QString pruneError;
+            if (!prefix.pruneExtraDrives(prunedDrives, &pruneError)) {
+              log::error("Refusing Wine launch because drive mappings could not "
+                         "be normalized: {}",
+                         pruneError);
+              return false;
+            }
+          }
+
+          auto prefixLease = std::make_shared<QLockFile>(
+              WineSaveDeployment::leasePathFor(preparedPrefix, plan.livePath));
+          if (!prefixLease->tryLock(0) &&
+              (!prefixLease->removeStaleLockFile() || !prefixLease->tryLock(0))) {
+            log::error("Refusing launch because Wine prefix '{}' is owned by "
+                       "another Fluorine process",
+                       preparedPrefix);
+            return false;
+          }
+          m_SaveDeploymentLocks.insert(launchToken, prefixLease);
+
+          const bool sharedLeaseRoot =
+              WineSaveDeployment::samePhysicalDirectory(preparedPrefix,
+                                                         plan.topologyRoot);
+          if (!sharedLeaseRoot) {
+            auto gameLease = std::make_shared<QLockFile>(
+                WineSaveDeployment::leasePathFor(plan.topologyRoot, plan.livePath));
+            if (!gameLease->tryLock(0) &&
+                (!gameLease->removeStaleLockFile() || !gameLease->tryLock(0))) {
+              log::error("Refusing launch because fixed save root '{}' is owned by "
+                         "another Fluorine process",
+                         plan.topologyRoot);
+              return false;
+            }
+            m_FixedSaveDeploymentLocks.insert(launchToken, gameLease);
+          }
+
+          WineSaveDeployment::PendingDeployment pending;
+          const auto pendingResult = WineSaveDeployment::pendingDeployment(
+              plan.topologyRoot, plan.livePath, pending);
+          if (!pendingResult || pending.present) {
+            log::error("Refusing launch because fixed save recovery is {}{}",
+                       pendingResult ? QStringLiteral("still owned by launch '")
+                                     : QStringLiteral("invalid: "),
+                       pendingResult ? pending.ownerId + QStringLiteral("'")
+                                     : pendingResult.error);
+            return false;
+          }
+
+          const QStringList staleIniRecovery =
+              WineSaveTargetResolver::legacyIniRecoveryLeaves(
+                  fixedConfigurationRoot, fixedManagedIniFiles);
+          if (!staleIniRecovery.isEmpty()) {
+            log::error("Refusing fixed-directory launch because interrupted INI "
+                       "recovery leaves require explicit reconciliation: {}",
+                       staleIniRecovery.join(QStringLiteral(", ")));
+            return false;
+          }
+
+          const auto prefixSession = WineSaveDeployment::beginSessionLease(
+              preparedPrefix, plan.livePath, launchToken);
+          if (!prefixSession) {
+            log::error("Refusing launch because Wine-prefix save-session "
+                       "ownership could not be established: {}",
+                       prefixSession.error);
+            return false;
+          }
+
+          saveDeployment->mode                  = spawn::SaveDeploymentMode::LeaseOnly;
+          saveDeployment->prefixPath            = preparedPrefix;
+          saveDeployment->livePath              = plan.livePath;
+          saveDeployment->topologyRoot          = plan.topologyRoot;
+          saveDeployment->leaseRoot             = preparedPrefix;
+          saveDeployment->secondaryLeaseRoot =
+              sharedLeaseRoot ? QString{} : plan.topologyRoot;
+          saveDeployment->ownerId               = launchToken;
+          saveDeployment->sessionLeasePublished = true;
+          saveDeployment->topologyRestored      = true;
+          saveDeployment->fixedGameDirectory    = true;
+
+          if (!sharedLeaseRoot) {
+            const auto gameSession = WineSaveDeployment::beginSessionLease(
+                plan.topologyRoot, plan.livePath, launchToken);
+            if (!gameSession) {
+              log::error("Refusing launch because fixed save-session ownership "
+                         "could not be established: {}",
+                         gameSession.error);
+              return false;
+            }
+            saveDeployment->secondarySessionLeasePublished = true;
+          }
+
+          // Only after both physical roots have admitted this launch may an
+          // old preview mapping or legacy topology be changed. A restarted
+          // manager therefore cannot disturb an orphan child before observing
+          // its persisted prefix/game-root session owner.
+          m_USVFS.retireExternalMappingsForLaunchOwnership();
+
+          const QString legacyBackup =
+              QDir(plan.topologyRoot)
+                  .filePath(QStringLiteral("_") + QFileInfo(plan.livePath).fileName());
+          const auto legacy = WineSaveTargetResolver::restoreLegacyBackup(
+              plan.topologyRoot, plan.livePath, legacyBackup, fixedProfileSaves,
+              launchProfile->localSavesEnabled());
+          if (!legacy) {
+            log::error("Refusing launch because legacy fixed save state is "
+                       "ambiguous: {}",
+                       legacy.error);
+            return false;
+          }
+
+          if (launchProfile->localSettingsEnabled()) {
+            for (const QString& iniName : fixedManagedIniFiles) {
+              const QString sourceIni = profileIniSource(*launchProfile, iniName);
+              if (!QFileInfo::exists(sourceIni)) {
+                log::error("Refusing fixed-directory local-settings launch "
+                           "because profile INI '{}' is missing",
+                           sourceIni);
+                return false;
+              }
+              const QString targetIni =
+                  QDir(fixedConfigurationRoot)
+                      .filePath(QFileInfo(iniName).fileName());
+              WineProfileIniSync::Deployment deployment;
+              if (!prefix.deployProfileIni(sourceIni, targetIni, launchToken,
+                                           deployment)) {
+                if (deployment.needsCleanup()) {
+                  saveDeployment->profileIniDeployments.append(
+                      std::move(deployment));
+                }
+                log::error("Refusing launch because fixed game INI '{}' could "
+                           "not be deployed safely",
+                           targetIni);
+                return false;
+              }
+              saveDeployment->profileIniDeployments.append(std::move(deployment));
+            }
+          }
+
+          if (launchProfile->localSavesEnabled()) {
+            saveDeployment->profileRoot = fixedProfileSaves;
+            const auto deployed = WineSaveDeployment::deployLinks(
+                plan.topologyRoot, fixedProfileSaves, plan.livePath, launchToken);
+            saveDeployment->deploymentCleanupPending = deployed.cleanupRequired;
+            if (deployed || deployed.cleanupRequired) {
+              saveDeployment->mode = spawn::SaveDeploymentMode::ManagedLinks;
+              saveDeployment->topologyRestored = deployed.topologyComplete;
+            }
+            if (!deployed) {
+              log::error("Refusing launch because fixed-directory saves could "
+                         "not be deployed: {}",
+                         deployed.error);
+              return false;
+            }
+          }
+
+          fixedSavePlan = plan;
+        }
+      }
+    }
+  }
+#endif
+
+  const auto launchMappings = [&]() {
+    MappingType mappings = fileMapping(profileName, customOverwrite);
+    if (fixedSavePlan.has_value()) {
+      mappings = WineSaveTargetResolver::filterFixedMappings(
+          mappings, fixedSavePlan->livePath, fixedConfigurationRoot,
+          fixedManagedIniFiles);
+    }
+    return mappings;
+  };
+
   // VFS Root Builder: read per-instance setting and configure.
   {
     bool vfsRootBuilder = false;
@@ -3353,7 +3535,7 @@ bool OrganizerCore::beforeRun(
       // the original physical destinations, so tear the preview down first.
       m_USVFS.unmount();
       const auto usvfsUnmountedAt     = std::chrono::steady_clock::now();
-      const MappingType mappings      = fileMapping(profileName, customOverwrite);
+      const MappingType mappings      = launchMappings();
       const auto usvfsMappingsBuiltAt = std::chrono::steady_clock::now();
       m_USVFS.prepareRootFilesForUsvfs(mappings);
       const auto usvfsRootPreparedAt = std::chrono::steady_clock::now();
@@ -3451,7 +3633,7 @@ bool OrganizerCore::beforeRun(
                 "request='{}', mappings={})",
                 request.instanceName, request.path, mappings.size());
     } else if (gameUsesOrganizerVfs) {
-      m_USVFS.updateMapping(fileMapping(profileName, customOverwrite));
+      m_USVFS.updateMapping(launchMappings());
       m_USVFS.updateForcedLibraries(forcedLibraries);
       log::debug("beforeRun: using FUSE backend{}",
                  configuredBackend == VfsBackend::Usvfs && !useProton
@@ -3493,7 +3675,7 @@ bool OrganizerCore::beforeRun(
       }
       WinePrefix const prefix(preparedPrefixPath);
       if (prefix.isValid()) {
-        if (useProton) {
+        if (useProton && !fixedSavePlan.has_value()) {
           QStringList prunedDrives;
           QString pruneError;
           if (!prefix.pruneExtraDrives(prunedDrives, &pruneError)) {
@@ -3509,6 +3691,18 @@ bool OrganizerCore::beforeRun(
           }
         }
 
+        if (fixedSavePlan.has_value()) {
+          if (saveDeployment == nullptr ||
+              !WineSaveDeployment::samePhysicalDirectory(
+                  saveDeployment->prefixPath, preparedPrefixPath)) {
+            log::error("Fixed-directory save preparation no longer matches the "
+                       "configured Wine prefix");
+            return false;
+          }
+          log::info("Using launch-owned fixed save target '{}' under '{}'",
+                    fixedSavePlan->livePath, fixedSavePlan->topologyRoot);
+          return true;
+        }
         const QString dataDirName      = resolveWineDataDirName(managedGame());
         const QString appDataLocal     = prefix.appdataLocal();
         const QString pluginsTargetDir = QDir(appDataLocal).filePath(dataDirName);
@@ -3517,8 +3711,16 @@ bool OrganizerCore::beforeRun(
                   "Documents/My Games INI dir='{}'",
                   pluginsTargetDir, documentsDir);
         const auto localSavesFeature  = gameFeatures().gameFeature<LocalSavegames>();
-        const QString absoluteSaveDir = resolveAbsoluteSaveDir(
+        const auto targetPlan = resolveSaveTargetPlan(
             prefix, managedGame(), localSavesFeature.get(), launchProfile);
+        if (!targetPlan ||
+            targetPlan.kind != WineSaveTargetResolver::Kind::PrefixRouted) {
+          log::error("Refusing launch because the Wine save target could not be "
+                     "resolved: {}",
+                     targetPlan.error);
+          return false;
+        }
+        const QString absoluteSaveDir = targetPlan.livePath;
         log::info("Wine prefix save target: '{}'", absoluteSaveDir);
         QStringList managedIniFiles = managedGame()->iniFiles();
         QString routingIniName =
@@ -3626,6 +3828,8 @@ bool OrganizerCore::beforeRun(
           saveDeployment->mode                  = spawn::SaveDeploymentMode::LeaseOnly;
           saveDeployment->prefixPath            = preparedPrefixPath;
           saveDeployment->livePath              = absoluteSaveDir;
+          saveDeployment->topologyRoot          = targetPlan.topologyRoot;
+          saveDeployment->leaseRoot             = preparedPrefixPath;
           saveDeployment->ownerId               = launchToken;
           saveDeployment->sessionLeasePublished = true;
         }
@@ -3987,6 +4191,61 @@ bool finishProfileIniDeployment(spawn::SaveDeploymentReceipt& receipt,
   receipt.profileIniCleanupPhase = WineProfileIniSync::CleanupPhase::Prepared;
   return true;
 }
+
+bool finishSaveTopology(spawn::SaveDeploymentReceipt& receipt,
+                        bool publishChanges, bool& topologyComplete,
+                        bool& cleanupRequired)
+{
+  topologyComplete = false;
+  cleanupRequired  = false;
+  if (receipt.topologyRoot.isEmpty() || receipt.profileRoot.isEmpty() ||
+      receipt.livePath.isEmpty() || receipt.ownerId.isEmpty()) {
+    return false;
+  }
+  const auto result = publishChanges
+                          ? WineSaveDeployment::synchronizeAndRestore(
+                                receipt.topologyRoot, receipt.profileRoot,
+                                receipt.livePath, receipt.ownerId)
+                          : WineSaveDeployment::rollbackLinks(
+                                receipt.topologyRoot, receipt.profileRoot,
+                                receipt.livePath, receipt.ownerId);
+  topologyComplete = result.topologyComplete;
+  cleanupRequired  = result.cleanupRequired;
+  if (!result) {
+    log::error("Could not {} save topology under '{}': {}",
+               publishChanges ? QStringLiteral("synchronize")
+                              : QStringLiteral("roll back"),
+               receipt.topologyRoot, result.error);
+  } else if (!result.error.isEmpty()) {
+    log::warn("Save topology cleanup under '{}' completed with warning: {}",
+              receipt.topologyRoot, result.error);
+  }
+  return result.success;
+}
+
+bool retireSaveSessions(spawn::SaveDeploymentReceipt& receipt)
+{
+  if (receipt.secondarySessionLeasePublished) {
+    const auto retired = WineSaveDeployment::endSessionLease(
+        receipt.secondaryLeaseRoot, receipt.livePath, receipt.ownerId);
+    if (!retired) {
+      log::error("Could not retire secondary save-session ownership: {}",
+                 retired.error);
+      return false;
+    }
+    receipt.secondarySessionLeasePublished = false;
+  }
+  if (receipt.sessionLeasePublished) {
+    const auto retired = WineSaveDeployment::endSessionLease(
+        receipt.leaseRoot, receipt.livePath, receipt.ownerId);
+    if (!retired) {
+      log::error("Could not retire save-session ownership: {}", retired.error);
+      return false;
+    }
+    receipt.sessionLeasePublished = false;
+  }
+  return true;
+}
 }  // namespace
 
 struct OrganizerCore::AbortedLaunchWork
@@ -4045,12 +4304,11 @@ void OrganizerCore::continueAbortedLaunchTeardown(
         if (work->saveDeployment.mode == spawn::SaveDeploymentMode::ManagedLinks) {
           if (!work->saveDeployment.topologyRestored ||
               work->saveDeployment.deploymentCleanupPending) {
-            WinePrefix prefix(work->saveDeployment.prefixPath);
             bool topologyComplete = false;
             bool cleanupRequired  = false;
-            const bool complete   = prefix.rollbackProfileSaves(
-                work->saveDeployment.profileRoot, work->saveDeployment.livePath,
-                work->saveDeployment.ownerId, &topologyComplete, &cleanupRequired);
+            const bool complete   = finishSaveTopology(
+                work->saveDeployment, /*publishChanges=*/false, topologyComplete,
+                cleanupRequired);
             if (topologyComplete) {
               work->saveDeployment.topologyRestored = true;
             }
@@ -4070,12 +4328,11 @@ void OrganizerCore::continueAbortedLaunchTeardown(
         } else if (work->saveDeployment.mode == spawn::SaveDeploymentMode::BindMount) {
           if (!work->saveDeployment.topologyRestored ||
               work->saveDeployment.deploymentCleanupPending) {
-            WinePrefix prefix(work->saveDeployment.prefixPath);
             bool topologyComplete = false;
             bool cleanupRequired  = false;
-            const bool complete   = prefix.rollbackProfileSaves(
-                work->saveDeployment.profileRoot, work->saveDeployment.livePath,
-                work->saveDeployment.ownerId, &topologyComplete, &cleanupRequired);
+            const bool complete   = finishSaveTopology(
+                work->saveDeployment, /*publishChanges=*/false, topologyComplete,
+                cleanupRequired);
             if (topologyComplete) {
               work->saveDeployment.topologyRestored = true;
             }
@@ -4099,24 +4356,17 @@ void OrganizerCore::continueAbortedLaunchTeardown(
           throw std::runtime_error(
               "unable to restore profile INIs after aborted launch");
         }
-        if (work->saveDeployment.sessionLeasePublished) {
-          const auto retired = WineSaveDeployment::endSessionLease(
-              work->saveDeployment.prefixPath, work->saveDeployment.livePath,
-              work->saveDeployment.ownerId);
-          if (!retired) {
-            throw std::runtime_error(
-                QStringLiteral("unable to retire save-session ownership: %1")
-                    .arg(retired.error)
-                    .toStdString());
-          }
-          work->saveDeployment.sessionLeasePublished = false;
+        if (!retireSaveSessions(work->saveDeployment)) {
+          throw std::runtime_error("unable to retire save-session ownership");
         }
         work->saveDeployment = {};
+        m_FixedSaveDeploymentLocks.remove(work->launchToken);
         m_SaveDeploymentLocks.remove(work->launchToken);
       },
       /*additionalCleanupRequired=*/
       !work->usvfsRequestPath.isEmpty() || work->saveDeployment.needsRollback() ||
-          m_SaveDeploymentLocks.contains(work->launchToken));
+          m_SaveDeploymentLocks.contains(work->launchToken) ||
+          m_FixedSaveDeploymentLocks.contains(work->launchToken));
 
   if (attempt.state == launch_cleanup::AttemptState::Rejected) {
     log::error("launch preparation rollback rejected for token '{}' and profile "
@@ -4175,6 +4425,7 @@ struct OrganizerCore::AfterRunWork
   QString profileName;
   bool triggerRefresh{false};
   QString preparedWinePrefix;
+  bool fixedGameDirectory{false};
   spawn::SaveDeploymentReceipt saveDeployment;
   std::function<void()> refreshComplete;
   std::function<void(bool)> cleanupComplete;
@@ -4187,10 +4438,12 @@ OrganizerCore::AfterRunResult OrganizerCore::afterRun(
     std::function<void(bool refreshScheduled)> cleanupComplete)
 {
   const QString preparedWinePrefix = saveDeployment.prefixPath;
+  const bool fixedGameDirectory    = saveDeployment.fixedGameDirectory;
   auto work                        = std::make_shared<AfterRunWork>(
       AfterRunWork{binary, exitCode, unmountVfs, launchToken, profileName,
-                   triggerRefresh, preparedWinePrefix, std::move(saveDeployment),
-                   std::move(refreshComplete), std::move(cleanupComplete)});
+                   triggerRefresh, preparedWinePrefix, fixedGameDirectory,
+                   std::move(saveDeployment), std::move(refreshComplete),
+                   std::move(cleanupComplete)});
   return continueAfterRun(work, /*retry=*/false, /*retryCount=*/0);
 }
 
@@ -4214,12 +4467,11 @@ OrganizerCore::continueAfterRun(const std::shared_ptr<AfterRunWork>& work, bool 
           if (work->saveDeployment.mode == spawn::SaveDeploymentMode::ManagedLinks) {
             if (!work->saveDeployment.topologyRestored ||
                 work->saveDeployment.deploymentCleanupPending) {
-              WinePrefix prefix(work->saveDeployment.prefixPath);
               bool topologyComplete = false;
               bool cleanupRequired  = false;
-              const bool complete   = prefix.syncSavesBack(
-                  work->saveDeployment.profileRoot, work->saveDeployment.livePath,
-                  work->saveDeployment.ownerId, &topologyComplete, &cleanupRequired);
+              const bool complete   = finishSaveTopology(
+                  work->saveDeployment, /*publishChanges=*/true, topologyComplete,
+                  cleanupRequired);
               if (topologyComplete) {
                 work->saveDeployment.topologyRestored = true;
               }
@@ -4249,24 +4501,17 @@ OrganizerCore::continueAfterRun(const std::shared_ptr<AfterRunWork>& work, bool 
             throw std::runtime_error(
                 "unable to publish and restore profile INIs after launch");
           }
-          if (work->saveDeployment.sessionLeasePublished) {
-            const auto retired = WineSaveDeployment::endSessionLease(
-                work->saveDeployment.prefixPath, work->saveDeployment.livePath,
-                work->saveDeployment.ownerId);
-            if (!retired) {
-              throw std::runtime_error(
-                  QStringLiteral("unable to retire save-session ownership: %1")
-                      .arg(retired.error)
-                      .toStdString());
-            }
-            work->saveDeployment.sessionLeasePublished = false;
+          if (!retireSaveSessions(work->saveDeployment)) {
+            throw std::runtime_error("unable to retire save-session ownership");
           }
           work->saveDeployment = {};
+          m_FixedSaveDeploymentLocks.remove(work->launchToken);
           m_SaveDeploymentLocks.remove(work->launchToken);
         },
         /*additionalCleanupRequired=*/
         work->saveDeployment.needsRollback() ||
-            m_SaveDeploymentLocks.contains(work->launchToken)));
+            m_SaveDeploymentLocks.contains(work->launchToken) ||
+            m_FixedSaveDeploymentLocks.contains(work->launchToken)));
   } else if (work->unmountVfs) {
     // Compatibility callers with no launch token historically owned no
     // tracker. Keep their behavior, but never let an unmount exception escape
@@ -4410,7 +4655,7 @@ OrganizerCore::continueAfterRun(const std::shared_ptr<AfterRunWork>& work, bool 
                 }
               }
 
-              if (launchProfile != nullptr) {
+              if (launchProfile != nullptr && !work->fixedGameDirectory) {
                 const QString prefixPathStr =
                     !work->preparedWinePrefix.isEmpty()
                         ? work->preparedWinePrefix
@@ -4756,8 +5001,18 @@ std::vector<Mapping> OrganizerCore::fileMapping(const QString& profileName,
         tr("The designated write target \"%1\" is not enabled.").arg(customOverwrite));
   }
 
+  auto localSaves = gameFeatures().gameFeature<LocalSavegames>();
+#ifndef _WIN32
+  const auto* localSaveTopology =
+      localSaves != nullptr
+          ? dynamic_cast<const LocalSavegamesTopology*>(localSaves.get())
+          : nullptr;
+  const bool fixedGameDirectoryMappings =
+      localSaveTopology != nullptr &&
+      localSaveTopology->usesFixedGameDirectory();
+#endif
+
   if (profile.localSavesEnabled()) {
-    auto localSaves = gameFeatures().gameFeature<LocalSavegames>();
     if (localSaves != nullptr) {
       MappingType saveMap = localSaves->mappings(profile.absolutePath() + "/saves");
       result.reserve(result.size() + saveMap.size());
@@ -4787,6 +5042,18 @@ std::vector<Mapping> OrganizerCore::fileMapping(const QString& profileName,
       result.insert(result.end(), pluginMap.begin(), pluginMap.end());
     }
   }
+
+#ifndef _WIN32
+  if (fixedGameDirectoryMappings) {
+    // Plugin file mappers may consult the UI profile instead of profileName.
+    // The opt-in topology contract makes these destinations core-owned in
+    // every mode: when local isolation is disabled they must remain global,
+    // not be redirected by a stale/current-profile mapper.
+    result = WineSaveTargetResolver::filterFixedMappings(
+        result, game->savesDirectory().absolutePath(),
+        game->documentsDirectory().absolutePath(), game->iniFiles());
+  }
+#endif
 
   return result;
 }

@@ -1789,6 +1789,11 @@ void FuseConnector::cleanupExternalMappings()
   m_externalDirs.clear();
 }
 
+void FuseConnector::retireExternalMappingsForLaunchOwnership()
+{
+  cleanupExternalMappings();
+}
+
 void FuseConnector::updateForcedLibraries(
     const QList<MOBase::ExecutableForcedLoadSetting>& /*forced*/)
 {}

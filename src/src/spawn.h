@@ -56,6 +56,15 @@ struct SaveDeploymentReceipt
   QString prefixPath;
   QString profileRoot;
   QString livePath;
+  // Physical root that owns the save topology. Ordinarily this is drive_c;
+  // fixed-directory games such as original Morrowind use the authenticated
+  // game directory instead while prefixPath remains the prepared Wine prefix.
+  QString topologyRoot;
+  // Root that owns the process-lifetime session marker and QLock.
+  QString leaseRoot;
+  // A fixed game-directory launch also owns a second physical root for the
+  // save topology. The Wine-prefix session remains active independently.
+  QString secondaryLeaseRoot;
   QString prefixIni;
   QString ownerId;
   QList<WineProfileIniSync::Deployment> profileIniDeployments;
@@ -63,6 +72,8 @@ struct SaveDeploymentReceipt
       WineProfileIniSync::CleanupPhase::Prepared};
   bool iniPatched{false};
   bool sessionLeasePublished{false};
+  bool secondarySessionLeasePublished{false};
+  bool fixedGameDirectory{false};
   bool topologyRestored{false};
   bool deploymentCleanupPending{false};
 
@@ -70,7 +81,8 @@ struct SaveDeploymentReceipt
   {
     if (mode == SaveDeploymentMode::None)
       return true;
-    if (prefixPath.isEmpty() || livePath.isEmpty() || ownerId.isEmpty()) {
+    if (prefixPath.isEmpty() || livePath.isEmpty() || topologyRoot.isEmpty() ||
+        leaseRoot.isEmpty() || ownerId.isEmpty()) {
       return false;
     }
     return mode == SaveDeploymentMode::LeaseOnly || !profileRoot.isEmpty();
@@ -79,7 +91,8 @@ struct SaveDeploymentReceipt
   bool needsRollback() const noexcept
   {
     return mode == SaveDeploymentMode::ManagedLinks || deploymentCleanupPending ||
-           iniPatched || sessionLeasePublished || !profileIniDeployments.isEmpty();
+           iniPatched || sessionLeasePublished || secondarySessionLeasePublished ||
+           !profileIniDeployments.isEmpty();
   }
 };
 

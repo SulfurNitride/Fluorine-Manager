@@ -29,6 +29,16 @@ public:
   virtual QString routingIniName() const = 0;
   virtual QByteArray routingPath() const  = 0;
 };
+
+// Optional additive contract for save implementations whose authoritative
+// destination is a fixed directory under the game installation. This is a
+// separate interface so the established LocalSavegames vtable remains intact.
+class LocalSavegamesTopology
+{
+public:
+  virtual ~LocalSavegamesTopology() = default;
+  virtual bool usesFixedGameDirectory() const = 0;
+};
 }  // namespace MOBase
 
 #endif  // LOCALSAVEGAMES_H

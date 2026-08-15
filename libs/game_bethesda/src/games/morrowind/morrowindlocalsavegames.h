@@ -25,7 +25,8 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 #include <QDir>
 #include <QString>
 
-class MorrowindLocalSavegames : public MOBase::LocalSavegames
+class MorrowindLocalSavegames : public MOBase::LocalSavegames,
+                                public MOBase::LocalSavegamesTopology
 {
 
 public:
@@ -33,6 +34,7 @@ public:
 
   virtual MappingType mappings(const QDir& profileSaveDir) const override;
   virtual bool prepareProfile(MOBase::IProfile* profile) override;
+  bool usesFixedGameDirectory() const override { return true; }
 
 private:
   const MOBase::IPluginGame* m_GamePlugin;

@@ -81,6 +81,10 @@ public:
   void prepareRootFilesForUsvfs(const MappingType& mapping);
   void clearRootFiles();
 
+  // Retire preview/external mapping leaves before another launch-owned
+  // transaction takes responsibility for one of their destinations.
+  void retireExternalMappingsForLaunchOwnership();
+
 private:
   void stopFuseRuntime();
   void resetPartialMountRuntime();

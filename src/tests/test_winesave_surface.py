@@ -159,6 +159,118 @@ class WineSaveSurfaceTest(unittest.TestCase):
                 rf"make_shared<[^>]*LocalSavegames>\(this,\s*\"{routing_ini}\"\)",
             )
 
+    def test_morrowind_fixed_save_target_is_launch_owned(self):
+        core = (SRC / "organizercore.cpp").read_text(encoding="utf-8")
+        before = function_body(core, "OrganizerCore::beforeRun")
+        resolver = (SRC / "winesavetargetresolver.cpp").read_text(
+            encoding="utf-8"
+        )
+        receipt = (SRC / "spawn.h").read_text(encoding="utf-8")
+        morrowind = (
+            ROOT
+            / "libs"
+            / "game_bethesda"
+            / "src"
+            / "games"
+            / "morrowind"
+            / "morrowindlocalsavegames.cpp"
+        ).read_text(encoding="utf-8")
+        prepare = function_body(
+            morrowind, "bool MorrowindLocalSavegames::prepareProfile"
+        )
+        non_windows = prepare[
+            prepare.index("#ifndef _WIN32") : prepare.index("#else")
+        ]
+        windows = prepare[prepare.index("#else") : prepare.index("#endif")]
+
+        self.assertIn("Q_UNUSED(profile)", non_windows)
+        self.assertNotIn('rename("Saves", "_Saves")', non_windows)
+        self.assertIn('rename("Saves", "_Saves")', windows)
+        morrowind_header = (
+            ROOT
+            / "libs"
+            / "game_bethesda"
+            / "src"
+            / "games"
+            / "morrowind"
+            / "morrowindlocalsavegames.h"
+        ).read_text(encoding="utf-8")
+        self.assertIn("public MOBase::LocalSavegamesTopology", morrowind_header)
+        self.assertIn("usesFixedGameDirectory() const override", morrowind_header)
+        self.assertIn("Kind::FixedGameDirectory", resolver)
+        self.assertIn("multiple physical destinations", resolver)
+        self.assertIn("filterFixedMappings", before)
+        self.assertLess(before.index("filterFixedMappings"),
+                        before.index("m_USVFS.updateMapping"))
+        self.assertIn("retireExternalMappingsForLaunchOwnership", before)
+        self.assertLess(
+            before.index("secondarySessionLeasePublished = true"),
+            before.index("retireExternalMappingsForLaunchOwnership"),
+        )
+        self.assertLess(
+            before.index("retireExternalMappingsForLaunchOwnership"),
+            before.index("WineSaveDeployment::deployLinks"),
+        )
+        self.assertIn("restoreLegacyBackup", before)
+        self.assertIn("legacyIniRecoveryLeaves", before)
+        self.assertLess(
+            before.index("legacyIniRecoveryLeaves"),
+            before.index("WineSaveDeployment::beginSessionLease"),
+        )
+        self.assertIn("m_FixedSaveDeploymentLocks.insert", before)
+        self.assertIn("secondarySessionLeasePublished", before)
+        fixed_deploy = before[
+            before.index("WineSaveDeployment::deployLinks(") : before.index(
+                "fixedSavePlan = plan"
+            )
+        ]
+        self.assertIn("if (deployed || deployed.cleanupRequired)", fixed_deploy)
+        self.assertLess(
+            fixed_deploy.index("if (deployed || deployed.cleanupRequired)"),
+            fixed_deploy.index("SaveDeploymentMode::ManagedLinks"),
+        )
+        self.assertIn("topologyRoot", receipt)
+        self.assertIn("fixedGameDirectory", receipt)
+        self.assertIn("finishSaveTopology", core)
+        self.assertIn("receipt.topologyRoot", function_body(core, "finishSaveTopology"))
+        self.assertIn("retireSaveSessions", core)
+        retire = function_body(core, "retireSaveSessions")
+        self.assertIn("secondaryLeaseRoot", retire)
+        self.assertIn("receipt.leaseRoot", retire)
+
+        mapping = function_body(
+            core,
+            "std::vector<Mapping> OrganizerCore::fileMapping("
+            "const QString& profileName",
+        )
+        self.assertIn("LocalSavegamesTopology", mapping)
+        self.assertIn("usesFixedGameDirectory()", mapping)
+        self.assertIn("filterFixedMappings", mapping)
+        self.assertIn("game->iniFiles()", mapping)
+        self.assertNotIn(
+            "profile.localSettingsEnabled() ? game->iniFiles()", mapping
+        )
+        self.assertLess(
+            mapping.index("plugins<MOBase::IPluginFileMapper>"),
+            mapping.index("filterFixedMappings"),
+        )
+
+        proxy = (SRC / "gamefeaturesproxy.cpp").read_text(encoding="utf-8")
+        proxy_class = proxy[
+            proxy.index("class LocalSavegamesProxy") : proxy.index(
+                "GameFeaturesProxy::GameFeaturesProxy",
+                proxy.index("class LocalSavegamesProxy"),
+            )
+        ]
+        self.assertIn("public MOBase::LocalSavegamesTopology", proxy_class)
+        self.assertIn("topology->usesFixedGameDirectory()", proxy_class)
+
+        self.assertGreaterEqual(before.count("launchMappings()"), 2)
+        self.assertRegex(
+            before,
+            r"const\s+MappingType\s+mappings\s*=\s*launchMappings\(\)",
+        )
+
     def test_teardown_and_abort_use_the_recorded_receipt(self):
         core = (SRC / "organizercore.cpp").read_text(encoding="utf-8")
         runner = (SRC / "processrunner.cpp").read_text(encoding="utf-8")
@@ -166,24 +278,26 @@ class WineSaveSurfaceTest(unittest.TestCase):
         abort = function_body(core, "OrganizerCore::continueAbortedLaunchTeardown")
 
         self.assertIn("work->saveDeployment.mode", continuation)
-        self.assertIn("work->saveDeployment.profileRoot", continuation)
-        self.assertIn("work->saveDeployment.livePath", continuation)
+        topology = function_body(core, "finishSaveTopology")
+        self.assertIn("receipt.profileRoot", topology)
+        self.assertIn("receipt.livePath", topology)
+        self.assertIn("receipt.topologyRoot", topology)
         self.assertIn("restoreSaveRouting(work->saveDeployment)", continuation)
-        self.assertIn("WineSaveDeployment::endSessionLease", continuation)
+        self.assertIn("retireSaveSessions", continuation)
         self.assertIn("finishProfileIniDeployment", continuation)
         self.assertLess(continuation.index("finishProfileIniDeployment"),
-                        continuation.index("WineSaveDeployment::endSessionLease"))
+                        continuation.index("retireSaveSessions"))
         self.assertIn("work->preparedWinePrefix", continuation)
         self.assertNotIn("ProtonLauncher::unprivilegedBindMountSupported()",
                          continuation)
         self.assertNotIn("undeployProfileSaves", continuation)
         self.assertNotIn("localSavesEnabled()", continuation)
-        self.assertIn("rollbackProfileSaves", abort)
+        self.assertIn("finishSaveTopology", abort)
         self.assertIn("restoreSaveRouting(work->saveDeployment)", abort)
-        self.assertIn("WineSaveDeployment::endSessionLease", abort)
+        self.assertIn("retireSaveSessions", abort)
         self.assertIn("finishProfileIniDeployment", abort)
         self.assertLess(abort.index("finishProfileIniDeployment"),
-                        abort.index("WineSaveDeployment::endSessionLease"))
+                        abort.index("retireSaveSessions"))
         self.assertIn("observer->saveDeployment", runner)
         self.assertIn("std::move(m_sp.saveDeployment)", runner)
         self.assertNotIn("usedSaveBindMount", core + runner)
