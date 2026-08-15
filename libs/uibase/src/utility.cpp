@@ -921,17 +921,54 @@ QString decodeTextData(const QByteArray& fileData, QString* encoding, bool* hadB
   }
 
   // check reverse conversion
-  if (hasEmbeddedNulls || encoder.encode(text) != fileData) {
-    log::debug("conversion failed assuming local encoding");
-    auto codecSearch = QStringConverter::encodingForData(fileData);
-    if (codecSearch.has_value()) {
-      codec   = codecSearch.value();
-      decoder = QStringDecoder(codec, QStringConverter::Flag::ConvertInitialBom);
+  if (hasEmbeddedNulls || encoder.encode(text) != fileData || encoder.hasError()) {
+    if (fileData.startsWith(QByteArray::fromHex("0000feff"))) {
+      codec = QStringConverter::Encoding::Utf32BE;
+    } else if (fileData.startsWith(QByteArray::fromHex("fffe0000"))) {
+      codec = QStringConverter::Encoding::Utf32LE;
+    } else if (fileData.startsWith(QByteArray::fromHex("feff"))) {
+      codec = QStringConverter::Encoding::Utf16BE;
+    } else if (fileData.startsWith(QByteArray::fromHex("fffe"))) {
+      codec = QStringConverter::Encoding::Utf16LE;
+    } else if (fileData.startsWith(QByteArray::fromHex("efbbbf"))) {
+      codec = QStringConverter::Encoding::Utf8;
+    } else if (hasEmbeddedNulls) {
+      qsizetype evenNulls = 0;
+      qsizetype oddNulls  = 0;
+      for (qsizetype i = 0; i < fileData.size(); ++i) {
+        if (fileData.at(i) == '\0') {
+          (i % 2 == 0 ? evenNulls : oddNulls)++;
+        }
+      }
+      codec = oddNulls >= evenNulls ? QStringConverter::Encoding::Utf16LE
+                                    : QStringConverter::Encoding::Utf16BE;
     } else {
-      decoder = QStringDecoder(hasEmbeddedNulls ? QStringConverter::Encoding::Utf16
-                                                : QStringConverter::Encoding::System);
+      codec = QStringConverter::Encoding::System;
+      decoder = QStringDecoder(codec, QStringConverter::Flag::ConvertInitialBom);
+      text = decoder.decode(fileData);
+      QStringEncoder fallbackEncoder(codec);
+      if (fallbackEncoder.encode(text) != fileData || fallbackEncoder.hasError()) {
+        codec = QStringConverter::Encoding::Latin1;
+      }
     }
+    decoder = QStringDecoder(codec, QStringConverter::Flag::ConvertInitialBom);
     text = decoder.decode(fileData);
+
+    QString validationText = text;
+    const bool validationBOM =
+        !validationText.isEmpty() && validationText.startsWith(QChar::ByteOrderMark);
+    if (validationBOM) {
+      validationText.remove(0, 1);
+    }
+    QByteArray roundTrip;
+    if (decoder.hasError() ||
+        !encodeTextData(validationText, QStringConverter::nameForEncoding(codec),
+                        validationBOM, roundTrip) ||
+        roundTrip != fileData) {
+      codec   = QStringConverter::Encoding::Latin1;
+      decoder = QStringDecoder(codec, QStringConverter::Flag::ConvertInitialBom);
+      text    = decoder.decode(fileData);
+    }
   }
 
   if (encoding != nullptr) {
@@ -949,6 +986,42 @@ QString decodeTextData(const QByteArray& fileData, QString* encoding, bool* hadB
   }
 
   return text;
+}
+
+bool encodeTextData(const QString& text, const QString& encoding, bool writeBOM,
+                    QByteArray& encoded, QString* error)
+{
+  encoded.clear();
+  if (error != nullptr) {
+    error->clear();
+  }
+
+  const auto codec = QStringConverter::encodingForName(encoding.toUtf8());
+  if (!codec.has_value()) {
+    if (error != nullptr) {
+      *error = QObject::tr("Unknown text encoding '%1'.").arg(encoding);
+    }
+    return false;
+  }
+
+  QStringConverter::Flags flags = QStringEncoder::Flag::Default;
+  if (writeBOM) {
+    flags |= QStringConverter::Flag::WriteBom;
+  }
+  QStringEncoder encoder(*codec, flags);
+  encoded = encoder.encode(text);
+  char trailing[16];
+  const auto finalized = encoder.finalize(trailing, sizeof(trailing));
+  if (finalized.error != QStringConverter::FinalizeResultError::NoError ||
+      encoder.hasError()) {
+    encoded.clear();
+    if (error != nullptr) {
+      *error = QObject::tr("The text cannot be represented as %1.").arg(encoding);
+    }
+    return false;
+  }
+  encoded.append(trailing, finalized.next - trailing);
+  return true;
 }
 
 void removeOldFiles(const QString& path, const QString& pattern, int numToKeep,

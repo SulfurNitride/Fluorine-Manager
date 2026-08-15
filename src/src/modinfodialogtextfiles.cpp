@@ -3,6 +3,7 @@
 #include "settings.h"
 #include "ui_modinfodialog.h"
 #include <QMessageBox>
+#include <QSignalBlocker>
 
 class FileListModel : public QAbstractItemModel
 {
@@ -141,7 +142,14 @@ bool GenericFilesTab::canClose()
   }
 
   if (res == QMessageBox::Yes) {
-    m_editor->save();
+    if (!m_editor->save()) {
+      QMessageBox::critical(
+          parentWidget(), QObject::tr("Save failed"),
+          QObject::tr("Could not save \"%1\". The original file was left "
+                      "unchanged.")
+              .arg(m_editor->filename()));
+      return false;
+    }
   }
 
   return true;
@@ -177,23 +185,35 @@ void GenericFilesTab::onSelection(const QModelIndex& current,
                                   const QModelIndex& previous)
 {
   if (!canClose()) {
-    m_list->selectionModel()->select(previous, QItemSelectionModel::Current);
+    QSignalBlocker blocker(m_list->selectionModel());
+    m_list->selectionModel()->setCurrentIndex(previous,
+                                               QItemSelectionModel::ClearAndSelect);
     return;
   }
 
-  select(current);
+  if (!select(current)) {
+    QSignalBlocker blocker(m_list->selectionModel());
+    m_list->selectionModel()->setCurrentIndex(previous,
+                                               QItemSelectionModel::ClearAndSelect);
+  }
 }
 
-void GenericFilesTab::select(const QModelIndex& index)
+bool GenericFilesTab::select(const QModelIndex& index)
 {
   if (!index.isValid()) {
     m_editor->clear();
     m_editor->setEnabled(false);
-    return;
+    return true;
   }
 
   m_editor->setEnabled(true);
-  m_editor->load(m_model->fullPath(m_filter.mapToSource(index)));
+  const QString path = m_model->fullPath(m_filter.mapToSource(index));
+  if (!m_editor->load(path)) {
+    QMessageBox::critical(parentWidget(), QObject::tr("Open failed"),
+                          QObject::tr("Could not read \"%1\".").arg(path));
+    return false;
+  }
+  return true;
 }
 
 TextFilesTab::TextFilesTab(ModInfoDialogTabContext cx)

@@ -292,6 +292,10 @@ QDLLEXPORT QString readFileText(const QString& fileName, QString* encoding = nul
 QDLLEXPORT QString decodeTextData(const QByteArray& fileData,
                                   QString* encoding = nullptr, bool* hadBOM = nullptr);
 
+QDLLEXPORT bool encodeTextData(const QString& text, const QString& encoding,
+                               bool writeBOM, QByteArray& encoded,
+                               QString* error = nullptr);
+
 QDLLEXPORT void removeOldFiles(const QString& path, const QString& pattern,
                                int numToKeep, QDir::SortFlags sorting = QDir::Time);
 

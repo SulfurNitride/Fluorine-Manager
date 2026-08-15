@@ -22,6 +22,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 #include <uibase/finddialog.h>
 #include <uibase/log.h>
 #include <uibase/report.h>
+#include <uibase/transactionalwritefile.h>
 #include "ui_textviewer.h"
 #include <uibase/utility.h>
 #include <QAction>
@@ -35,6 +36,82 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 
 namespace MOBase
 {
+
+namespace
+{
+
+bool trySaveEditor(QTextEdit* editor)
+{
+  const QString path     = editor->documentTitle();
+  const QString encoding = editor->property("mo2TextEncoding").toString();
+  const bool needsBOM    = editor->property("mo2TextNeedsBOM").toBool();
+  QByteArray contents;
+  QString encodingError;
+  if (!encodeTextData(editor->toPlainText().replace('\n', "\r\n"), encoding,
+                      needsBOM, contents, &encodingError)) {
+    reportError(QObject::tr("failed to encode %1: %2").arg(path, encodingError));
+    return false;
+  }
+
+  TransactionalWriteFile transaction(path);
+  QByteArray original;
+  bool present = false;
+  if (!transaction.readOriginal(original, present)) {
+    reportError(QObject::tr("failed to write to %1: %2")
+                    .arg(path, transaction.errorString()));
+    return false;
+  }
+
+  QFileDevice::Permissions originalPermissions;
+  if (present && !transaction.readPermissions(originalPermissions)) {
+    reportError(QObject::tr("failed to read permissions for %1: %2")
+                    .arg(path, transaction.errorString()));
+    return false;
+  }
+
+  QFileInfo fileInfo(path);
+  if (present && !fileInfo.isWritable()) {
+    const QMessageBox::StandardButton buttonPressed =
+        MOBase::TaskDialog(qApp->activeModalWidget(),
+                           QObject::tr("INI file is read-only"))
+            .main(QObject::tr("INI file is read-only"))
+            .content(QObject::tr("Mod Organizer is attempting to write to \"%1\" "
+                                 "which is currently set to read-only.")
+                         .arg(fileInfo.fileName()))
+            .icon(QMessageBox::Warning)
+            .button({QObject::tr("Clear the read-only flag"), QMessageBox::Yes})
+            .button({QObject::tr("Allow the write once"),
+                     QObject::tr("The file will be set to read-only again."),
+                     QMessageBox::Ignore})
+            .button({QObject::tr("Skip this file"), QMessageBox::No})
+            .remember("clearReadOnly", fileInfo.fileName())
+            .exec();
+
+    if (!(buttonPressed & (QMessageBox::Yes | QMessageBox::Ignore))) {
+      return false;
+    }
+    const QFileDevice::Permissions publishedPermissions =
+        buttonPressed == QMessageBox::Yes
+            ? originalPermissions | QFileDevice::WriteUser | QFileDevice::WriteOwner
+            : originalPermissions;
+    if (!transaction.setPermissions(publishedPermissions)) {
+      reportError(QObject::tr("failed to prepare permissions for %1: %2")
+                      .arg(path, transaction.errorString()));
+      return false;
+    }
+  }
+
+  if (!transaction.replaceWith(contents)) {
+    reportError(QObject::tr("failed to write to %1: %2")
+                    .arg(path, transaction.errorString()));
+    return false;
+  }
+
+  editor->document()->setModified(false);
+  return true;
+}
+
+}  // namespace
 
 TextViewer::TextViewer(const QString& title, QWidget* parent)
     : QDialog(parent), ui(new Ui::TextViewer), m_FindDialog(nullptr)
@@ -53,21 +130,24 @@ TextViewer::~TextViewer()
 
 void TextViewer::closeEvent(QCloseEvent* event)
 {
-  if (!m_Modified.empty()) {
-    for (std::set<QTextEdit*>::iterator iter = m_Modified.begin();
-         iter != m_Modified.end(); ++iter) {
-      QMessageBox::StandardButton res = QMessageBox::question(
-          this, tr("Save changes?"),
-          tr("Do you want to save changes to %1?").arg((*iter)->documentTitle()),
-          QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel);
-      if (res == QMessageBox::Yes) {
-        saveFile(*iter);
-      } else if (res == QMessageBox::Cancel) {
+  while (!m_Modified.empty()) {
+    QTextEdit* editor = *m_Modified.begin();
+    QMessageBox::StandardButton res = QMessageBox::question(
+        this, tr("Save changes?"),
+        tr("Do you want to save changes to %1?").arg(editor->documentTitle()),
+        QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel);
+    if (res == QMessageBox::Yes) {
+      if (!trySaveEditor(editor)) {
         event->ignore();
-        break;
+        return;
       }
+    } else if (res == QMessageBox::Cancel) {
+      event->ignore();
+      return;
     }
+    m_Modified.erase(editor);
   }
+  event->accept();
 }
 
 void TextViewer::find()
@@ -162,56 +242,16 @@ void TextViewer::setDescription(const QString& description)
 
 void TextViewer::saveFile(const QTextEdit* editor)
 {
-  bool write                                = true;
-  QMessageBox::StandardButton buttonPressed = QMessageBox::Ignore;
-  QFile file(editor->documentTitle());
-  if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-    write = false;
-    QFileInfo fileInfo(file.fileName());
-    buttonPressed =
-        MOBase::TaskDialog(qApp->activeModalWidget(),
-                           QObject::tr("INI file is read-only"))
-            .main(QObject::tr("INI file is read-only"))
-            .content(QObject::tr("Mod Organizer is attempting to write to \"%1\" which "
-                                 "is currently set to read-only.")
-                         .arg(fileInfo.fileName()))
-            .icon(QMessageBox::Warning)
-            .button({QObject::tr("Clear the read-only flag"), QMessageBox::Yes})
-            .button({QObject::tr("Allow the write once"),
-                     QObject::tr("The file will be set to read-only again."),
-                     QMessageBox::Ignore})
-            .button({QObject::tr("Skip this file"), QMessageBox::No})
-            .remember("clearReadOnly", fileInfo.fileName())
-            .exec();
-
-    if (buttonPressed & (QMessageBox::Yes | QMessageBox::Ignore)) {
-      file.setPermissions(file.permissions() | QFile::WriteUser);
-    }
-
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-      reportError(tr("failed to write to %1").arg(editor->documentTitle()));
-    } else {
-      write = true;
-    }
-  }
-
-  if (write) {
-    file.write(editor->toPlainText().toUtf8().replace('\n', "\r\n"));
-    file.close();
-  }
-
-  if (buttonPressed == QMessageBox::Ignore) {
-    file.setPermissions(file.permissions() & ~(QFile::WriteUser));
-  }
+  trySaveEditor(const_cast<QTextEdit*>(editor));
 }
 
 void TextViewer::saveFile()
 {
   QWidget* currentPage = m_EditorTabs->currentWidget();
   QTextEdit* editor    = currentPage->findChild<QTextEdit*>("editorView");
-  saveFile(editor);
-
-  m_Modified.erase(editor);
+  if (trySaveEditor(editor)) {
+    m_Modified.erase(editor);
+  }
 }
 
 void TextViewer::modified()
@@ -229,6 +269,13 @@ void TextViewer::addFile(const QString& fileName, bool writable)
     throw Exception(tr("file not found: %1").arg(fileName));
   }
   QByteArray temp = file.readAll();
+  if (file.error() != QFileDevice::NoError) {
+    throw Exception(tr("failed to read: %1").arg(fileName));
+  }
+
+  QString encoding;
+  bool needsBOM = false;
+  const QString text = decodeTextData(temp, &encoding, &needsBOM);
 
   QWidget* page           = new QWidget();
   QVBoxLayout* layout     = new QVBoxLayout(page);
@@ -241,10 +288,12 @@ void TextViewer::addFile(const QString& fileName, bool writable)
   }
   editor->setDocument(document);
   editor->setAcceptRichText(false);
-  editor->setPlainText(QString(temp));
+  editor->setPlainText(text);
   editor->setLineWrapMode(QTextEdit::NoWrap);
   editor->setObjectName("editorView");
   editor->setDocumentTitle(fileName);
+  editor->setProperty("mo2TextEncoding", encoding);
+  editor->setProperty("mo2TextNeedsBOM", needsBOM);
   editor->installEventFilter(this);
   editor->setReadOnly(!writable);
 
@@ -270,7 +319,14 @@ void TextViewer::addFile(const QString& fileName, bool writable)
     QPushButton* saveBtn = new QPushButton(tr("Save"), page);
     layout->addWidget(saveBtn);
     connect(saveBtn, SIGNAL(clicked()), this, SLOT(saveFile()));
-    connect(editor, SIGNAL(textChanged()), this, SLOT(modified()));
+    connect(document, &QTextDocument::modificationChanged, this,
+            [this, editor](bool changed) {
+              if (changed) {
+                m_Modified.insert(editor);
+              } else {
+                m_Modified.erase(editor);
+              }
+            });
   }
   page->setLayout(layout);
   m_EditorTabs->addTab(page, QFileInfo(fileName).fileName());

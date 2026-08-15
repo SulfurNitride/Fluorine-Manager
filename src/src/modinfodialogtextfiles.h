@@ -38,7 +38,7 @@ protected:
 
 private:
   void onSelection(const QModelIndex& current, const QModelIndex& previous);
-  void select(const QModelIndex& index);
+  bool select(const QModelIndex& index);
 };
 
 class TextFilesTab : public GenericFilesTab

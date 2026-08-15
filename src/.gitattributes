@@ -1,0 +1,4 @@
+src/texteditor.cpp whitespace=cr-at-eol
+src/texteditor.h whitespace=cr-at-eol
+src/modinfodialogtextfiles.cpp whitespace=cr-at-eol
+src/modinfodialogtextfiles.h whitespace=cr-at-eol

@@ -188,6 +188,46 @@ class AuthoritativeWriteSurfaceTests(unittest.TestCase):
         self.assertIn("if (!const_cast<GameGamebryo*>(gamebryo)->ensureIniFilesExist",
                       invalidation)
 
+    def test_editable_text_surfaces_publish_complete_encoded_generations(self):
+        editor = (ROOT / "src/src/texteditor.cpp").read_text(encoding="utf-8")
+        save = editor[editor.index("bool TextEditor::save()"):
+                      editor.index("const QString& TextEditor::filename")]
+        self.assertIn("encodeTextData", save)
+        self.assertIn("TransactionalWriteFile", save)
+        self.assertIn("replaceWith", save)
+        self.assertNotIn("resize(0)", save)
+        self.assertNotIn("QIODevice::WriteOnly", save)
+        self.assertLess(save.index("replaceWith"),
+                        save.index("document()->setModified(false)"))
+
+        generic = (ROOT / "src/src/modinfodialogtextfiles.cpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("if (!m_editor->save())", generic)
+        self.assertIn("if (!m_editor->load(path))", generic)
+
+        viewer = (ROOT / "libs/uibase/src/textviewer.cpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("encodeTextData", viewer)
+        self.assertIn("TransactionalWriteFile transaction(path)", viewer)
+        self.assertIn("if (!trySaveEditor(editor))", viewer)
+        self.assertNotIn("QIODevice::Truncate", viewer)
+        self.assertIn("mo2TextEncoding", viewer)
+        self.assertIn("modificationChanged", viewer)
+        self.assertEqual(
+            hashlib.sha256(
+                (ROOT / "libs/uibase/include/uibase/textviewer.h").read_bytes()
+            ).hexdigest(),
+            "17737d2222ecff862f5dbfd78af8ff0261557e70d18843217ce4ae7e60deca4a",
+        )
+
+        utility = (ROOT / "libs/uibase/src/utility.cpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("codec = QStringConverter::Encoding::Latin1", utility)
+        self.assertIn("bool encodeTextData", utility)
+
 
 if __name__ == "__main__":
     unittest.main()

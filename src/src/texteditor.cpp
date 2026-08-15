@@ -1,7 +1,20 @@
 #include "texteditor.h"
-#include "utility.h"
+#include <uibase/utility.h>
+#include <uibase/transactionalwritefile.h>
+
+#include <QAction>
+#include <QFile>
+#include <QFontDatabase>
+#include <QHBoxLayout>
+#include <QMessageBox>
+#include <QPainter>
+#include <QScopedValueRollback>
 #include <QSplitter>
-#include <log.h>
+#include <QStyle>
+#include <QStyleOption>
+#include <QToolButton>
+#include <QVBoxLayout>
+#include <uibase/log.h>
 
 using namespace MOBase;
 
@@ -74,22 +87,28 @@ void TextEditor::clear()
 
 bool TextEditor::load(const QString& filename)
 {
-  clear();
-
-  QScopedValueRollback loading(m_loading, true);
-
-  m_filename = filename;
-
-  const QString s = MOBase::readFileText(filename, &m_encoding, &m_needsBOM);
-
-  setPlainText(s);
-  document()->setModified(false);
-
-  if (s.isEmpty()) {
-    // the modificationChanged even is not fired by the setModified() call
-    // above when the text being set is empty
-    onModified(false);
+  QFile input(filename);
+  if (!input.open(QIODevice::ReadOnly)) {
+    return false;
   }
+  const QByteArray bytes = input.readAll();
+  if (input.error() != QFileDevice::NoError) {
+    return false;
+  }
+
+  QString encoding;
+  bool needsBOM = false;
+  const QString text = MOBase::decodeTextData(bytes, &encoding, &needsBOM);
+
+  {
+    QScopedValueRollback loading(m_loading, true);
+    m_filename = filename;
+    m_encoding = encoding;
+    m_needsBOM = needsBOM;
+    setPlainText(text);
+    document()->setModified(false);
+  }
+  onModified(false);
 
   emit loaded(m_filename);
 
@@ -102,23 +121,20 @@ bool TextEditor::save()
     return false;
   }
 
-  QFile file(m_filename);
-  if (!file.open(QIODevice::WriteOnly)) {
+  QString data = toPlainText().replace("\n", "\r\n");
+  QByteArray encoded;
+  QString encodingError;
+  if (!MOBase::encodeTextData(data, m_encoding, m_needsBOM, encoded,
+                              &encodingError)) {
+    log::error("Could not encode text file '{}': {}", m_filename, encodingError);
     return false;
   }
-  file.resize(0);
 
-  auto codec = QStringConverter::encodingForName(m_encoding.toUtf8());
-  if (!codec.has_value())
+  TransactionalWriteFile file(m_filename);
+  if (!file.replaceWith(encoded)) {
+    log::error("Could not save text file '{}': {}", m_filename, file.errorString());
     return false;
-  QStringConverter::Flags flags = QStringEncoder::Flag::Default;
-  if (m_needsBOM)
-    flags |= QStringConverter::Flag::WriteBom;
-  QStringEncoder encoder(codec.value(), flags);
-
-  QString data = toPlainText().replace("\n", "\r\n");
-
-  file.write(encoder.encode(data));
+  }
   document()->setModified(false);
 
   return true;
@@ -481,7 +497,12 @@ TextEditorToolbar::TextEditorToolbar(TextEditor& editor)
   m_path->setReadOnly(true);
 
   QObject::connect(m_save, &QAction::triggered, [&] {
-    m_editor.save();
+    if (!m_editor.save()) {
+      QMessageBox::critical(&m_editor, QObject::tr("Save failed"),
+                            QObject::tr("Could not save \"%1\". The original file "
+                                        "was left unchanged.")
+                                .arg(m_editor.filename()));
+    }
   });
   QObject::connect(m_wordWrap, &QAction::triggered, [&] {
     m_editor.toggleWordWrap();

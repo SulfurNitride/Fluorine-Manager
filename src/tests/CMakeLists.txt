@@ -1258,6 +1258,31 @@ target_link_libraries(test_gamebryoiniseeder PRIVATE
 add_test(NAME test_gamebryoiniseeder COMMAND test_gamebryoiniseeder)
 set_tests_properties(test_gamebryoiniseeder PROPERTIES TIMEOUT 15)
 
+add_executable(test_texteditorsave EXCLUDE_FROM_ALL
+    test_texteditorsave.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/texteditor.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/texteditor.h
+)
+set_target_properties(test_texteditorsave PROPERTIES
+    AUTOMOC ON
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_texteditorsave PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_texteditorsave PRIVATE
+    Qt6::Core
+    Qt6::Widgets
+    mo2::uibase
+    GTest::gtest
+)
+add_test(NAME test_texteditorsave COMMAND test_texteditorsave)
+set_tests_properties(test_texteditorsave PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 15
+)
+
 add_executable(test_profilemodlistrename EXCLUDE_FROM_ALL
     test_profilemodlistrename.cpp
     ${CMAKE_SOURCE_DIR}/src/src/profilemodlistrename.cpp
@@ -1435,7 +1460,7 @@ add_custom_target(fluorine-tests
             test_instancegeneralsettings test_downloadmetadatapolicy
             test_downloadwritelifecycle test_nexuscachedirectory
             test_transactionalwritefile test_registry test_wineregistryfile
-            test_protondxvkconfig test_gamebryoiniseeder
+            test_protondxvkconfig test_gamebryoiniseeder test_texteditorsave
             test_profilemodlistrename test_profilerename
             test_morrowindpluginlistwriter test_winepluginlistsync
             test_winesavedeployment test_winesavetargetresolver)

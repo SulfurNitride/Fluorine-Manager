@@ -1,7 +1,9 @@
 #ifndef MO_TEXTEDITOR_H
 #define MO_TEXTEDITOR_H
 
+#include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QSyntaxHighlighter>
 
 class TextEditor;
 
