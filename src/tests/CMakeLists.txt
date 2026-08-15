@@ -79,6 +79,15 @@ add_test(
     COMMAND ${Python3_EXECUTABLE} -m unittest -v
             ${CMAKE_CURRENT_SOURCE_DIR}/test_profile_tweak_surface.py
 )
+add_test(
+    NAME test_pandora_previous_output_surface
+    COMMAND ${Python3_EXECUTABLE} -m unittest -v
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_pandora_previous_output_surface.py
+)
+set_tests_properties(test_pandora_previous_output_surface PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    TIMEOUT 10
+)
 set_tests_properties(test_profile_tweak_surface PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     TIMEOUT 10
@@ -1393,6 +1402,27 @@ target_link_libraries(test_profiletweakmerge PRIVATE
 add_test(NAME test_profiletweakmerge COMMAND test_profiletweakmerge)
 set_tests_properties(test_profiletweakmerge PROPERTIES TIMEOUT 10)
 
+add_executable(test_pandorapreviousoutput EXCLUDE_FROM_ALL
+    test_pandorapreviousoutput.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/pandorapreviousoutput.cpp
+)
+set_target_properties(test_pandorapreviousoutput PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_pandorapreviousoutput PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_pandorapreviousoutput PRIVATE
+    Qt6::Core
+    uibase
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_pandorapreviousoutput COMMAND test_pandorapreviousoutput)
+set_tests_properties(test_pandorapreviousoutput PROPERTIES TIMEOUT 10)
+
 add_executable(test_morrowindpluginlistwriter EXCLUDE_FROM_ALL
     test_morrowindpluginlistwriter.cpp
     ${CMAKE_SOURCE_DIR}/libs/game_bethesda/src/games/morrowind/morrowindpluginlistwriter.cpp
@@ -1553,7 +1583,7 @@ add_custom_target(fluorine-tests
             test_transactionalwritefile test_registry test_wineregistryfile
             test_protondxvkconfig test_gamebryoiniseeder test_texteditorsave
             test_profilemodlistrename test_profilerename test_instanceunregister
-            test_profiletweakmerge
+            test_profiletweakmerge test_pandorapreviousoutput
             test_morrowindpluginlistwriter test_winepluginlistsync
             test_winesavedeployment test_winesavetargetresolver
             test_prefixsymlinktransaction)

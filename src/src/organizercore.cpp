@@ -24,6 +24,7 @@
 #include "nexusinterface.h"
 #include "nxmaccessmanager.h"
 #include "nxmrequest.h"
+#include "pandorapreviousoutput.h"
 #include "plugincontainer.h"
 #include "previewdialog.h"
 #include "profile.h"
@@ -3401,40 +3402,24 @@ bool OrganizerCore::beforeRun(
                candidates.size());
 
     for (const QString& pandoraPrevOutput : candidates) {
-      QFileInfo info(pandoraPrevOutput);
-      if (info.exists() && info.isFile()) {
-        log::debug("Pandora fix: found PreviousOutput.txt at {}", pandoraPrevOutput);
-        QFile file(pandoraPrevOutput);
-        if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-          QStringList lines;
-          QTextStream in(&file);
-          while (!in.atEnd()) {
-            lines.append(in.readLine());
-          }
-          file.close();
-          log::debug("Pandora fix: read {} lines", lines.size());
-
-          for (QString& line : lines) {
-            int idx = line.indexOf("\\meshes\\", 0, Qt::CaseInsensitive);
-            if (idx >= 0) {
-              line = line.left(idx) + line.mid(idx).toLower();
-            }
-          }
-
-          if (file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
-            QTextStream out(&file);
-            for (const QString& line : lines) {
-              out << line << Qt::endl;
-            }
-            file.close();
-            log::debug("Pandora fix: wrote {} lines back", lines.size());
-          }
-        }
-        break;
-      } else {
+      const auto normalized = PandoraPreviousOutput::normalize(pandoraPrevOutput);
+      if (normalized.status == PandoraPreviousOutput::Status::Missing) {
         log::debug("Pandora fix: {} does not exist or is not a file",
                    pandoraPrevOutput);
+        continue;
       }
+      if (!normalized) {
+        log::error("Pandora fix: refusing launch because '{}' could not be "
+                   "normalized atomically: {}",
+                   pandoraPrevOutput, normalized.error);
+        return false;
+      }
+      log::debug("Pandora fix: {} PreviousOutput.txt at {}",
+                 normalized.status == PandoraPreviousOutput::Status::Updated
+                     ? "normalized"
+                     : "checked",
+                 pandoraPrevOutput);
+      break;
     }
   }
 

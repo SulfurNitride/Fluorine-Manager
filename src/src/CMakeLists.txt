@@ -81,6 +81,7 @@ list(APPEND ORGANIZER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/lootmanager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/multiprocessprotocol.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nexuscachedirectory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/pandorapreviousoutput.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nxmhandlerintegration.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nxmrequest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/prefixsetupdialog.cpp
