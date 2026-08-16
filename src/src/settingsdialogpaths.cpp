@@ -131,7 +131,7 @@ void PathsSettingsTab::on_browseBaseDirBtn_clicked()
 {
   QString temp = QFileDialog::getExistingDirectory(
       &dialog(), QObject::tr("Select base directory"), ui->baseDirEdit->text(),
-      {});
+      QFileDialog::ShowDirsOnly);
   if (!temp.isEmpty()) {
     ui->baseDirEdit->setText(temp);
   }
@@ -144,7 +144,7 @@ void PathsSettingsTab::on_browseDownloadDirBtn_clicked()
 
   QString temp = QFileDialog::getExistingDirectory(
       &dialog(), QObject::tr("Select download directory"), searchPath,
-      {});
+      QFileDialog::ShowDirsOnly);
   if (!temp.isEmpty()) {
     ui->downloadDirEdit->setText(temp);
   }
@@ -157,7 +157,7 @@ void PathsSettingsTab::on_browseModDirBtn_clicked()
 
   QString temp = QFileDialog::getExistingDirectory(
       &dialog(), QObject::tr("Select mod directory"), searchPath,
-      {});
+      QFileDialog::ShowDirsOnly);
   if (!temp.isEmpty()) {
     ui->modDirEdit->setText(temp);
   }
@@ -170,7 +170,7 @@ void PathsSettingsTab::on_browseCacheDirBtn_clicked()
 
   QString temp = QFileDialog::getExistingDirectory(
       &dialog(), QObject::tr("Select cache directory"), searchPath,
-      {});
+      QFileDialog::ShowDirsOnly);
   if (!temp.isEmpty()) {
     ui->cacheDirEdit->setText(temp);
   }
@@ -183,7 +183,7 @@ void PathsSettingsTab::on_browseProfilesDirBtn_clicked()
 
   QString temp = QFileDialog::getExistingDirectory(
       &dialog(), QObject::tr("Select profiles directory"), searchPath,
-      {});
+      QFileDialog::ShowDirsOnly);
   if (!temp.isEmpty()) {
     ui->profilesDirEdit->setText(temp);
   }
@@ -196,7 +196,7 @@ void PathsSettingsTab::on_browseOverwriteDirBtn_clicked()
 
   QString temp = QFileDialog::getExistingDirectory(
       &dialog(), QObject::tr("Select overwrite directory"), searchPath,
-      {});
+      QFileDialog::ShowDirsOnly);
   if (!temp.isEmpty()) {
     ui->overwriteDirEdit->setText(temp);
   }

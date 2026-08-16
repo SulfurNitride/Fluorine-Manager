@@ -2,6 +2,7 @@
 
 import configparser
 from pathlib import Path
+import re
 import unittest
 import xml.etree.ElementTree as ET
 
@@ -112,6 +113,37 @@ class PackagingMetadataTests(unittest.TestCase):
         self.assertIn("FLUORINE_ORIG_QT_QPA_PLATFORMTHEME", constructor)
         self.assertIn('qunsetenv("QT_QPA_PLATFORMTHEME")', constructor)
         self.assertIn('qputenv("QT_QPA_PLATFORMTHEME", original)', constructor)
+
+    def test_directory_choosers_request_the_native_dialog_contract(self):
+        direct_calls = []
+        for source_path in (SOURCE_ROOT / "src/src").glob("*.cpp"):
+            if source_path.name == "filedialogmemory.cpp":
+                continue
+
+            source = source_path.read_text(encoding="utf-8")
+            for match in re.finditer(
+                r"QFileDialog::getExistingDirectory\s*\((.*?)\);",
+                source,
+                flags=re.DOTALL,
+            ):
+                direct_calls.append((source_path, match.group(1)))
+
+        self.assertTrue(direct_calls)
+        for source_path, arguments in direct_calls:
+            self.assertIn(
+                "QFileDialog::ShowDirsOnly",
+                arguments,
+                f"{source_path} can fall back to Qt's widget directory dialog",
+            )
+
+        memory_header = (SOURCE_ROOT / "src/src/filedialogmemory.h").read_text(
+            encoding="utf-8"
+        )
+        self.assertRegex(
+            memory_header,
+            r"(?s)getExistingDirectory\(.*?QFileDialog::Options options\s*=\s*"
+            r"QFileDialog::ShowDirsOnly",
+        )
 
 
 if __name__ == "__main__":

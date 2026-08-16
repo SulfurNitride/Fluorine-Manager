@@ -317,7 +317,7 @@ void GamePage::select(IPluginGame* game, const QString& dir)
         const auto path = QFileDialog::getExistingDirectory(
             &m_dlg,
             QObject::tr("Find game installation for %1").arg(game->displayGameName()),
-            {}, {});
+            {}, QFileDialog::ShowDirsOnly);
 
         if (path.isEmpty()) {
           // cancelled
@@ -365,7 +365,8 @@ void GamePage::select(IPluginGame* game, const QString& dir)
 void GamePage::selectCustom()
 {
   const auto path = QFileDialog::getExistingDirectory(
-      &m_dlg, QObject::tr("Find game installation"), {}, {});
+      &m_dlg, QObject::tr("Find game installation"), {},
+      QFileDialog::ShowDirsOnly);
 
   if (path.isEmpty()) {
     // reselect the previous button
@@ -1103,7 +1104,8 @@ void PathsPage::onChanged()
 void PathsPage::browse(QLineEdit* e)
 {
   const auto s =
-      QFileDialog::getExistingDirectory(&m_dlg, {}, e->text(), {});
+      QFileDialog::getExistingDirectory(&m_dlg, {}, e->text(),
+                                        QFileDialog::ShowDirsOnly);
   if (s.isNull() || s.isEmpty()) {
     return;
   }

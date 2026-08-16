@@ -729,7 +729,8 @@ void ProtonSettingsTab::onDownloadSLR()
 void ProtonSettingsTab::onBrowsePrefixLocation()
 {
   const QString dir = QFileDialog::getExistingDirectory(
-      parentWidget(), tr("Select Prefix Location"), ui->prefixLocationEdit->text());
+      parentWidget(), tr("Select Prefix Location"), ui->prefixLocationEdit->text(),
+      QFileDialog::ShowDirsOnly);
   if (!dir.isEmpty()) {
     ui->prefixLocationEdit->setText(dir);
   }

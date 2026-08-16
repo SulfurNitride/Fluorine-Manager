@@ -1087,7 +1087,8 @@ void InstanceManagerDialog::openExistingPortable()
   // On Flatpak, the native file dialog goes through the XDG Desktop Portal,
   const QString dir = QFileDialog::getExistingDirectory(
       this, tr("Select portable instance folder"),
-      QStandardPaths::writableLocation(QStandardPaths::HomeLocation));
+      QStandardPaths::writableLocation(QStandardPaths::HomeLocation),
+      QFileDialog::ShowDirsOnly);
 
   if (dir.isEmpty()) {
     return;
