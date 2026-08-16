@@ -160,6 +160,10 @@ void FluorineUpdater::cancel()
   if (previous) {
     previous->deleteLater();
   }
+  // This manager is updater-private. Retiring its connection immediately
+  // avoids leaving the completed GitHub TLS socket in Qt's idle connection
+  // pool, where Qt 6.11 can warn when the peer closes it at the timeout.
+  m_net->clearConnectionCache();
 }
 
 QNetworkReply*
@@ -177,16 +181,18 @@ void FluorineUpdater::onReplyFinished(QNetworkReply* reply, Channel channel)
     return;
   }
 
-  m_reply.clear();
-
   const auto error        = reply->error();
   const QString errorText = reply->errorString();
-  const QByteArray raw    = error == QNetworkReply::NoError
-                                ? reply->readAll()
-                                : QByteArray();
+  const QByteArray raw = error == QNetworkReply::NoError ? reply->readAll()
+                                                          : QByteArray();
+
+  m_reply.clear();
   // Schedule retirement before notifying observers, and never touch the reply
   // after a terminal signal: a receiver may synchronously destroy this updater.
   reply->deleteLater();
+  // The updater owns its QNetworkAccessManager exclusively, so this cannot
+  // disrupt Nexus, download-manager, or plugin traffic.
+  m_net->clearConnectionCache();
 
   if (error != QNetworkReply::NoError) {
     MOBase::log::warn("update check failed ({}): {}",
