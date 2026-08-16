@@ -17,6 +17,7 @@
 #include <log.h>
 #include <report.h>
 
+#include <QByteArray>
 #include <QFile>
 #include <QFileInfo>
 #include <QString>
@@ -36,6 +37,26 @@ using namespace MOBase;
 int run(int argc, char* argv[]);
 int runApplication(int argc, char* argv[], const QStringList& arguments,
                    UnixTerminationBridge& termination);
+
+namespace
+{
+void selectNativeDialogPlatformTheme()
+{
+  constexpr auto PlatformTheme         = "QT_QPA_PLATFORMTHEME";
+  constexpr auto OriginalPlatformTheme =
+      "FLUORINE_ORIG_QT_QPA_PLATFORMTHEME";
+
+  // Not every supported package starts through the generated portable
+  // launcher. Select the portal before QApplication initializes so direct
+  // distro/package entry points use the desktop-native file chooser too. The
+  // MOApplication constructor restores the caller's value immediately after
+  // Qt has consumed it, keeping the override out of launched child processes.
+  if (!qEnvironmentVariableIsSet(OriginalPlatformTheme)) {
+    qputenv(OriginalPlatformTheme, qgetenv(PlatformTheme));
+  }
+  qputenv(PlatformTheme, QByteArrayLiteral("xdgdesktopportal"));
+}
+}
 
 int main(int argc, char* argv[])
 {
@@ -184,6 +205,7 @@ int runApplication(int argc, char* argv[], const QStringList& arguments,
   // must be after logging
   TimeThis tt("main() multiprocess");
 
+  selectNativeDialogPlatformTheme();
   MOApplication app(argc, argv);
 
   QTimer terminationRetry;

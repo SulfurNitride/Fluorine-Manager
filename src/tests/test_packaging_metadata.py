@@ -114,6 +114,19 @@ class PackagingMetadataTests(unittest.TestCase):
         self.assertIn('qunsetenv("QT_QPA_PLATFORMTHEME")', constructor)
         self.assertIn('qputenv("QT_QPA_PLATFORMTHEME", original)', constructor)
 
+        main = (SOURCE_ROOT / "src/src/main.cpp").read_text(encoding="utf-8")
+        runtime = main.rsplit("int runApplication(", 1)[1]
+        runtime_body = runtime.split("MOApplication app(argc, argv);", 1)[0]
+        self.assertIn("selectNativeDialogPlatformTheme();", runtime_body)
+        selector = main.split("void selectNativeDialogPlatformTheme()", 1)[1]
+        selector = selector.split("\n}", 1)[0]
+        self.assertIn('"FLUORINE_ORIG_QT_QPA_PLATFORMTHEME"', selector)
+        self.assertIn('qgetenv(PlatformTheme)', selector)
+        self.assertIn(
+            'qputenv(PlatformTheme, QByteArrayLiteral("xdgdesktopportal"));',
+            selector,
+        )
+
     def test_directory_choosers_request_the_native_dialog_contract(self):
         direct_calls = []
         for source_path in (SOURCE_ROOT / "src/src").glob("*.cpp"):

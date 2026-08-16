@@ -217,10 +217,10 @@ void configureQtWebEngineProcessPath()
 
 MOApplication::MOApplication(int& argc, char** argv) : QApplication(argc, argv)
 {
-  // The packaged launcher selects the exact-version XDG portal theme before
-  // QApplication is constructed so QFileDialog can use the desktop-native
-  // portal. Restore the caller's environment immediately afterward; launched
-  // games, xdg-open and helper processes must not inherit Fluorine's choice.
+  // The runtime entry point selects the XDG portal theme before QApplication
+  // is constructed so QFileDialog can use the desktop-native portal. Restore
+  // the caller's environment immediately afterward; launched games, xdg-open
+  // and helper processes must not inherit Fluorine's selection.
   constexpr auto OriginalPlatformTheme =
       "FLUORINE_ORIG_QT_QPA_PLATFORMTHEME";
   if (qEnvironmentVariableIsSet(OriginalPlatformTheme)) {
