@@ -3,8 +3,86 @@
 #include "filesorigin.h"
 #include "util.h"
 
+#include <deque>
+#include <limits>
+#include <mutex>
+#include <stdexcept>
+#include <unordered_map>
+
 namespace MOShared
 {
+namespace
+{
+class ArchiveNamePool
+{
+public:
+  uint32_t intern(std::wstring name)
+  {
+    if (name.empty()) {
+      return 0;
+    }
+
+    thread_local std::wstring recentName;
+    thread_local uint32_t recentID = 0;
+    if (recentID != 0 && recentName == name) {
+      return recentID;
+    }
+
+    std::scoped_lock lock(m_mutex);
+    const auto existing = m_ids.find(name);
+    if (existing != m_ids.end()) {
+      recentName = existing->first;
+      recentID   = existing->second;
+      return recentID;
+    }
+
+    if (m_names.size() >= std::numeric_limits<uint32_t>::max()) {
+      throw std::overflow_error("too many archive names");
+    }
+
+    const uint32_t id = static_cast<uint32_t>(m_names.size());
+    m_names.push_back(std::move(name));
+    m_ids.emplace(m_names.back(), id);
+    recentName = m_names.back();
+    recentID   = id;
+    return id;
+  }
+
+  const std::wstring& name(uint32_t id) const
+  {
+    std::scoped_lock lock(m_mutex);
+    if (id >= m_names.size()) {
+      return m_names.front();
+    }
+    // std::deque keeps references to existing elements stable when new names
+    // are appended, and archive names are never modified or removed.
+    return m_names[id];
+  }
+
+private:
+  mutable std::mutex m_mutex;
+  std::deque<std::wstring> m_names{std::wstring{}};
+  std::unordered_map<std::wstring, uint32_t> m_ids;
+};
+
+ArchiveNamePool& archiveNames()
+{
+  // The directory model can be destroyed during static teardown. Keeping the
+  // tiny intern table process-lifetime avoids cross-translation-unit teardown
+  // ordering hazards.
+  static ArchiveNamePool* const pool = new ArchiveNamePool;
+  return *pool;
+}
+}
+
+DataArchiveOrigin::DataArchiveOrigin(std::wstring name, int order)
+    : nameID_(archiveNames().intern(std::move(name))), order_(order)
+{}
+
+const std::wstring& DataArchiveOrigin::name() const
+{
+  return archiveNames().name(nameID_);
+}
 
 FileEntry::FileEntry()
     : m_Index(InvalidFileIndex),  m_Origin(-1), m_Parent(nullptr),

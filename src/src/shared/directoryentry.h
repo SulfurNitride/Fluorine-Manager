@@ -74,9 +74,9 @@ public:
 
   bool isTopLevel() const { return m_TopLevel; }
 
-  bool isEmpty() const { return m_Files.empty() && m_SubDirectories.empty(); }
+  bool isEmpty() const { return m_FilesLookup.empty() && m_SubDirectories.empty(); }
 
-  bool hasFiles() const { return !m_Files.empty(); }
+  bool hasFiles() const { return !m_FilesLookup.empty(); }
 
   const DirectoryEntry* getParent() const { return m_Parent; }
 
@@ -132,8 +132,8 @@ public:
   template <class F>
   void forEachFile(F&& f) const
   {
-    for (auto&& p : m_Files) {
-      if (auto file = m_FileRegister->getFile(p.second)) {
+    for (const FileIndex index : sortedFileIndices()) {
+      if (auto file = m_FileRegister->getFile(index)) {
         if (!f(*file)) {
           break;
         }
@@ -144,8 +144,8 @@ public:
   template <class F>
   void forEachFileIndex(F&& f) const
   {
-    for (auto&& p : m_Files) {
-      if (!f(p.second)) {
+    for (const FileIndex index : sortedFileIndices()) {
+      if (!f(index)) {
         break;
       }
     }
@@ -206,7 +206,6 @@ public:
   void dump(const std::wstring& file) const;
 
 private:
-  using FilesMap             = std::map<std::wstring, FileIndex>;
   using FilesLookup          = std::unordered_map<DirectoryEntryFileKey, FileIndex>;
   using SubDirectoriesLookup = std::unordered_map<std::wstring, DirectoryEntry*>;
 
@@ -214,7 +213,6 @@ private:
   boost::shared_ptr<OriginConnection> m_OriginConnection;
 
   std::wstring m_Name;
-  FilesMap m_Files;
   FilesLookup m_FilesLookup;
   SubDirectories m_SubDirectories;
   SubDirectoriesLookup m_SubDirectoriesLookup;
@@ -262,6 +260,7 @@ private:
   void addFileToList(std::wstring fileNameLower, FileIndex index);
   void removeFileFromList(FileIndex index);
   void removeFilesFromList(const std::set<FileIndex>& indices);
+  std::vector<FileIndex> sortedFileIndices() const;
 
   struct Context;
   static void onDirectoryStart(Context* cx, std::wstring_view path);

@@ -1,5 +1,6 @@
 #include "fuseconnector.h"
 
+#include "memorydiagnostics.h"
 #include "settings.h"
 #include "sleepinhibitor.h"
 #include "vfs/vfscatalog.h"
@@ -510,6 +511,7 @@ bool FuseConnector::mount(
     const QString& data_dir_name,
     const std::vector<std::pair<std::string, std::string>>& mods)
 {
+  MemoryDiagnostics::snapshot("vfs.mount.begin");
   if (m_mounted) {
     unmount();
   }
@@ -629,7 +631,9 @@ bool FuseConnector::mount(
                      static_cast<unsigned long long>(p.bytes_hashed),
                      p.current_root.c_str());
       });
+  MemoryDiagnostics::snapshot("vfs.mount.catalog_built");
   auto tree = std::make_shared<VfsTree>(std::move(catalogResult.tree));
+  MemoryDiagnostics::snapshot("vfs.mount.tree_owned");
   if (catalogProgress) catalogProgress->close();
   std::fprintf(stderr,
                "[VFS] [catalog] complete scanned=%llu hashed=%llu bytes=%llu "
@@ -688,6 +692,7 @@ bool FuseConnector::mount(
                static_cast<unsigned long long>(finalProgress.commit_ms),
                digestPrefix(catalogResult.profile_root).c_str());
   m_baseFileCache = catalog.loadBaseSnapshot(m_dataDirPath);
+  MemoryDiagnostics::snapshot("vfs.mount.base_snapshot_loaded");
   m_cachedDataDirPath = m_dataDirPath;
 
   // Inject file-level data-dir mappings (e.g. plugins.txt, loadorder.txt).
@@ -703,6 +708,7 @@ bool FuseConnector::mount(
   const auto publicationStart = std::chrono::steady_clock::now();
   const VfsIndexPublicationResult publication =
       publishIndex(*tree, catalogResult);
+  MemoryDiagnostics::snapshot("vfs.mount.index_published");
   const auto publicationMs =
       std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now() - publicationStart)
@@ -804,6 +810,7 @@ bool FuseConnector::mount(
   m_context->auto_create_dirs      = m_autoCreateDirs;
   const auto indexStart = std::chrono::steady_clock::now();
   const std::size_t prewarmed = mo2PrewarmLookupIndex(m_context.get());
+  MemoryDiagnostics::snapshot("vfs.mount.runtime_index_built");
   const auto indexMs = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now() - indexStart).count();
   std::fprintf(stderr,
@@ -872,6 +879,7 @@ bool FuseConnector::mount(
   });
 
   m_mounted = true;
+  MemoryDiagnostics::snapshot("vfs.mount.complete");
   setFuseMountPointForCrashCleanup(m_mountPoint.c_str());
   if (m_sleepInhibitor != nullptr) {
     const QString reason =
@@ -890,6 +898,7 @@ bool FuseConnector::mount(
 
 void FuseConnector::unmount()
 {
+  MemoryDiagnostics::snapshot("vfs.unmount.begin");
   const auto clearBaseSnapshot = [this]() {
     // The base snapshot is only a mount-time compatibility cache. It is not
     // consulted by the live rebuild path, so retaining hundreds of thousands
@@ -1053,8 +1062,16 @@ void FuseConnector::unmount()
     m_backingFd = -1;
   }
 
+  MemoryDiagnostics::snapshot("vfs.unmount.before_context_release");
   m_context.reset();
   clearBaseSnapshot();
+  MemoryDiagnostics::snapshot("vfs.unmount.context_released");
+  const bool releasedPages = MemoryDiagnostics::reclaimAllocatorPages();
+  if (MemoryDiagnostics::enabled()) {
+    std::fprintf(stderr, "[MEM] allocator_reclaim released=%d\n",
+                 releasedPages ? 1 : 0);
+  }
+  MemoryDiagnostics::snapshot("vfs.unmount.allocator_reclaimed");
   m_mounted = false;
   setFuseMountPointForCrashCleanup(nullptr);
   if (m_sleepInhibitor != nullptr) {
@@ -1372,8 +1389,7 @@ void FuseConnector::rebuild(
   std::shared_ptr<VfsRuntimeIndex> newRuntimeIndex;
   {
     std::unique_lock const lock(m_context->inode_mutex);
-    newRuntimeIndex = VfsRuntimeIndex::build(
-        *newTree, *m_context->inodes, m_context->uid, m_context->gid);
+    newRuntimeIndex = VfsRuntimeIndex::build(*newTree, *m_context->inodes);
   }
   {
     std::unique_lock const treeLock(m_context->tree_mutex);
@@ -1879,8 +1895,7 @@ void FuseConnector::flushStagingLive()
   std::shared_ptr<VfsRuntimeIndex> newRuntimeIndex;
   {
     std::unique_lock const lock(m_context->inode_mutex);
-    newRuntimeIndex = VfsRuntimeIndex::build(
-        *newTree, *m_context->inodes, m_context->uid, m_context->gid);
+    newRuntimeIndex = VfsRuntimeIndex::build(*newTree, *m_context->inodes);
   }
   {
     std::unique_lock const treeLock(m_context->tree_mutex);

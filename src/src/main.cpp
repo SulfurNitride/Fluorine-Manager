@@ -3,6 +3,7 @@
 #include "fluorinepaths.h"
 #include "instancemanager.h"
 #include "loglist.h"
+#include "memorydiagnostics.h"
 #include "moapplication.h"
 #include "multiprocess.h"
 #include "nxmhandler_linux.h"
@@ -165,11 +166,13 @@ int run(int argc, char* argv[])
   fluorineMigrateDataDir();
 
   initLogging();
+  MemoryDiagnostics::snapshot("startup.logging_ready");
 
   // must be after logging
   TimeThis tt("main() multiprocess");
 
   MOApplication app(argc, argv);
+  MemoryDiagnostics::snapshot("startup.application_constructed");
 
   if (auto r = cl.runPostApplication(app)) {
     return *r;
@@ -222,6 +225,7 @@ int run(int argc, char* argv[])
       // set up plugins, OrganizerCore, etc.
       {
         const auto r = app.setup(multiProcess, pick);
+        MemoryDiagnostics::snapshot("startup.application_setup_complete");
         pick         = false;
 
         if (r == RestartExitCode || r == ReselectExitCode) {

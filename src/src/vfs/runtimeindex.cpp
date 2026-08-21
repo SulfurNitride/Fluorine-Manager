@@ -1,6 +1,5 @@
 #include "runtimeindex.h"
 
-#include <cstring>
 #include <functional>
 #include <mutex>
 #include <utility>
@@ -12,12 +11,6 @@ std::string joinPath(const std::string& base, const std::string& name)
   return base.empty() ? name : base + "/" + name;
 }
 
-mode_t writableFileMode(mode_t sourceMode)
-{
-  mode_t mode = sourceMode != 0 ? (sourceMode & 07777)
-                                : static_cast<mode_t>(0644);
-  return mode | S_IRUSR | S_IWUSR;
-}
 }  // namespace
 
 std::size_t VfsRuntimeIndex::LookupKeyHash::operator()(
@@ -30,64 +23,40 @@ std::size_t VfsRuntimeIndex::LookupKeyHash::operator()(
 }
 
 VfsIndexedNode VfsRuntimeIndex::makeDirectoryNode(
-    uint64_t ino, std::string virtualPath, uid_t uid, gid_t gid)
+    uint64_t ino, std::string virtualPath)
 {
   VfsIndexedNode node;
   node.ino = ino;
   node.virtual_path = std::move(virtualPath);
   node.is_directory = true;
-  std::memset(&node.attr, 0, sizeof(node.attr));
-  node.attr.st_ino = ino;
-  node.attr.st_mode = S_IFDIR | 0755;
-  node.attr.st_nlink = 2;
-  node.attr.st_uid = uid;
-  node.attr.st_gid = gid;
-  constexpr time_t kVirtualDirTime = 946684800;
-  node.attr.st_mtim.tv_sec = kVirtualDirTime;
-  node.attr.st_atim.tv_sec = kVirtualDirTime;
-  node.attr.st_ctim.tv_sec = kVirtualDirTime;
   return node;
 }
 
 VfsIndexedNode VfsRuntimeIndex::makeFileNode(
     uint64_t ino, std::string virtualPath, std::string realPath,
-    std::string origin, bool isBacking, uint64_t size,
-    std::chrono::system_clock::time_point mtime, mode_t cachedMode,
-    uid_t uid, gid_t gid)
+    bool isBacking, uint64_t size,
+    std::chrono::system_clock::time_point mtime, mode_t cachedMode)
 {
   VfsIndexedNode node;
   node.ino = ino;
   node.virtual_path = std::move(virtualPath);
   node.real_path = std::move(realPath);
-  node.origin = std::move(origin);
   node.is_backing = isBacking;
   node.size = size;
   node.mtime = mtime;
   node.cached_mode = cachedMode;
-  std::memset(&node.attr, 0, sizeof(node.attr));
-  node.attr.st_ino = ino;
-  node.attr.st_mode = S_IFREG | writableFileMode(cachedMode);
-  node.attr.st_nlink = 1;
-  node.attr.st_uid = uid;
-  node.attr.st_gid = gid;
-  node.attr.st_size = static_cast<off_t>(size);
-  const auto secs = std::chrono::duration_cast<std::chrono::seconds>(
-      mtime.time_since_epoch());
-  node.attr.st_mtim.tv_sec = secs.count();
-  node.attr.st_ctim.tv_sec = secs.count();
-  node.attr.st_atim.tv_sec = secs.count();
   return node;
 }
 
 std::shared_ptr<VfsRuntimeIndex> VfsRuntimeIndex::build(
-    const VfsTree& tree, InodeTable& inodes, uid_t uid, gid_t gid)
+    const VfsTree& tree, InodeTable& inodes)
 {
   auto index = std::make_shared<VfsRuntimeIndex>();
   const std::size_t expected = tree.file_count + tree.dir_count + 1;
   index->m_baseLookups.reserve(expected);
-  index->m_baseNodes.reserve(expected);
-  index->m_baseNodes.emplace(
-      1, makeDirectoryNode(1, std::string{}, uid, gid));
+  index->m_baseNodes.resize(2);
+  index->m_baseNodes[1] = makeDirectoryNode(1, std::string{});
+  index->m_baseNodeCount = 1;
 
   const auto visit = [&](const auto& self, const VfsNode& parent,
                          const std::string& parentPath,
@@ -103,17 +72,22 @@ std::shared_ptr<VfsRuntimeIndex> VfsRuntimeIndex::build(
 
       VfsIndexedNode node;
       if (childPtr->is_directory) {
-        node = makeDirectoryNode(childIno, childPath, uid, gid);
+        node = makeDirectoryNode(childIno, childPath);
       } else {
         node = makeFileNode(
             childIno, childPath, childPtr->file_info.real_path,
-            childPtr->file_info.origin, childPtr->file_info.is_backing,
-            childPtr->file_info.size, childPtr->file_info.mtime,
-            childPtr->file_info.cached_mode, uid, gid);
+            childPtr->file_info.is_backing, childPtr->file_info.size,
+            childPtr->file_info.mtime, childPtr->file_info.cached_mode);
       }
-      index->m_baseNodes.insert_or_assign(childIno, std::move(node));
+      if (childIno >= index->m_baseNodes.size()) {
+        index->m_baseNodes.resize(static_cast<std::size_t>(childIno + 1));
+      }
+      if (!index->m_baseNodes[childIno].has_value()) {
+        ++index->m_baseNodeCount;
+      }
+      index->m_baseNodes[childIno] = std::move(node);
       index->m_baseLookups.insert_or_assign(
-          LookupKey{parentIno, key}, Child{childIno, name});
+          LookupKey{parentIno, key}, Child{childIno});
 
       if (childPtr->is_directory) {
         self(self, *childPtr, childPath, childIno);
@@ -138,7 +112,6 @@ VfsIndexedLookup VfsRuntimeIndex::lookup(
       auto nodeIt = m_overlayNodes.find(overlay->second.child.ino);
       if (nodeIt != m_overlayNodes.end()) {
         return {.source=VfsLookupSource::Overlay,
-                .canonical_name=overlay->second.child.canonical_name,
                 .node=nodeIt->second};
       }
     }
@@ -151,14 +124,12 @@ VfsIndexedLookup VfsRuntimeIndex::lookup(
       auto overlayNode = m_overlayNodes.find(base->second.ino);
       if (overlayNode != m_overlayNodes.end()) {
         return {.source=VfsLookupSource::Overlay,
-                .canonical_name=base->second.canonical_name,
                 .node=overlayNode->second};
       }
-      auto baseNode = m_baseNodes.find(base->second.ino);
-      if (baseNode != m_baseNodes.end()) {
+      const uint64_t ino = base->second.ino;
+      if (ino < m_baseNodes.size() && m_baseNodes[ino].has_value()) {
         return {.source=VfsLookupSource::Base,
-                .canonical_name=base->second.canonical_name,
-                .node=baseNode->second};
+                .node=*m_baseNodes[ino]};
       }
     }
   }
@@ -180,9 +151,7 @@ std::optional<VfsIndexedNode> VfsRuntimeIndex::node(uint64_t ino) const
   if (m_hiddenInodes.contains(ino)) return std::nullopt;
   auto overlay = m_overlayNodes.find(ino);
   if (overlay != m_overlayNodes.end()) return overlay->second;
-  auto base = m_baseNodes.find(ino);
-  return base == m_baseNodes.end() ? std::nullopt
-                                  : std::optional<VfsIndexedNode>(base->second);
+  return ino < m_baseNodes.size() ? m_baseNodes[ino] : std::nullopt;
 }
 
 void VfsRuntimeIndex::publish(uint64_t parent, const std::string& name,
@@ -193,7 +162,7 @@ void VfsRuntimeIndex::publish(uint64_t parent, const std::string& name,
   m_overlayNodes.insert_or_assign(node.ino, node);
   m_hiddenInodes.erase(node.ino);
   m_overlayLookups.insert_or_assign(
-      key, OverlayChild{false, Child{node.ino, name}});
+      key, OverlayChild{false, Child{node.ino}});
   m_negativeLookups.erase(key);
 }
 
@@ -233,7 +202,7 @@ std::size_t VfsRuntimeIndex::baseLookupCount() const
 
 std::size_t VfsRuntimeIndex::baseNodeCount() const
 {
-  return m_baseNodes.size();
+  return m_baseNodeCount;
 }
 
 std::size_t VfsRuntimeIndex::overlayCount() const

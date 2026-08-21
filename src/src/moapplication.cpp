@@ -22,6 +22,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "instancemanager.h"
 #include "loglist.h"
 #include "mainwindow.h"
+#include "memorydiagnostics.h"
 #include "messagedialog.h"
 #include "multiprocess.h"
 #include "nexusinterface.h"
@@ -351,6 +352,7 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
 
   // loading settings
   m_settings.reset(new Settings(m_instance->iniPath(), true));
+  MemoryDiagnostics::snapshot("startup.settings_loaded");
   log::getDefault().setLevel(m_settings->diagnostics().logLevel());
   log::debug("using ini at '{}'", m_settings->filename());
 
@@ -392,6 +394,7 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
     InstanceManager::singleton().clearCurrentInstance();
     return 1;
   }
+  MemoryDiagnostics::snapshot("startup.core_bootstrapped");
 
   // plugins
   tt.start("MOApplication::doOneRun() plugins");
@@ -399,6 +402,7 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
 
   m_plugins = std::make_unique<PluginContainer>(m_core.get());
   m_plugins->loadPlugins();
+  MemoryDiagnostics::snapshot("startup.plugins_loaded");
   log::debug("all plugins loaded");
 
   // instance
@@ -408,6 +412,7 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
     return *r;
   }
   log::debug("setupInstanceLoop done");
+  MemoryDiagnostics::snapshot("startup.instance_configured");
 
   if (m_instance->isPortable()) {
     log::debug("this is a portable instance");
@@ -468,7 +473,9 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
   CategoryFactory::instance().loadCategories();
   m_core->updateExecutablesList();
   m_core->updateModInfoFromDisc();
+  MemoryDiagnostics::snapshot("startup.mods_scanned");
   m_core->setCurrentProfile(m_instance->profileName());
+  MemoryDiagnostics::snapshot("startup.profile_selected");
   m_coreReady = true;
 
   // The single-instance listener is active before setup() finishes. Preserve
@@ -489,6 +496,7 @@ int MOApplication::run(MOMultiProcess& multiProcess)
   tt.start("MOApplication::doOneRun() splash");
 
   MOSplash splash(*m_settings, m_instance->directory(), m_instance->gamePlugin());
+  MemoryDiagnostics::snapshot("startup.splash_constructed");
 
   tt.start("MOApplication::doOneRun() finishing");
 
@@ -517,6 +525,7 @@ int MOApplication::run(MOMultiProcess& multiProcess)
     tt.start("MOApplication::doOneRun() MainWindow setup");
     log::debug("creating MainWindow...");
     MainWindow mainWindow(*m_settings, *m_core, *m_plugins);
+    MemoryDiagnostics::snapshot("startup.main_window_constructed");
     log::debug("MainWindow created, showing...");
 
     // the nexus interface can show dialogs, make sure they're parented to the
@@ -534,6 +543,7 @@ int MOApplication::run(MOMultiProcess& multiProcess)
     mainWindow.show();
     mainWindow.activateWindow();
     splash.close();
+    MemoryDiagnostics::snapshot("startup.main_window_shown");
 
     tt.stop();
 
@@ -1088,30 +1098,39 @@ void MOApplication::updateStyle(const QString& fileName)
 MOSplash::MOSplash(const Settings& settings, const QString& dataPath,
                    const MOBase::IPluginGame* game)
 {
+  MemoryDiagnostics::snapshot("startup.splash.begin");
   const auto splashPath = getSplashPath(settings, dataPath, game);
+  MemoryDiagnostics::snapshot("startup.splash.path_resolved");
   if (splashPath.isEmpty()) {
     return;
   }
 
   QPixmap const image(splashPath);
+  MemoryDiagnostics::snapshot("startup.splash.pixmap_loaded");
   if (image.isNull()) {
     log::error("failed to load splash from {}", splashPath);
     return;
   }
 
   ss_.reset(new QSplashScreen(image));
+  MemoryDiagnostics::snapshot("startup.splash.widget_created");
   settings.geometry().centerOnMainWindowMonitor(ss_.get());
+  MemoryDiagnostics::snapshot("startup.splash.widget_centered");
 
   ss_->show();
   ss_->activateWindow();
+  MemoryDiagnostics::snapshot("startup.splash.widget_shown");
 }
 
 void MOSplash::close()
 {
   if (ss_) {
     // don't pass mainwindow as it just waits half a second for it
-    // instead of proceding
+    // instead of proceeding. Destroy the splash immediately after hiding it
+    // so its image and platform surface are not retained across exec().
     ss_->finish(nullptr);
+    ss_.reset();
+    MemoryDiagnostics::snapshot("startup.splash.destroyed");
   }
 }
 

@@ -272,6 +272,23 @@ QByteArray extractExeIcon(const QString& exePath)
   QFile f(exePath);
   if (!f.open(QIODevice::ReadOnly))
     return {};
-  QByteArray const data = f.readAll();
-  return tryExtractIcons(data);
+
+  const qint64 size = f.size();
+  if (size <= 0) {
+    return {};
+  }
+
+  uchar* const mapped = f.map(0, size);
+  if (mapped == nullptr) {
+    return {};
+  }
+
+  // The PE parser only copies the small resource records and icon payloads it
+  // needs. A raw view avoids reading large game executables into a temporary
+  // QByteArray merely to inspect their resource table.
+  const QByteArray view = QByteArray::fromRawData(
+      reinterpret_cast<const char*>(mapped), static_cast<qsizetype>(size));
+  QByteArray icon = tryExtractIcons(view);
+  f.unmap(mapped);
+  return icon;
 }

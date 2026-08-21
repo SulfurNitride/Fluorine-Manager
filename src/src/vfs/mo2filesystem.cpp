@@ -662,7 +662,6 @@ struct NodeSnapshot
   uint64_t size     = 0;
   std::chrono::system_clock::time_point mtime;
   std::string real_path;
-  std::string origin;
   mode_t cached_mode = 0;
 };
 
@@ -763,7 +762,6 @@ NodeSnapshot snapshotFromIndexed(const VfsIndexedNode& node)
   snap.size = node.size;
   snap.mtime = node.mtime;
   snap.real_path = node.real_path;
-  snap.origin = node.origin;
   snap.cached_mode = node.cached_mode;
   return snap;
 }
@@ -782,10 +780,10 @@ void publishRuntimeSnapshot(Mo2FsContext* ctx, const std::string& path,
   }
 
   VfsIndexedNode node = snap.is_directory
-      ? VfsRuntimeIndex::makeDirectoryNode(ino, path, ctx->uid, ctx->gid)
+      ? VfsRuntimeIndex::makeDirectoryNode(ino, path)
       : VfsRuntimeIndex::makeFileNode(
-            ino, path, snap.real_path, snap.origin, snap.is_backing, snap.size,
-            snap.mtime, snap.cached_mode, ctx->uid, ctx->gid);
+            ino, path, snap.real_path, snap.is_backing, snap.size,
+            snap.mtime, snap.cached_mode);
   index->publish(parentIno, leafName(path), node);
 }
 
@@ -854,7 +852,6 @@ NodeSnapshot snapshotForPath(const Mo2FsContext* ctx, const std::string& path)
     snap.size       = node->file_info.size;
     snap.mtime      = node->file_info.mtime;
     snap.is_backing = node->file_info.is_backing;
-    snap.origin     = node->file_info.origin;
     snap.cached_mode = node->file_info.cached_mode;
   }
 
@@ -871,7 +868,6 @@ void snapshotFromNode(const VfsNode* node, NodeSnapshot& snap)
     snap.size       = node->file_info.size;
     snap.mtime      = node->file_info.mtime;
     snap.is_backing = node->file_info.is_backing;
-    snap.origin     = node->file_info.origin;
     snap.cached_mode = node->file_info.cached_mode;
   }
 }
@@ -1685,7 +1681,7 @@ std::size_t mo2PrewarmLookupIndex(Mo2FsContext* ctx)
     const std::size_t expected =
         ctx->tree->file_count + ctx->tree->dir_count + 1;
     ctx->inodes->reserve(expected);
-    index = VfsRuntimeIndex::build(*ctx->tree, *ctx->inodes, ctx->uid, ctx->gid);
+    index = VfsRuntimeIndex::build(*ctx->tree, *ctx->inodes);
   }
   {
     std::unique_lock lock(ctx->runtime_index_mutex);
@@ -1885,7 +1881,13 @@ void mo2_lookup(fuse_req_t req, fuse_ino_t parent, const char* name)
     e.ino = indexed.node->ino;
     e.attr_timeout = ttlSeconds(ctx);
     e.entry_timeout = ttlSeconds(ctx);
-    e.attr = indexed.node->attr;
+    if (indexed.node->is_directory) {
+      fillStatForDir(&e.attr, indexed.node->ino, ctx->uid, ctx->gid);
+    } else {
+      fillStatForFile(&e.attr, indexed.node->ino, ctx->uid, ctx->gid,
+                      indexed.node->size, indexed.node->mtime,
+                      indexed.node->real_path, indexed.node->cached_mode);
+    }
     fuse_reply_entry(req, &e);
     return;
   }
@@ -2051,7 +2053,14 @@ void mo2_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* /*fi*/)
       ctx->attr_cache_hits.fetch_add(1, std::memory_order_relaxed);
       ctx->node_index_hits.fetch_add(1, std::memory_order_relaxed);
       _t.path = node->virtual_path.empty() ? "/" : node->virtual_path;
-      fuse_reply_attr(req, &node->attr, ttlSeconds(ctx));
+      struct stat st {};
+      if (node->is_directory) {
+        fillStatForDir(&st, ino, ctx->uid, ctx->gid);
+      } else {
+        fillStatForFile(&st, ino, ctx->uid, ctx->gid, node->size, node->mtime,
+                        node->real_path, node->cached_mode);
+      }
+      fuse_reply_attr(req, &st, ttlSeconds(ctx));
       return;
     }
   }
@@ -2976,7 +2985,6 @@ void mo2_rename(fuse_req_t req, fuse_ino_t parent, const char* name,
   tombstoneRuntimePath(ctx, oldRelative, oldIno);
   NodeSnapshot renamedSnap = oldSnap;
   renamedSnap.is_backing = false;
-  renamedSnap.origin = "Staging";
   if (!renamedSnap.is_directory) renamedSnap.real_path = newRealPath;
   publishRuntimeSnapshot(ctx, newRelative, oldIno, renamedSnap);
   if (oldIno != 0) {

@@ -91,7 +91,6 @@ void DirectoryEntry::clear()
     delete *itor;
   }
 
-  m_Files.clear();
   m_FilesLookup.clear();
   m_SubDirectories.clear();
   m_SubDirectoriesLookup.clear();
@@ -265,8 +264,8 @@ int DirectoryEntry::anyOrigin() const
 {
   bool ignore;
 
-  for (auto iter = m_Files.begin(); iter != m_Files.end(); ++iter) {
-    FileEntryPtr entry = m_FileRegister->getFile(iter->second);
+  for (const auto& item : m_FilesLookup) {
+    FileEntryPtr entry = m_FileRegister->getFile(item.second);
     if ((entry.get() != nullptr) && !entry->isFromArchive()) {
       return entry->getOrigin(ignore);
     }
@@ -287,10 +286,10 @@ int DirectoryEntry::anyOrigin() const
 std::vector<FileEntryPtr> DirectoryEntry::getFiles() const
 {
   std::vector<FileEntryPtr> result;
-  result.reserve(m_Files.size());
+  result.reserve(m_FilesLookup.size());
 
-  for (auto iter = m_Files.begin(); iter != m_Files.end(); ++iter) {
-    result.push_back(m_FileRegister->getFile(iter->second));
+  for (const FileIndex index : sortedFileIndices()) {
+    result.push_back(m_FileRegister->getFile(index));
   }
 
   return result;
@@ -351,13 +350,13 @@ const FileEntryPtr DirectoryEntry::findFile(const DirectoryEntryFileKey& key) co
 
 bool DirectoryEntry::hasFile(const std::wstring& name) const
 {
-  return m_Files.contains(ToLowerCopy(name));
+  return m_FilesLookup.contains(DirectoryEntryFileKey(ToLowerCopy(name)));
 }
 
 bool DirectoryEntry::containsArchive(std::wstring archiveName)
 {
-  for (auto iter = m_Files.begin(); iter != m_Files.end(); ++iter) {
-    FileEntryPtr entry = m_FileRegister->getFile(iter->second);
+  for (const auto& item : m_FilesLookup) {
+    FileEntryPtr entry = m_FileRegister->getFile(item.second);
     if (entry->isFromArchive(archiveName)) {
       return true;
     }
@@ -386,9 +385,9 @@ const FileEntryPtr DirectoryEntry::searchFile(const std::wstring& path,
 
   if (len == std::string::npos) {
     // no more path components
-    auto iter = m_Files.find(ToLowerCopy(path));
+    auto iter = m_FilesLookup.find(DirectoryEntryFileKey(ToLowerCopy(path)));
 
-    if (iter != m_Files.end()) {
+    if (iter != m_FilesLookup.end()) {
       return m_FileRegister->getFile(iter->second);
     } else if (directory != nullptr) {
       DirectoryEntry* temp = findSubDirectory(path);
@@ -472,10 +471,10 @@ bool DirectoryEntry::remove(const std::wstring& fileName, int* origin)
 {
   const auto lcFileName = ToLowerCopy(fileName);
 
-  auto iter = m_Files.find(lcFileName);
+  auto iter = m_FilesLookup.find(DirectoryEntryFileKey(lcFileName));
   bool b    = false;
 
-  if (iter != m_Files.end()) {
+  if (iter != m_FilesLookup.end()) {
     if (origin != nullptr) {
       FileEntryPtr entry = m_FileRegister->getFile(iter->second);
       if (entry.get() != nullptr) {
@@ -567,17 +566,18 @@ FileEntryPtr DirectoryEntry::insert(env::File& file, FilesOrigin& origin,
                                     DirectoryStats& stats)
 {
   FileEntryPtr fe;
+  DirectoryEntryFileKey key(std::move(file.lcname));
 
   {
     std::unique_lock lock(m_FilesMutex);
 
-    FilesMap::iterator itor;
+    FilesLookup::iterator itor;
 
     elapsed(stats.filesLookupTimes, [&] {
-      itor = m_Files.find(file.lcname);
+      itor = m_FilesLookup.find(key);
     });
 
-    if (itor != m_Files.end()) {
+    if (itor != m_FilesLookup.end()) {
       lock.unlock();
       ++stats.fileExists;
       fe = m_FileRegister->getFile(itor->second);
@@ -587,7 +587,7 @@ FileEntryPtr DirectoryEntry::insert(env::File& file, FilesOrigin& origin,
       // file.name has been moved from this point
 
       elapsed(stats.addFileTimes, [&] {
-        addFileToList(std::move(file.lcname), fe->getIndex());
+        addFileToList(std::move(key.value), fe->getIndex());
       });
 
       // file.lcname has been moved from this point
@@ -795,11 +795,9 @@ DirectoryEntry* DirectoryEntry::getSubDirectoryRecursive(const std::wstring& pat
 
 void DirectoryEntry::removeDirRecursive()
 {
-  while (!m_Files.empty()) {
-    m_FileRegister->removeFile(m_Files.begin()->second);
+  while (!m_FilesLookup.empty()) {
+    m_FileRegister->removeFile(m_FilesLookup.begin()->second);
   }
-
-  m_FilesLookup.clear();
 
   for (DirectoryEntry* entry : m_SubDirectories) {
     entry->removeDirRecursive();
@@ -838,41 +836,29 @@ void DirectoryEntry::removeDirectoryFromList(SubDirectories::iterator itor)
 
 void DirectoryEntry::removeFileFromList(FileIndex index)
 {
-  auto removeFrom = [&](auto& list) {
-    auto iter = std::find_if(list.begin(), list.end(), [&index](auto&& pair) {
-      return (pair.second == index);
-    });
+  auto iter = std::find_if(m_FilesLookup.begin(), m_FilesLookup.end(),
+                           [&index](auto&& pair) {
+                             return pair.second == index;
+                           });
 
-    if (iter == list.end()) {
-      auto f = m_FileRegister->getFile(index);
+  if (iter == m_FilesLookup.end()) {
+    auto f = m_FileRegister->getFile(index);
 
-      if (f) {
-        log::error("can't remove file '{}', not in directory entry '{}'", f->getName(),
-                   getName());
-      } else {
-        log::error("can't remove file with index {}, not in directory entry '{}' and "
-                   "not in register",
-                   index, getName());
-      }
+    if (f) {
+      log::error("can't remove file '{}', not in directory entry '{}'", f->getName(),
+                 getName());
     } else {
-      list.erase(iter);
+      log::error("can't remove file with index {}, not in directory entry '{}' and "
+                 "not in register",
+                 index, getName());
     }
-  };
-
-  removeFrom(m_FilesLookup);
-  removeFrom(m_Files);
+  } else {
+    m_FilesLookup.erase(iter);
+  }
 }
 
 void DirectoryEntry::removeFilesFromList(const std::set<FileIndex>& indices)
 {
-  for (auto iter = m_Files.begin(); iter != m_Files.end();) {
-    if (indices.contains(iter->second)) {
-      iter = m_Files.erase(iter);
-    } else {
-      ++iter;
-    }
-  }
-
   for (auto iter = m_FilesLookup.begin(); iter != m_FilesLookup.end();) {
     if (indices.contains(iter->second)) {
       iter = m_FilesLookup.erase(iter);
@@ -884,9 +870,27 @@ void DirectoryEntry::removeFilesFromList(const std::set<FileIndex>& indices)
 
 void DirectoryEntry::addFileToList(std::wstring fileNameLower, FileIndex index)
 {
-  m_FilesLookup.emplace(fileNameLower, index);
-  m_Files.emplace(std::move(fileNameLower), index);
-  // fileNameLower has been moved from this point
+  m_FilesLookup.emplace(std::move(fileNameLower), index);
+}
+
+std::vector<FileIndex> DirectoryEntry::sortedFileIndices() const
+{
+  std::vector<const FilesLookup::value_type*> ordered;
+  ordered.reserve(m_FilesLookup.size());
+  for (const auto& entry : m_FilesLookup) {
+    ordered.push_back(&entry);
+  }
+
+  std::sort(ordered.begin(), ordered.end(), [](const auto* lhs, const auto* rhs) {
+    return lhs->first.value < rhs->first.value;
+  });
+
+  std::vector<FileIndex> result;
+  result.reserve(ordered.size());
+  for (const auto* entry : ordered) {
+    result.push_back(entry->second);
+  }
+  return result;
 }
 
 struct DumpFailed : public std::runtime_error
@@ -920,8 +924,8 @@ void DirectoryEntry::dump(std::FILE* f, const std::wstring& parentPath) const
   {
     std::scoped_lock lock(m_FilesMutex);
 
-    for (auto&& index : m_Files) {
-      const auto file = m_FileRegister->getFile(index.second);
+    for (const FileIndex index : sortedFileIndices()) {
+      const auto file = m_FileRegister->getFile(index);
       if (!file) {
         continue;
       }

@@ -12,8 +12,8 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
-#include <sys/stat.h>
 #include <sys/types.h>
 
 struct VfsIndexedNode
@@ -21,13 +21,11 @@ struct VfsIndexedNode
   uint64_t ino = 0;
   std::string virtual_path;
   std::string real_path;
-  std::string origin;
   bool is_directory = false;
   bool is_backing = false;
   uint64_t size = 0;
   std::chrono::system_clock::time_point mtime;
   mode_t cached_mode = 0;
-  struct stat attr {};
 };
 
 enum class VfsLookupSource
@@ -42,7 +40,6 @@ enum class VfsLookupSource
 struct VfsIndexedLookup
 {
   VfsLookupSource source = VfsLookupSource::Missing;
-  std::string canonical_name;
   std::optional<VfsIndexedNode> node;
 };
 
@@ -53,7 +50,7 @@ class VfsRuntimeIndex
 {
 public:
   static std::shared_ptr<VfsRuntimeIndex> build(
-      const VfsTree& tree, InodeTable& inodes, uid_t uid, gid_t gid);
+      const VfsTree& tree, InodeTable& inodes);
 
   VfsIndexedLookup lookup(uint64_t parent, const std::string& name) const;
   std::optional<VfsIndexedNode> node(uint64_t ino) const;
@@ -72,11 +69,10 @@ public:
 
   static VfsIndexedNode makeFileNode(
       uint64_t ino, std::string virtualPath, std::string realPath,
-      std::string origin, bool isBacking, uint64_t size,
-      std::chrono::system_clock::time_point mtime, mode_t cachedMode,
-      uid_t uid, gid_t gid);
+      bool isBacking, uint64_t size,
+      std::chrono::system_clock::time_point mtime, mode_t cachedMode);
   static VfsIndexedNode makeDirectoryNode(
-      uint64_t ino, std::string virtualPath, uid_t uid, gid_t gid);
+      uint64_t ino, std::string virtualPath);
 
 private:
   struct LookupKey
@@ -95,7 +91,6 @@ private:
   struct Child
   {
     uint64_t ino = 0;
-    std::string canonical_name;
   };
 
   struct OverlayChild
@@ -109,7 +104,10 @@ private:
       std::unordered_map<LookupKey, OverlayChild, LookupKeyHash>;
 
   BaseLookupMap m_baseLookups;
-  std::unordered_map<uint64_t, VfsIndexedNode> m_baseNodes;
+  // Catalog inodes are allocated densely. Indexing them directly avoids one
+  // separately allocated unordered_map node per visible VFS entry.
+  std::vector<std::optional<VfsIndexedNode>> m_baseNodes;
+  std::size_t m_baseNodeCount = 0;
 
   mutable std::shared_mutex m_overlayMutex;
   OverlayLookupMap m_overlayLookups;

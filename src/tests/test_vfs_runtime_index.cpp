@@ -25,7 +25,7 @@ VfsTree sampleTree()
 TEST(VfsRuntimeIndex, ResolvesEveryBaseEntryWithoutWarmup)
 {
   InodeTable inodes;
-  const auto index = VfsRuntimeIndex::build(sampleTree(), inodes, 1000, 1000);
+  const auto index = VfsRuntimeIndex::build(sampleTree(), inodes);
 
   const auto data = index->lookup(1, "dAtA");
   ASSERT_EQ(data.source, VfsLookupSource::Base);
@@ -35,13 +35,13 @@ TEST(VfsRuntimeIndex, ResolvesEveryBaseEntryWithoutWarmup)
   const auto stone = index->lookup(textures.node->ino, "stone.DDS");
   ASSERT_EQ(stone.source, VfsLookupSource::Base);
   EXPECT_EQ(stone.node->real_path, "/mods/stone.dds");
-  EXPECT_EQ(stone.node->attr.st_size, 17);
+  EXPECT_EQ(stone.node->size, 17);
 }
 
 TEST(VfsRuntimeIndex, NegativeCacheCannotHideBaseEntry)
 {
   InodeTable inodes;
-  const auto index = VfsRuntimeIndex::build(sampleTree(), inodes, 1000, 1000);
+  const auto index = VfsRuntimeIndex::build(sampleTree(), inodes);
   index->recordNegative(1, "Root.esm", std::chrono::hours(1));
   EXPECT_EQ(index->lookup(1, "root.esm").source, VfsLookupSource::Base);
 
@@ -54,17 +54,17 @@ TEST(VfsRuntimeIndex, NegativeCacheCannotHideBaseEntry)
 TEST(VfsRuntimeIndex, OverlayAndTombstoneOverrideBaseWithoutEviction)
 {
   InodeTable inodes;
-  const auto index = VfsRuntimeIndex::build(sampleTree(), inodes, 1000, 1000);
+  const auto index = VfsRuntimeIndex::build(sampleTree(), inodes);
   const uint64_t ino = inodes.get("Root.esm");
   auto replacement = VfsRuntimeIndex::makeFileNode(
-      ino, "Root.esm", "/staging/Root.esm", "Staging", false, 99,
-      std::chrono::system_clock::time_point{}, 0600, 1000, 1000);
+      ino, "Root.esm", "/staging/Root.esm", false, 99,
+      std::chrono::system_clock::time_point{}, 0600);
 
   index->publish(1, "Root.esm", replacement);
   auto found = index->lookup(1, "root.esm");
   ASSERT_EQ(found.source, VfsLookupSource::Overlay);
   EXPECT_EQ(found.node->real_path, "/staging/Root.esm");
-  EXPECT_EQ(found.node->attr.st_size, 99);
+  EXPECT_EQ(found.node->size, 99);
 
   index->tombstone(1, "Root.esm", ino);
   EXPECT_EQ(index->lookup(1, "root.esm").source,
@@ -80,12 +80,12 @@ TEST(VfsRuntimeIndex, OverlayAndTombstoneOverrideBaseWithoutEviction)
 TEST(VfsRuntimeIndex, RootCreateDoesNotRemoveBaseSiblings)
 {
   InodeTable inodes;
-  const auto index = VfsRuntimeIndex::build(sampleTree(), inodes, 1000, 1000);
+  const auto index = VfsRuntimeIndex::build(sampleTree(), inodes);
   const std::size_t baseCount = index->baseLookupCount();
   const uint64_t createdIno = inodes.getOrCreate("Runtime.log");
   auto created = VfsRuntimeIndex::makeFileNode(
-      createdIno, "Runtime.log", "/staging/Runtime.log", "Staging", false,
-      0, std::chrono::system_clock::time_point{}, 0644, 1000, 1000);
+      createdIno, "Runtime.log", "/staging/Runtime.log", false, 0,
+      std::chrono::system_clock::time_point{}, 0644);
   index->publish(1, "Runtime.log", created);
 
   EXPECT_EQ(index->baseLookupCount(), baseCount);

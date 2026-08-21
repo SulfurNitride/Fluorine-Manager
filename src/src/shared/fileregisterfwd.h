@@ -1,6 +1,8 @@
 #ifndef MO_REGISTER_FILEREGISTERFWD_INCLUDED
 #define MO_REGISTER_FILEREGISTERFWD_INCLUDED
 
+#include <cstdint>
+
 class DirectoryRefreshProgress;
 
 namespace MOShared
@@ -41,18 +43,16 @@ constexpr OriginID InvalidOriginID   = -1;
 // -1
 class DataArchiveOrigin
 {
-  std::wstring name_;
+  uint32_t nameID_     = 0;
   int order_         = -1;
 
 public:
   int order() const { return order_; }
-  const std::wstring& name() const { return name_; }
+  const std::wstring& name() const;
 
-  bool isValid() const { return !name_.empty(); }
+  bool isValid() const { return nameID_ != 0; }
 
-  DataArchiveOrigin(std::wstring name, int order)
-      : name_(std::move(name)), order_(order)
-  {}
+  DataArchiveOrigin(std::wstring name, int order);
 
   DataArchiveOrigin() = default;
 };
