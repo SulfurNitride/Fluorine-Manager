@@ -36,8 +36,14 @@ struct VfsCatalogProgress
   uint64_t archives_indexed = 0;
   uint64_t archives_reused = 0;
   uint64_t archive_members = 0;
+  uint64_t archive_membership_cache_hits = 0;
+  uint64_t archive_membership_cache_bytes = 0;
   uint64_t archive_errors = 0;
   uint64_t archive_workers = 0;
+  uint64_t provider_reconcile_ms = 0;
+  uint64_t archive_reconcile_ms = 0;
+  uint64_t duplicate_scan_ms = 0;
+  uint64_t commit_ms = 0;
   uint64_t current_file_size = 0;
   uint64_t elapsed_ms = 0;
   double hash_mib_per_second = 0.0;

@@ -1601,7 +1601,16 @@ ModInfo::Ptr OrganizerCore::installArchive(const QString& archivePath, int prior
       int const fileId = m_DownloadManager.getFileInfo(dlIdx)->fileID;
       modInfo->addInstalledFile(modId, fileId);
     }
-    m_DownloadManager.markInstalled(archivePath);
+    // Replacement installation emits modRemoved with the old archive name,
+    // which marks the live download uninstalled before doInstall returns.
+    // Prefer the already-resolved active row so reinstalling the same archive
+    // restores its in-memory state as well as its .meta file.  Keep the path
+    // fallback for archives that are not represented by an active download.
+    if (dlIdx != -1) {
+      m_DownloadManager.markInstalled(dlIdx);
+    } else {
+      m_DownloadManager.markInstalled(archivePath);
+    }
   }
   return modInfo;
 }

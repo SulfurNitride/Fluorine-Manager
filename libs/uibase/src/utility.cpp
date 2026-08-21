@@ -184,19 +184,117 @@ static bool shellOpCopy(const QStringList& sourceNames,
 static bool shellOpMove(const QStringList& sourceNames,
                        const QStringList& destinationNames)
 {
+  const auto moveFile = [](const QString& source,
+                           const QString& destination) -> bool {
+    const QFileInfo sourceInfo(source);
+    if (!sourceInfo.exists() && !sourceInfo.isSymLink()) {
+      return false;
+    }
+
+    const QString sourcePath = sourceInfo.absoluteFilePath();
+    const QString destinationPath = QFileInfo(destination).absoluteFilePath();
+    if (QDir::cleanPath(sourcePath) == QDir::cleanPath(destinationPath)) {
+      return true;
+    }
+
+    const QFileInfo destinationInfo(destination);
+    if (destinationInfo.exists() && destinationInfo.isDir()) {
+      return false;
+    }
+    if (!QDir().mkpath(destinationInfo.absolutePath())) {
+      return false;
+    }
+
+    // QFile::rename() is atomic on the same filesystem, but unlike the shell
+    // operation it does not replace an existing destination.  Try it first;
+    // the copy path below handles cross-filesystem moves and replacement
+    // without deleting the old destination until the copy is complete.
+    if (QFile::rename(sourcePath, destinationPath)) {
+      return true;
+    }
+
+    const QString temporaryPath = destinationInfo.absolutePath() + "/.fluorine-move-" +
+                                  QUuid::createUuid().toString(QUuid::WithoutBraces);
+    if (!QFile::copy(sourcePath, temporaryPath)) {
+      QFile::remove(temporaryPath);
+      return false;
+    }
+    if (destinationInfo.exists() && !QFile::remove(destinationPath)) {
+      QFile::remove(temporaryPath);
+      return false;
+    }
+    if (!QFile::rename(temporaryPath, destinationPath)) {
+      QFile::remove(temporaryPath);
+      return false;
+    }
+    // Keep the copied destination if source cleanup fails, but report failure
+    // so callers never emit success or update tracking for an incomplete move.
+    return QFile::remove(sourcePath);
+  };
+
+  const auto movePath = [&](const QString& source,
+                            const QString& destination,
+                            const auto& movePathRef) -> bool {
+    const QFileInfo sourceInfo(source);
+    if (!sourceInfo.exists() && !sourceInfo.isSymLink()) {
+      return false;
+    }
+    const QString sourcePath = QDir::cleanPath(sourceInfo.absoluteFilePath());
+    const QString destinationPath =
+        QDir::cleanPath(QFileInfo(destination).absoluteFilePath());
+    if (sourcePath == destinationPath) {
+      return true;
+    }
+    // Moving a directory into one of its own descendants would otherwise
+    // make the recursive fallback walk the destination it just created.
+    if (sourceInfo.isDir() &&
+        destinationPath.startsWith(sourcePath + QStringLiteral("/"))) {
+      return false;
+    }
+    if (!sourceInfo.isDir() || sourceInfo.isSymLink()) {
+      return moveFile(source, destination);
+    }
+
+    const QFileInfo destinationInfo(destination);
+    if (destinationInfo.exists() && !destinationInfo.isDir()) {
+      return false;
+    }
+    if (!destinationInfo.exists()) {
+      if (!QDir().mkpath(destinationInfo.absolutePath())) {
+        return false;
+      }
+      if (QDir().rename(source, destination)) {
+        return true;
+      }
+      if (!QDir().mkpath(destination)) {
+        return false;
+      }
+    }
+
+    const QDir sourceDir(source);
+    const QDir destinationDir(destination);
+    const QFileInfoList entries = sourceDir.entryInfoList(
+        QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot);
+    for (const QFileInfo& entry : entries) {
+      if (!movePathRef(entry.absoluteFilePath(),
+                       destinationDir.filePath(entry.fileName()), movePathRef)) {
+        return false;
+      }
+    }
+    return QDir().rmdir(source);
+  };
+
   // Multiple sources → single destination: treat destination as a directory
   if (destinationNames.count() == 1 && sourceNames.count() > 1) {
     QDir destDir(destinationNames[0]);
-    if (!destDir.exists()) {
-      destDir.mkpath(".");
+    if (!destDir.exists() && !destDir.mkpath(".")) {
+      return false;
     }
     for (const auto& src : sourceNames) {
       QFileInfo srcInfo(src);
       QString dest = destinationNames[0] + "/" + srcInfo.fileName();
-      if (!QFile::rename(src, dest)) {
-        if (!QFile::copy(src, dest) || !QFile::remove(src)) {
-          return false;
-        }
+      if (!movePath(src, dest, movePath)) {
+        return false;
       }
     }
     return true;
@@ -208,15 +306,8 @@ static bool shellOpMove(const QStringList& sourceNames,
   }
 
   for (int i = 0; i < sourceNames.count(); ++i) {
-    QFileInfo destInfo(destinationNames[i]);
-    if (!destInfo.dir().exists()) {
-      destInfo.dir().mkpath(".");
-    }
-    if (!QFile::rename(sourceNames[i], destinationNames[i])) {
-      if (!QFile::copy(sourceNames[i], destinationNames[i]) ||
-          !QFile::remove(sourceNames[i])) {
-        return false;
-      }
+    if (!movePath(sourceNames[i], destinationNames[i], movePath)) {
+      return false;
     }
   }
   return true;

@@ -212,6 +212,25 @@ target_link_libraries(test_external_dir_mapping PRIVATE
 add_test(NAME test_external_dir_mapping COMMAND test_external_dir_mapping)
 
 # ---------------------------------------------------------------------------
+# Recursive shell move/overwrite behavior used by mod drag-and-drop.
+# ---------------------------------------------------------------------------
+add_executable(test_shell_operations EXCLUDE_FROM_ALL
+    test_shell_operations.cpp
+)
+set_target_properties(test_shell_operations PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_link_libraries(test_shell_operations PRIVATE
+    Qt6::Core
+    mo2::uibase
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_shell_operations COMMAND test_shell_operations)
+
+# ---------------------------------------------------------------------------
 # VFS file-operation regression tests
 # ---------------------------------------------------------------------------
 add_executable(test_vfs_file_ops EXCLUDE_FROM_ALL
@@ -421,6 +440,7 @@ add_custom_target(fluorine-tests
             test_fluorineconfigownership
             test_heroicjson test_protondetection
             test_external_dir_mapping test_vfs_file_ops
+            test_shell_operations
             test_vfs_descriptor_cleanup test_vfs_runtime_index
             test_game_save_migration
             test_vfs_catalog test_vfs_index

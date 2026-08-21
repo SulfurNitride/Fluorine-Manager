@@ -538,7 +538,7 @@ TEST(VfsCatalog, UpgradesVersionOneCatalogWithoutRehashing)
                 -1, &stmt, nullptr),
             SQLITE_OK);
   ASSERT_EQ(sqlite3_step(stmt), SQLITE_ROW);
-  EXPECT_EQ(sqlite3_column_int(stmt, 0), 3);
+  EXPECT_EQ(sqlite3_column_int(stmt, 0), 4);
   sqlite3_finalize(stmt);
   sqlite3_close(db);
 }
@@ -567,6 +567,8 @@ TEST(VfsCatalog, CatalogsBsaAndBa2MembersAndReusesContentManifests)
   EXPECT_EQ(firstProgress.archives_indexed, 2u);
   EXPECT_EQ(firstProgress.archives_reused, 0u);
   EXPECT_EQ(firstProgress.archive_errors, 0u);
+  EXPECT_EQ(firstProgress.archive_membership_cache_hits, 0u);
+  EXPECT_GT(firstProgress.archive_membership_cache_bytes, 0u);
   EXPECT_GE(firstProgress.archive_workers, 1u);
   EXPECT_LE(firstProgress.archive_workers, 4u);
   ASSERT_NE(first.archive_member_index, nullptr);
@@ -586,9 +588,52 @@ TEST(VfsCatalog, CatalogsBsaAndBa2MembersAndReusesContentManifests)
   EXPECT_EQ(secondProgress.archives_reused, 2u);
   EXPECT_EQ(secondProgress.archive_errors, 0u);
   EXPECT_EQ(secondProgress.archive_workers, 0u);
+  EXPECT_EQ(secondProgress.archive_membership_cache_hits, 1u);
+  EXPECT_EQ(secondProgress.archive_membership_cache_bytes,
+            firstProgress.archive_membership_cache_bytes);
   ASSERT_NE(second.archive_member_index, nullptr);
   EXPECT_TRUE(second.archive_member_index->complete());
   EXPECT_TRUE(second.archive_member_index->mightContain("textures/grass/test.dds"));
+
+  // A different visible archive set must build its own proof rather than
+  // accepting the cached absence proof for the original set.
+  ASSERT_TRUE(fs::remove(data / "Example.ba2"));
+  VfsCatalogProgress reducedProgress;
+  const auto reduced = catalog.reconcileAndBuild(
+      data.string(), {}, overwrite.string(), true,
+      [&](const VfsCatalogProgress& value) { reducedProgress = value; });
+  EXPECT_EQ(reducedProgress.archive_membership_cache_hits, 0u);
+  ASSERT_NE(reduced.archive_member_index, nullptr);
+  EXPECT_EQ(reduced.archive_member_index->archiveCount(), 1u);
+
+  // Returning to the exact original archive content set can reuse its prior
+  // compact proof, even though the file itself was recreated.
+  ASSERT_TRUE(fs::copy_file(fixtures / "test_read.ba2", data / "Example.ba2"));
+  VfsCatalogProgress restoredProgress;
+  const auto restored = catalog.reconcileAndBuild(
+      data.string(), {}, overwrite.string(), true,
+      [&](const VfsCatalogProgress& value) { restoredProgress = value; });
+  EXPECT_EQ(restoredProgress.archive_membership_cache_hits, 1u);
+  ASSERT_NE(restored.archive_member_index, nullptr);
+  EXPECT_EQ(restored.archive_member_index->archiveCount(), 2u);
+
+  // Corruption is rejected and rebuilt from authoritative member rows.
+  sqlite3* db = nullptr;
+  ASSERT_EQ(sqlite3_open((temp.path() / "catalog.sqlite").c_str(), &db),
+            SQLITE_OK);
+  ASSERT_EQ(sqlite3_exec(
+                db,
+                "UPDATE archive_membership_cache SET bits_digest=zeroblob(32);",
+                nullptr, nullptr, nullptr),
+            SQLITE_OK);
+  sqlite3_close(db);
+  VfsCatalogProgress repairedProgress;
+  const auto repaired = catalog.reconcileAndBuild(
+      data.string(), {}, overwrite.string(), true,
+      [&](const VfsCatalogProgress& value) { repairedProgress = value; });
+  EXPECT_EQ(repairedProgress.archive_membership_cache_hits, 0u);
+  EXPECT_TRUE(repaired.archive_member_index->mightContain(
+      "textures/grass/test.dds"));
 }
 #endif
 

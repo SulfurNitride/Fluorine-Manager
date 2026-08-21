@@ -20,7 +20,6 @@
 #include <fcntl.h>
 #include <fstream>
 #include <iomanip>
-#include <map>
 #include <memory>
 #include <random>
 #include <sstream>
@@ -233,12 +232,6 @@ int64_t timeNs(std::chrono::system_clock::time_point value)
       .count();
 }
 
-struct ExportedFile
-{
-  VfsIndexResolvedFile file;
-  fs::path host_path;
-};
-
 bool isReservedVirtualPath(const std::string& normalized)
 {
   const std::string locator = normalizeIndexPath(kVfsIndexVirtualLocator);
@@ -253,11 +246,12 @@ bool isReservedVirtualPath(const std::string& normalized)
          normalized.starts_with(".fluorine/index/");
 }
 
-std::vector<ExportedFile> flattenTree(
+std::vector<VfsIndexResolvedFile> flattenTree(
     const VfsTree& tree, const fs::path& dataDirectory,
     VfsIndexConsumerPathStyle pathStyle)
 {
-  std::map<std::string, ExportedFile> sorted;
+  std::vector<VfsIndexResolvedFile> files;
+  files.reserve(tree.file_count);
   const auto visit = [&](const auto& self, const VfsNode& directory,
                          const std::string& parentPath) -> void {
     for (const auto& [key, childPointer] : directory.dir_info.children) {
@@ -286,35 +280,38 @@ std::vector<ExportedFile> flattenTree(
       }
       hostPath = hostPath.lexically_normal();
 
-      ExportedFile exported;
-      exported.host_path = hostPath;
-      exported.file.normalized_path = normalized;
-      exported.file.display_path = virtualPath;
-      exported.file.host_path = hostPath.string();
-      exported.file.consumer_path =
+      VfsIndexResolvedFile exported;
+      exported.normalized_path = normalized;
+      exported.display_path = virtualPath;
+      exported.host_path = hostPath.string();
+      exported.consumer_path =
           VfsIndexPublisher::toConsumerPath(hostPath, pathStyle);
-      exported.file.origin = childPointer->file_info.origin;
-      exported.file.size = childPointer->file_info.size;
-      exported.file.mode =
+      exported.origin = childPointer->file_info.origin;
+      exported.size = childPointer->file_info.size;
+      exported.mode =
           static_cast<uint32_t>(childPointer->file_info.cached_mode & 07777);
-      exported.file.mtime_ns = timeNs(childPointer->file_info.mtime);
-      exported.file.is_backing = childPointer->file_info.is_backing;
-      exported.file.blake3 = childPointer->file_info.cached_blake3;
-
-      if (!sorted.emplace(normalized, std::move(exported)).second) {
-        throw std::runtime_error(
-            "Resolved VFS contains duplicate case-insensitive path: " +
-            virtualPath);
-      }
+      exported.mtime_ns = timeNs(childPointer->file_info.mtime);
+      exported.is_backing = childPointer->file_info.is_backing;
+      exported.blake3 = childPointer->file_info.cached_blake3;
+      files.push_back(std::move(exported));
     }
   };
   visit(visit, tree.root, {});
 
-  std::vector<ExportedFile> files;
-  files.reserve(sorted.size());
-  for (auto& [path, file] : sorted) {
-    (void)path;
-    files.push_back(std::move(file));
+  // A flat vector keeps deterministic publication order without retaining a
+  // second allocation-heavy std::map of every resolved file. Large profiles
+  // otherwise briefly hold both representations during publication.
+  std::sort(files.begin(), files.end(),
+            [](const VfsIndexResolvedFile& left,
+               const VfsIndexResolvedFile& right) {
+              return left.normalized_path < right.normalized_path;
+            });
+  for (size_t i = 1; i < files.size(); ++i) {
+    if (files[i - 1].normalized_path == files[i].normalized_path) {
+      throw std::runtime_error(
+          "Resolved VFS contains duplicate case-insensitive path: " +
+          files[i].display_path);
+    }
   }
   return files;
 }
@@ -340,29 +337,34 @@ void hashString(blake3_hasher& hasher, const std::string& value)
   hashBytes(hasher, value.data(), value.size());
 }
 
-VfsDigest resolvedDigest(const std::vector<ExportedFile>& files)
+void hashResolvedFile(blake3_hasher& hasher,
+                      const VfsIndexResolvedFile& file)
+{
+  hashString(hasher, file.normalized_path);
+  hashString(hasher, file.display_path);
+  hashString(hasher, file.host_path);
+  hashString(hasher, file.consumer_path);
+  hashString(hasher, file.origin);
+  hashUint64(hasher, file.size);
+  hashUint64(hasher, file.mode);
+  hashUint64(hasher, static_cast<uint64_t>(file.mtime_ns));
+  const unsigned char backing = file.is_backing ? 1 : 0;
+  const unsigned char hasDigest = file.blake3.has_value() ? 1 : 0;
+  hashBytes(hasher, &backing, 1);
+  hashBytes(hasher, &hasDigest, 1);
+  if (file.blake3) {
+    hashBytes(hasher, file.blake3->data(), file.blake3->size());
+  }
+}
+
+VfsDigest resolvedDigest(const std::vector<VfsIndexResolvedFile>& files)
 {
   blake3_hasher hasher;
   blake3_hasher_init(&hasher);
   constexpr char kDomain[] = "vfs-index.resolved-snapshot.v1";
   hashBytes(hasher, kDomain, sizeof(kDomain) - 1);
-  for (const auto& exported : files) {
-    const auto& file = exported.file;
-    hashString(hasher, file.normalized_path);
-    hashString(hasher, file.display_path);
-    hashString(hasher, file.host_path);
-    hashString(hasher, file.consumer_path);
-    hashString(hasher, file.origin);
-    hashUint64(hasher, file.size);
-    hashUint64(hasher, file.mode);
-    hashUint64(hasher, static_cast<uint64_t>(file.mtime_ns));
-    const unsigned char backing = file.is_backing ? 1 : 0;
-    const unsigned char hasDigest = file.blake3.has_value() ? 1 : 0;
-    hashBytes(hasher, &backing, 1);
-    hashBytes(hasher, &hasDigest, 1);
-    if (file.blake3) {
-      hashBytes(hasher, file.blake3->data(), file.blake3->size());
-    }
+  for (const auto& file : files) {
+    hashResolvedFile(hasher, file);
   }
   VfsDigest digest{};
   blake3_hasher_finalize(&hasher, digest.data(), digest.size());
@@ -1015,12 +1017,7 @@ VfsIndexValidationResult VfsIndexValidator::validateDatabase(
     if (files.size() != static_cast<std::size_t>(expectedCount)) {
       return invalid("resolved row count does not match snapshot metadata");
     }
-    std::vector<ExportedFile> digestFiles;
-    digestFiles.reserve(files.size());
-    for (const auto& file : files) {
-      digestFiles.push_back({file, {}});
-    }
-    if (resolvedDigest(digestFiles) != locator.resolved_snapshot_digest) {
+    if (resolvedDigest(files) != locator.resolved_snapshot_digest) {
       return invalid("loaded resolved rows do not match snapshot digest");
     }
 
@@ -1183,9 +1180,10 @@ VfsIndexPublicationResult VfsIndexPublisher::publish(
 
     const std::optional<std::string> previous =
         locatorGeneration(locatorPath);
-    const std::vector<ExportedFile> files =
+    std::vector<VfsIndexResolvedFile> files =
         flattenTree(tree, dataDirectory, context.consumer_path_style);
     const VfsDigest snapshotDigest = resolvedDigest(files);
+    const std::size_t fileCount = files.size();
 #ifdef _WIN32
     const std::string hostPathStyle = "windows";
 #else
@@ -1244,7 +1242,7 @@ VfsIndexPublicationResult VfsIndexPublisher::publish(
         result.database_path = existingDatabase;
         result.locator_path = locatorPath;
         result.reused_existing = true;
-        result.file_count = files.size();
+        result.file_count = fileCount;
         retainGenerations(
             indexDirectory, existing->generation, std::nullopt);
         return result;
@@ -1376,8 +1374,7 @@ VfsIndexPublicationResult VfsIndexPublisher::publish(
         "INSERT INTO resolved(normalized_path,display_path,host_path,"
         "consumer_path,origin,size,mode,mtime_ns,is_backing,blake3)"
         " VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10);");
-    for (const auto& exported : files) {
-      const auto& file = exported.file;
+    for (const auto& file : files) {
       sqlite3_reset(resolved.get());
       sqlite3_clear_bindings(resolved.get());
       bindText(database.get(), resolved.get(), 1, file.normalized_path);
@@ -1465,11 +1462,18 @@ VfsIndexPublicationResult VfsIndexPublisher::publish(
         toConsumerPath(databasePath, context.consumer_path_style);
     locator.published_utc_ms = now;
 
-    const auto validation =
-        VfsIndexValidator::validateDatabase(temporaryDatabase, locator);
-    if (!validation) {
-      throw std::runtime_error("Producer validation rejected VFS index: " +
-                               validation.error);
+    // The tree and immutable index remain live for the session, but the
+    // publication vector is only needed until the database is complete. Drop
+    // its string-heavy storage before producer validation, which otherwise
+    // materializes a second full resolved-file vector on large profiles.
+    std::vector<VfsIndexResolvedFile>().swap(files);
+    {
+      const auto validation =
+          VfsIndexValidator::validateDatabase(temporaryDatabase, locator);
+      if (!validation) {
+        throw std::runtime_error("Producer validation rejected VFS index: " +
+                                 validation.error);
+      }
     }
 
     fsyncFile(temporaryDatabase);
@@ -1490,7 +1494,7 @@ VfsIndexPublicationResult VfsIndexPublisher::publish(
     result.resolved_snapshot_digest = snapshotDigest;
     result.database_path = databasePath;
     result.locator_path = locatorPath;
-    result.file_count = files.size();
+    result.file_count = fileCount;
     return result;
   } catch (const std::exception& exception) {
     result.error = exception.what();

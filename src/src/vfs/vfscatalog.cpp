@@ -35,8 +35,9 @@ namespace
 {
 namespace fs = std::filesystem;
 
-constexpr int kSchemaVersion = 3;
+constexpr int kSchemaVersion = 4;
 constexpr size_t kHashBufferSize = 1024 * 1024;
+constexpr size_t kMaximumArchiveMembershipCacheBytes = 256 * 1024 * 1024;
 
 struct DbCloser
 {
@@ -372,6 +373,45 @@ VfsDigest finishHash(blake3_hasher& hasher)
   return digest;
 }
 
+void hashU64(blake3_hasher& hasher, uint64_t value)
+{
+  std::array<unsigned char, sizeof(value)> encoded{};
+  for (size_t i = 0; i < encoded.size(); ++i) {
+    encoded[i] = static_cast<unsigned char>(value & 0xffu);
+    value >>= 8;
+  }
+  hashBytes(hasher, encoded.data(), encoded.size());
+}
+
+VfsDigest archiveSetDigest(const std::set<VfsDigest>& digests)
+{
+  blake3_hasher hasher;
+  blake3_hasher_init(&hasher);
+  constexpr char domain[] = "fluorine.vfs.archive-set.v1";
+  hashBytes(hasher, domain, sizeof(domain) - 1);
+  hashU64(hasher, static_cast<uint64_t>(digests.size()));
+  for (const VfsDigest& digest : digests) {
+    hashBytes(hasher, digest.data(), digest.size());
+  }
+  return finishHash(hasher);
+}
+
+VfsDigest archiveMembershipCacheDigest(
+    size_t bitCount, size_t archiveCount, size_t memberCount,
+    const std::vector<unsigned char>& bits)
+{
+  blake3_hasher hasher;
+  blake3_hasher_init(&hasher);
+  constexpr char domain[] = "fluorine.vfs.archive-membership-cache.v1";
+  hashBytes(hasher, domain, sizeof(domain) - 1);
+  hashU64(hasher, VfsArchiveMemberIndex::probeCount());
+  hashU64(hasher, static_cast<uint64_t>(bitCount));
+  hashU64(hasher, static_cast<uint64_t>(archiveCount));
+  hashU64(hasher, static_cast<uint64_t>(memberCount));
+  hashBytes(hasher, bits.data(), bits.size());
+  return finishHash(hasher);
+}
+
 struct MerkleNode
 {
   std::map<std::string, MerkleNode> directories;
@@ -461,6 +501,12 @@ void initializeSchema(sqlite3* db)
   exec(db, "PRAGMA synchronous=NORMAL;");
   exec(db, "PRAGMA foreign_keys=ON;");
   exec(db, "PRAGMA temp_store=MEMORY;");
+  // Catalog connections are short-lived. Map database pages directly into the
+  // process on demand and let sqlite3_close() release the mapping after the VFS
+  // generation has been built. This avoids a second full heap copy of large
+  // catalogs while still allowing the OS to reclaim clean pages immediately.
+  exec(db, "PRAGMA mmap_size=1073741824;");
+  exec(db, "PRAGMA cache_size=-32768;");
   exec(db,
        "CREATE TABLE IF NOT EXISTS catalog_meta("
        " key TEXT PRIMARY KEY, value INTEGER NOT NULL);"
@@ -487,9 +533,18 @@ void initializeSchema(sqlite3* db)
        " normalized_path TEXT NOT NULL,"
        " PRIMARY KEY(digest,normalized_path)) WITHOUT ROWID;");
   exec(db,
+       "CREATE TABLE IF NOT EXISTS archive_membership_cache("
+       " archive_set_digest BLOB PRIMARY KEY,"
+       " probe_count INTEGER NOT NULL,bit_count INTEGER NOT NULL,"
+       " archive_count INTEGER NOT NULL,member_count INTEGER NOT NULL,"
+       " bits BLOB NOT NULL,bits_digest BLOB NOT NULL);");
+  exec(db,
        "CREATE TEMP TABLE IF NOT EXISTS catalog_seen("
        " root_key TEXT NOT NULL, normalized_path TEXT NOT NULL,"
        " PRIMARY KEY(root_key,normalized_path)) WITHOUT ROWID;");
+  exec(db,
+       "CREATE TEMP TABLE IF NOT EXISTS enabled_provider_priority("
+       " root_key TEXT PRIMARY KEY,priority INTEGER NOT NULL) WITHOUT ROWID;");
 
   auto current = prepare(db,
       "SELECT value FROM catalog_meta WHERE key='schema_version';");
@@ -651,8 +706,75 @@ std::shared_ptr<const VfsArchiveMemberIndex> reconcileArchiveManifests(
     ++archiveCount;
   }
 
+  // The archive membership filter is the expensive part of a warm mount: a
+  // large list can contain hundreds of thousands of paths even when every BSA
+  // manifest itself is cached. Key the serialized filter by the exact set of
+  // visible archive content digests so an unchanged set can be copied directly
+  // into its compact in-memory representation without replaying every row.
+  const bool manifestsComplete = archiveCount == visibleDigests.size();
+  const VfsDigest setDigest = archiveSetDigest(visibleDigests);
+  if (manifestsComplete) {
+    auto cached = prepare(db,
+        "SELECT probe_count,bit_count,archive_count,member_count,bits,bits_digest"
+        " FROM archive_membership_cache WHERE archive_set_digest=?1;");
+    bindDigest(db, cached.get(), 1, setDigest);
+    if (sqlite3_step(cached.get()) == SQLITE_ROW) {
+      const sqlite3_int64 probeCount = sqlite3_column_int64(cached.get(), 0);
+      const sqlite3_int64 bitCount = sqlite3_column_int64(cached.get(), 1);
+      const sqlite3_int64 cachedArchiveCount =
+          sqlite3_column_int64(cached.get(), 2);
+      const sqlite3_int64 cachedMemberCount =
+          sqlite3_column_int64(cached.get(), 3);
+      const int byteCount = sqlite3_column_bytes(cached.get(), 4);
+      const auto* rawBits = static_cast<const unsigned char*>(
+          sqlite3_column_blob(cached.get(), 4));
+      const void* rawDigest = sqlite3_column_blob(cached.get(), 5);
+      const int digestBytes = sqlite3_column_bytes(cached.get(), 5);
+      const bool shapeValid =
+          probeCount == static_cast<sqlite3_int64>(
+                            VfsArchiveMemberIndex::probeCount()) &&
+          bitCount >= 64 &&
+          cachedArchiveCount == static_cast<sqlite3_int64>(archiveCount) &&
+          cachedMemberCount == static_cast<sqlite3_int64>(memberCount) &&
+          byteCount > 0 &&
+          static_cast<size_t>(byteCount) <=
+              kMaximumArchiveMembershipCacheBytes &&
+          static_cast<uint64_t>(byteCount) ==
+              ((static_cast<uint64_t>(bitCount) + 63) / 64) * sizeof(uint64_t) &&
+          rawBits != nullptr && rawDigest != nullptr &&
+          digestBytes == static_cast<int>(VfsDigest{}.size());
+      if (shapeValid) {
+        std::vector<unsigned char> bits(
+            rawBits, rawBits + static_cast<size_t>(byteCount));
+        VfsDigest storedDigest{};
+        std::memcpy(storedDigest.data(), rawDigest, storedDigest.size());
+        if (archiveMembershipCacheDigest(
+                static_cast<size_t>(bitCount), archiveCount, memberCount,
+                bits) == storedDigest) {
+          auto index = VfsArchiveMemberIndex::fromSerialized(
+              static_cast<size_t>(bitCount), archiveCount, memberCount, bits);
+          if (index) {
+            state.archive_members = memberCount;
+            state.archive_membership_cache_hits = 1;
+            state.archive_membership_cache_bytes = bits.size();
+            return index;
+          }
+        }
+      }
+      // A malformed local cache is never trusted as an absence proof. Remove
+      // it and rebuild from authoritative archive member rows below.
+      cached.reset();
+      auto remove = prepare(db,
+          "DELETE FROM archive_membership_cache WHERE archive_set_digest=?1;");
+      bindDigest(db, remove.get(), 1, setDigest);
+      if (sqlite3_step(remove.get()) != SQLITE_DONE) {
+        throwDb(db, "Removing invalid archive membership cache");
+      }
+    }
+  }
+
   auto index = std::make_shared<VfsArchiveMemberIndex>(
-      memberCount, archiveCount, archiveCount == visibleDigests.size());
+      memberCount, archiveCount, manifestsComplete);
   auto members = prepare(db,
       "SELECT normalized_path FROM archive_members WHERE digest=?1;");
   for (const VfsDigest& digest : visibleDigests) {
@@ -666,6 +788,39 @@ std::shared_ptr<const VfsArchiveMemberIndex> reconcileArchiveManifests(
     }
   }
   state.archive_members = memberCount;
+
+  if (manifestsComplete) {
+    const std::vector<unsigned char> bits = index->serializedBits();
+    const VfsDigest bitsDigest = archiveMembershipCacheDigest(
+        index->bitCount(), archiveCount, memberCount, bits);
+    auto store = prepare(db,
+        "INSERT INTO archive_membership_cache("
+        "archive_set_digest,probe_count,bit_count,archive_count,member_count,"
+        "bits,bits_digest) VALUES(?1,?2,?3,?4,?5,?6,?7)"
+        " ON CONFLICT(archive_set_digest) DO UPDATE SET"
+        " probe_count=excluded.probe_count,bit_count=excluded.bit_count,"
+        " archive_count=excluded.archive_count,member_count=excluded.member_count,"
+        " bits=excluded.bits,bits_digest=excluded.bits_digest;");
+    bindDigest(db, store.get(), 1, setDigest);
+    sqlite3_bind_int64(store.get(), 2,
+                       VfsArchiveMemberIndex::probeCount());
+    sqlite3_bind_int64(store.get(), 3,
+                       static_cast<sqlite3_int64>(index->bitCount()));
+    sqlite3_bind_int64(store.get(), 4,
+                       static_cast<sqlite3_int64>(archiveCount));
+    sqlite3_bind_int64(store.get(), 5,
+                       static_cast<sqlite3_int64>(memberCount));
+    if (sqlite3_bind_blob(store.get(), 6, bits.data(),
+                          static_cast<int>(bits.size()),
+                          SQLITE_TRANSIENT) != SQLITE_OK) {
+      throwDb(db, "Binding archive membership cache bits");
+    }
+    bindDigest(db, store.get(), 7, bitsDigest);
+    if (sqlite3_step(store.get()) != SQLITE_DONE) {
+      throwDb(db, "Storing archive membership cache");
+    }
+    state.archive_membership_cache_bytes = bits.size();
+  }
   return index;
 }
 
@@ -722,13 +877,17 @@ VfsCatalogResult VfsCatalog::reconcileAndBuild(
     VfsCatalogProgress state;
 
     std::vector<Root> roots;
+    std::unordered_map<std::string, size_t> modIndexByRoot;
     const std::string dataRootKey = catalogRootIdentity(data_dir);
     const std::string overwriteRootKey = catalogRootIdentity(overwrite_dir);
     if (scan_base) {
       roots.push_back({dataRootKey, data_dir, "_base_game", true});
     }
-    for (const auto& [name, path] : mods) {
-      roots.push_back({catalogRootIdentity(path), path, name, false});
+    for (size_t index = 0; index < mods.size(); ++index) {
+      const auto& [name, path] = mods[index];
+      const std::string rootKey = catalogRootIdentity(path);
+      roots.push_back({rootKey, path, name, false});
+      modIndexByRoot.insert_or_assign(rootKey, index);
     }
     roots.push_back(
         {overwriteRootKey, overwrite_dir, "Overwrite", false});
@@ -837,6 +996,7 @@ VfsCatalogResult VfsCatalog::reconcileAndBuild(
           (static_cast<double>(state.elapsed_ms) / 1000.0);
       if (progress) progress(state);
     };
+    const auto providersStart = std::chrono::steady_clock::now();
     for (const Root& root : roots) {
       state.current_root = root.path;
       const std::string rootPrefix = fs::path(root.path).string();
@@ -1087,51 +1247,91 @@ VfsCatalogResult VfsCatalog::reconcileAndBuild(
       }
       providerRoots.push_back(std::move(providerRoot));
     }
+    state.provider_reconcile_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - providersStart)
+            .count());
 
+    const auto archivesStart = std::chrono::steady_clock::now();
     auto archiveMemberIndex = reconcileArchiveManifests(
         db.get(), archiveCandidates, visibleArchives, state);
+    state.archive_reconcile_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - archivesStart)
+            .count());
 
+    const auto duplicatesStart = std::chrono::steady_clock::now();
     std::vector<VfsCatalogDuplicate> duplicates;
-    auto overwriteRows = prepare(db.get(),
-        "SELECT relative_path,normalized_path,blake3 FROM catalog_files"
-        " WHERE root_key=?1 ORDER BY normalized_path;");
-    bindText(db.get(), overwriteRows.get(), 1, overwriteRootKey);
-    auto matchingProvider = prepare(db.get(),
-        "SELECT blake3 FROM catalog_files"
-        " WHERE root_key=?1 AND normalized_path=?2;");
-    while (sqlite3_step(overwriteRows.get()) == SQLITE_ROW) {
-      const auto* relative = reinterpret_cast<const char*>(
-          sqlite3_column_text(overwriteRows.get(), 0));
-      const auto* normalized = reinterpret_cast<const char*>(
-          sqlite3_column_text(overwriteRows.get(), 1));
-      const void* overwriteHash = sqlite3_column_blob(overwriteRows.get(), 2);
-      const int overwriteHashSize = sqlite3_column_bytes(overwriteRows.get(), 2);
-      if (relative == nullptr || normalized == nullptr || overwriteHash == nullptr ||
-          overwriteHashSize != BLAKE3_OUT_LEN) {
-        continue;
-      }
-      // Later providers have higher priority in the VFS tree, so report the
-      // highest-priority enabled mod that contains the same path.
-      for (auto mod = mods.rbegin(); mod != mods.rend(); ++mod) {
-        sqlite3_reset(matchingProvider.get());
-        sqlite3_clear_bindings(matchingProvider.get());
-        bindText(db.get(), matchingProvider.get(), 1,
-                 catalogRootIdentity(mod->second));
-        bindText(db.get(), matchingProvider.get(), 2, normalized);
-        if (sqlite3_step(matchingProvider.get()) != SQLITE_ROW) continue;
-        const void* modHash = sqlite3_column_blob(matchingProvider.get(), 0);
-        const int modHashSize = sqlite3_column_bytes(matchingProvider.get(), 0);
-        const bool identical = modHash != nullptr && modHashSize == BLAKE3_OUT_LEN &&
-            std::memcmp(overwriteHash, modHash, BLAKE3_OUT_LEN) == 0;
-        duplicates.push_back({relative, mod->first, mod->second,
-                              identical ? VfsDuplicateState::Identical
-                                        : VfsDuplicateState::Different});
-        break;
+    exec(db.get(), "DELETE FROM enabled_provider_priority;");
+    auto insertProvider = prepare(db.get(),
+        "INSERT INTO enabled_provider_priority(root_key,priority)"
+        " VALUES(?1,?2);");
+    for (const auto& [rootKey, index] : modIndexByRoot) {
+      sqlite3_reset(insertProvider.get());
+      sqlite3_clear_bindings(insertProvider.get());
+      bindText(db.get(), insertProvider.get(), 1, rootKey);
+      sqlite3_bind_int64(insertProvider.get(), 2,
+                         static_cast<sqlite3_int64>(index));
+      if (sqlite3_step(insertProvider.get()) != SQLITE_DONE) {
+        throwDb(db.get(), "Staging enabled provider priority");
       }
     }
+    insertProvider.reset();
+
+    // Resolve every Overwrite collision in one indexed join. The old nested
+    // loop canonicalized every mod path for every Overwrite file and issued
+    // millions of point queries on large profiles.
+    auto collisions = prepare(db.get(),
+        "SELECT candidate.normalized_path,candidate.blake3,"
+        " overwrite.relative_path,overwrite.blake3,enabled.root_key"
+        " FROM enabled_provider_priority AS enabled"
+        " JOIN catalog_files AS candidate"
+        " ON candidate.root_key=enabled.root_key"
+        " JOIN catalog_files AS overwrite"
+        " ON overwrite.root_key=?1"
+        " AND overwrite.normalized_path=candidate.normalized_path"
+        " ORDER BY candidate.normalized_path,enabled.priority DESC;");
+    bindText(db.get(), collisions.get(), 1, overwriteRootKey);
+    std::string previousNormalized;
+    while (sqlite3_step(collisions.get()) == SQLITE_ROW) {
+      const auto* normalized = reinterpret_cast<const char*>(
+          sqlite3_column_text(collisions.get(), 0));
+      const auto* relative = reinterpret_cast<const char*>(
+          sqlite3_column_text(collisions.get(), 2));
+      const auto* rootKey = reinterpret_cast<const char*>(
+          sqlite3_column_text(collisions.get(), 4));
+      if (normalized == nullptr || relative == nullptr || rootKey == nullptr ||
+          normalized == previousNormalized) {
+        continue;
+      }
+      previousNormalized = normalized;
+      const auto modIndex = modIndexByRoot.find(rootKey);
+      if (modIndex == modIndexByRoot.end()) continue;
+      const void* modHash = sqlite3_column_blob(collisions.get(), 1);
+      const int modHashSize = sqlite3_column_bytes(collisions.get(), 1);
+      const void* overwriteHash = sqlite3_column_blob(collisions.get(), 3);
+      const int overwriteHashSize = sqlite3_column_bytes(collisions.get(), 3);
+      const bool identical =
+          modHash != nullptr && modHashSize == BLAKE3_OUT_LEN &&
+          overwriteHash != nullptr && overwriteHashSize == BLAKE3_OUT_LEN &&
+          std::memcmp(overwriteHash, modHash, BLAKE3_OUT_LEN) == 0;
+      const auto& [modName, modPath] = mods[modIndex->second];
+      duplicates.push_back({relative, modName, modPath,
+                            identical ? VfsDuplicateState::Identical
+                                      : VfsDuplicateState::Different});
+    }
+    state.duplicate_scan_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - duplicatesStart)
+            .count());
 
     const VfsDigest profileRoot = calculateProfileRoot(providerRoots);
+    const auto commitStart = std::chrono::steady_clock::now();
     exec(db.get(), "COMMIT;");
+    state.commit_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - commitStart)
+            .count());
     state.current_file.clear();
     state.current_file_size = 0;
     reportProgress();

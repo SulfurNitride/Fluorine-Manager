@@ -1327,70 +1327,62 @@ void ModListViewActions::moveOverwriteContentsTo(const QString& absolutePath) co
 {
   ModInfo::Ptr const overwriteInfo = ModInfo::getOverwrite();
   const QString overwritePath = overwriteInfo->absolutePath();
-  const QDir overwriteDir(overwritePath);
   const QDir destDir(absolutePath);
-
-  // Recursively move every file from overwrite into the destination mod,
-  // preserving the directory structure.
-  bool successful = true;
-  int movedCount = 0;
-
-  QDirIterator iter(overwritePath, QDir::Files | QDir::NoDotAndDotDot,
-                    QDirIterator::Subdirectories);
-  while (iter.hasNext()) {
-    iter.next();
-    const QString relPath = overwriteDir.relativeFilePath(iter.filePath());
-    const QString destFile = destDir.filePath(relPath);
-
-    // Ensure destination subdirectory exists.
-    QDir().mkpath(QFileInfo(destFile).absolutePath());
-
-    // Remove existing file at destination (overwrite semantics).
-    if (QFile::exists(destFile)) {
-      QFile::remove(destFile);
-    }
-
-    if (!QFile::rename(iter.filePath(), destFile)) {
-      // Fallback: copy + delete (cross-filesystem).
-      if (!QFile::copy(iter.filePath(), destFile) || !QFile::remove(iter.filePath())) {
-        log::error("Failed to move {} -> {}", relPath, destFile);
-        successful = false;
-        break;
-      }
-    }
-    ++movedCount;
+  if (!QDir(overwritePath).exists() && !QDir().mkpath(overwritePath)) {
+    log::error("Overwrite directory does not exist and could not be created: '{}'",
+               overwritePath);
+    reportError(tr("Failed to access the Overwrite directory. Check the log for "
+                   "details."));
+    m_core.refresh();
+    return;
+  }
+  bool sourceHasFiles = false;
+  QDirIterator sourceIter(overwritePath, QDir::Files | QDir::Hidden | QDir::System |
+                                           QDir::NoDotAndDotDot,
+                          QDirIterator::Subdirectories);
+  while (sourceIter.hasNext()) {
+    sourceIter.next();
+    sourceHasFiles = true;
+    break;
   }
 
-  // Clean up empty directories left behind in overwrite.
-  // Sort by path length descending so leaf dirs are removed before parents.
-  if (movedCount > 0) {
-    QDirIterator dirIter(overwritePath, QDir::Dirs | QDir::NoDotAndDotDot,
-                         QDirIterator::Subdirectories);
-    QStringList dirs;
-    while (dirIter.hasNext()) {
-      dirs.append(dirIter.next());
-    }
-    std::sort(dirs.begin(), dirs.end(), [](const QString& a, const QString& b) {
-      return a.length() > b.length();
-    });
-    for (const auto& dir : dirs) {
-      QDir().rmdir(dir);  // Only removes if empty.
-    }
+  // Move the children rather than the Overwrite directory itself.  The
+  // recursive shellMove implementation removes an empty source directory on
+  // success, while the Overwrite root is a configured container that must be
+  // retained for future writes.
+  QStringList sourcePaths;
+  QStringList destinationPaths;
+  const QFileInfoList entries =
+      QDir(overwritePath).entryInfoList(QDir::AllEntries | QDir::Hidden |
+                                            QDir::System | QDir::NoDotAndDotDot);
+  sourcePaths.reserve(entries.size());
+  destinationPaths.reserve(entries.size());
+  for (const QFileInfo &entry : entries) {
+    sourcePaths.append(entry.absoluteFilePath());
+    destinationPaths.append(destDir.filePath(entry.fileName()));
   }
 
-  if (successful && movedCount > 0) {
+  const bool successful = sourcePaths.isEmpty() ||
+                          shellMove(sourcePaths, destinationPaths);
+
+  if (successful && sourceHasFiles) {
     // Track all files now in the target mod so future VFS writes go
     // back to this mod instead of creating new copies in Overwrite.
-    QDirIterator trackIter(absolutePath, QDir::Files | QDir::NoDotAndDotDot,
+    QDirIterator trackIter(absolutePath, QDir::Files | QDir::Hidden | QDir::System |
+                                             QDir::NoDotAndDotDot,
                            QDirIterator::Subdirectories);
     while (trackIter.hasNext()) {
       trackIter.next();
-      QString const relPath = destDir.relativeFilePath(trackIter.filePath());
+      const QString relPath = destDir.relativeFilePath(trackIter.filePath());
       m_core.trackOverwriteMove(relPath, absolutePath);
     }
     MessageDialog::showMessage(tr("Move successful."), m_parent);
   } else if (!successful) {
-    log::error("Move operation failed");
+    log::error("Move operation failed from '{}' to '{}'", overwritePath,
+               absolutePath);
+    reportError(tr("Failed to move Overwrite contents into \"%1\". "
+                   "Check the log for details; some files may have moved.")
+                    .arg(QFileInfo(absolutePath).fileName()));
   }
 
   m_core.refresh();

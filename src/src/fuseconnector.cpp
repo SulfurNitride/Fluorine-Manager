@@ -640,7 +640,9 @@ bool FuseConnector::mount(
                "catalog_loaded=%llu catalog_written=%llu catalog_deleted=%llu "
                "merkle_reused=%llu "
                "archives=%llu indexed=%llu reused=%llu members=%llu errors=%llu "
-               "archive_workers=%llu profile=%s\n",
+               "membership_cache_hits=%llu membership_cache_bytes=%llu "
+               "archive_workers=%llu providers_ms=%llu archives_ms=%llu "
+               "duplicates_ms=%llu commit_ms=%llu profile=%s\n",
                static_cast<unsigned long long>(finalProgress.files_scanned),
                static_cast<unsigned long long>(finalProgress.files_hashed),
                static_cast<unsigned long long>(finalProgress.bytes_hashed),
@@ -673,7 +675,17 @@ bool FuseConnector::mount(
                static_cast<unsigned long long>(finalProgress.archives_reused),
                static_cast<unsigned long long>(finalProgress.archive_members),
                static_cast<unsigned long long>(finalProgress.archive_errors),
+               static_cast<unsigned long long>(
+                   finalProgress.archive_membership_cache_hits),
+               static_cast<unsigned long long>(
+                   finalProgress.archive_membership_cache_bytes),
                static_cast<unsigned long long>(finalProgress.archive_workers),
+               static_cast<unsigned long long>(
+                   finalProgress.provider_reconcile_ms),
+               static_cast<unsigned long long>(
+                   finalProgress.archive_reconcile_ms),
+               static_cast<unsigned long long>(finalProgress.duplicate_scan_ms),
+               static_cast<unsigned long long>(finalProgress.commit_ms),
                digestPrefix(catalogResult.profile_root).c_str());
   m_baseFileCache = catalog.loadBaseSnapshot(m_dataDirPath);
   m_cachedDataDirPath = m_dataDirPath;
@@ -878,7 +890,17 @@ bool FuseConnector::mount(
 
 void FuseConnector::unmount()
 {
+  const auto clearBaseSnapshot = [this]() {
+    // The base snapshot is only a mount-time compatibility cache. It is not
+    // consulted by the live rebuild path, so retaining hundreds of thousands
+    // of cached path strings after unmount needlessly keeps their storage
+    // owned by FuseConnector across idle sessions.
+    std::vector<CachedBaseFile>().swap(m_baseFileCache);
+    m_cachedDataDirPath.clear();
+  };
+
   if (!m_mounted) {
+    clearBaseSnapshot();
     cleanupExternalMappings();
     clearIndexRootLocator();
     if (m_rootBuilderEnabled) {
@@ -1032,6 +1054,7 @@ void FuseConnector::unmount()
   }
 
   m_context.reset();
+  clearBaseSnapshot();
   m_mounted = false;
   setFuseMountPointForCrashCleanup(nullptr);
   if (m_sleepInhibitor != nullptr) {

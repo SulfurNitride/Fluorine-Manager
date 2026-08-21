@@ -1054,46 +1054,29 @@ bool ModList::dropLocalFiles(const ModListDropInfo& dropInfo, int row,
 
   for (const auto& localUrl : dropInfo.localUrls()) {
     QFileInfo const sourceInfo(localUrl.url.toLocalFile());
-    if (localUrl.originName.compare("overwrite", Qt::CaseInsensitive) == 0) {
-      bool needsMove = true;
-      if (sourceInfo.isDir()) {
-        for (const auto& dir : m_Organizer->managedGame()->getModMappings().keys()) {
-          QDir const overDir(m_Organizer->overwritePath());
-          if (sourceInfo.canonicalFilePath().compare(overDir.absoluteFilePath(dir),
-                                                     Qt::CaseInsensitive) == 0) {
-            needsMove = false;
+    const QString sourceFile = sourceInfo.canonicalFilePath();
+    const QFileInfo targetInfo(modDir.absoluteFilePath(localUrl.relativePath));
+    sourceList << sourceFile;
+    targetList << targetInfo.absoluteFilePath();
 
-            QDirIterator dirIter(overDir.absoluteFilePath(dir),
-                                 QDir::AllDirs | QDir::Files | QDir::NoDotAndDotDot);
-            while (dirIter.hasNext()) {
-              auto entry         = dirIter.nextFileInfo();
-              QString const sourceFile = entry.canonicalFilePath();
-
-              QFileInfo const targetInfo(modDir.absoluteFilePath(
-                  overDir.relativeFilePath(entry.absoluteFilePath())));
-              sourceList << sourceFile;
-              targetList << targetInfo.absoluteFilePath();
-              relativePathList << QPair<QString, QString>(localUrl.relativePath,
-                                                          localUrl.originName);
-            }
-          }
-        }
-      }
-      if (needsMove) {
-        QString const sourceFile = sourceInfo.canonicalFilePath();
-
-        QFileInfo const targetInfo(modDir.absoluteFilePath(localUrl.relativePath));
-        sourceList << sourceFile;
-        targetList << targetInfo.absoluteFilePath();
-        relativePathList << QPair<QString, QString>(localUrl.relativePath,
+    // The move helper recursively merges directories.  Record the actual
+    // destination path for every file before moving so MainWindow can update
+    // origins and Overwrite tracking correctly for folder drops too.
+    if (sourceInfo.isDir() && !sourceInfo.isSymLink()) {
+      QDirIterator dirIter(sourceFile, QDir::Files | QDir::Hidden | QDir::System |
+                                         QDir::NoDotAndDotDot,
+                           QDirIterator::Subdirectories);
+      const QDir sourceDir(sourceFile);
+      while (dirIter.hasNext()) {
+        const QFileInfo entry = dirIter.nextFileInfo();
+        const QString relative = sourceDir.relativeFilePath(entry.filePath());
+        const QString targetRelative = localUrl.relativePath.isEmpty()
+                                           ? relative
+                                           : localUrl.relativePath + "/" + relative;
+        relativePathList << QPair<QString, QString>(QDir::cleanPath(targetRelative),
                                                     localUrl.originName);
       }
     } else {
-      QString const sourceFile = sourceInfo.canonicalFilePath();
-
-      QFileInfo const targetInfo(modDir.absoluteFilePath(localUrl.relativePath));
-      sourceList << sourceFile;
-      targetList << targetInfo.absoluteFilePath();
       relativePathList << QPair<QString, QString>(localUrl.relativePath,
                                                   localUrl.originName);
     }
@@ -1101,7 +1084,13 @@ bool ModList::dropLocalFiles(const ModListDropInfo& dropInfo, int row,
 
   if (sourceList.count()) {
     if (!shellMove(sourceList, targetList)) {
-      log::debug("Failed to move file (error {})", ::GetLastError());
+      for (int i = 0; i < sourceList.size(); ++i) {
+        log::error("Failed to move '{}' to '{}'", sourceList.at(i),
+                   targetList.at(i));
+      }
+      reportError(tr("Failed to move the selected file(s) into mod \"%1\". "
+                     "Check the log for details; some files may have moved.")
+                      .arg(modInfo->name()));
       return false;
     }
   }
