@@ -1,6 +1,7 @@
 #include "fuseconnector.h"
 
 #include "memorydiagnostics.h"
+#include "mountpathutils.h"
 #include "settings.h"
 #include "sleepinhibitor.h"
 #include "vfs/vfscatalog.h"
@@ -74,28 +75,6 @@ std::string digestPrefix(const VfsDigest& digest)
   return result;
 }
 
-std::string decodeProcMountField(const std::string& in)
-{
-  std::string out;
-  out.reserve(in.size());
-
-  for (size_t i = 0; i < in.size();) {
-    if (in[i] == '\\' && i + 3 < in.size() && std::isdigit(in[i + 1]) &&
-        std::isdigit(in[i + 2]) && std::isdigit(in[i + 3])) {
-      const std::string oct = in.substr(i + 1, 3);
-      const int value       = std::stoi(oct, nullptr, 8);
-      out.push_back(static_cast<char>(value));
-      i += 4;
-      continue;
-    }
-
-    out.push_back(in[i]);
-    ++i;
-  }
-
-  return out;
-}
-
 bool isMountPoint(const QString& path)
 {
   QFile mounts(QStringLiteral("/proc/mounts"));
@@ -103,22 +82,7 @@ bool isMountPoint(const QString& path)
     return false;
   }
 
-  const auto mountPoint = QDir::cleanPath(path);
-  while (!mounts.atEnd()) {
-    const auto line  = QString::fromUtf8(mounts.readLine()).trimmed();
-    const auto parts = line.split(' ', Qt::SkipEmptyParts);
-    if (parts.size() < 2) {
-      continue;
-    }
-
-    const QString current = QString::fromStdString(
-        decodeProcMountField(parts[1].toStdString()));
-    if (QDir::cleanPath(current) == mountPoint) {
-      return true;
-    }
-  }
-
-  return false;
+  return mountTableContainsPath(QString::fromUtf8(mounts.readAll()), path);
 }
 
 bool runUnmountCommand(const QString& program, const QStringList& args)
@@ -2009,9 +1973,13 @@ static void cleanupStaleMo2Mounts(const QString& keepPath)
       continue;
     }
 
-    const QString mp = QDir::cleanPath(QString::fromStdString(
-        decodeProcMountField(parts[1].toStdString())));
-    if (mp == cleanKeep) {
+    QString mp = parts[1];
+    mp.replace(QStringLiteral("\\040"), QStringLiteral(" "));
+    mp.replace(QStringLiteral("\\011"), QStringLiteral("\t"));
+    mp.replace(QStringLiteral("\\012"), QStringLiteral("\n"));
+    mp.replace(QStringLiteral("\\134"), QStringLiteral("\\"));
+    mp = QDir::cleanPath(mp);
+    if (mountPathsEquivalent(mp, cleanKeep)) {
       continue;
     }
 

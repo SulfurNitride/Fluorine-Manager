@@ -279,6 +279,28 @@ target_link_libraries(test_vfs_descriptor_cleanup PRIVATE
 add_test(NAME test_vfs_descriptor_cleanup COMMAND test_vfs_descriptor_cleanup)
 
 # ---------------------------------------------------------------------------
+# FUSE mount path alias detection used by stale-mount recovery
+# ---------------------------------------------------------------------------
+add_executable(test_mount_path_utils EXCLUDE_FROM_ALL
+    test_mount_path_utils.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/mountpathutils.cpp
+)
+set_target_properties(test_mount_path_utils PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_mount_path_utils PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_mount_path_utils PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_mount_path_utils COMMAND test_mount_path_utils)
+
+# ---------------------------------------------------------------------------
 # Immutable runtime lookup/metadata index tests
 # ---------------------------------------------------------------------------
 add_executable(test_vfs_runtime_index EXCLUDE_FROM_ALL
@@ -463,7 +485,8 @@ add_custom_target(fluorine-tests
             test_heroicjson test_protondetection
             test_external_dir_mapping test_vfs_file_ops
             test_shell_operations
-            test_vfs_descriptor_cleanup test_vfs_runtime_index
+            test_vfs_descriptor_cleanup test_mount_path_utils
+            test_vfs_runtime_index
             test_gamebryo_save_compression
             test_game_save_migration
             test_vfs_catalog test_vfs_index
