@@ -93,3 +93,43 @@ TEST(VfsRuntimeIndex, RootCreateDoesNotRemoveBaseSiblings)
   EXPECT_EQ(index->lookup(1, "runtime.log").source,
             VfsLookupSource::Overlay);
 }
+
+TEST(VfsRuntimeIndex, CaseOnlyProviderOverridePreservesListedSpelling)
+{
+  VfsTree tree;
+  tree.root.is_directory = true;
+  tree.root.insertFile({"Interface", "Compass.swf"},
+                       "/base/Interface/Compass.swf", 11,
+                       std::chrono::system_clock::time_point{}, "Base", true,
+                       0644);
+  tree.root.insertFile({"interface", "compass.swf"},
+                       "/mods/UI/interface/compass.swf", 22,
+                       std::chrono::system_clock::time_point{}, "UI", false,
+                       0644);
+  tree.file_count = 1;
+  tree.dir_count = 2;
+
+  const VfsNode* winner = tree.root.resolve({"INTERFACE", "COMPASS.SWF"});
+  ASSERT_NE(winner, nullptr);
+  ASSERT_FALSE(winner->is_directory);
+  EXPECT_EQ(winner->file_info.real_path, "/mods/UI/interface/compass.swf");
+  EXPECT_EQ(winner->file_info.origin, "UI");
+
+  const auto rootEntries = tree.root.listChildren();
+  ASSERT_EQ(rootEntries.size(), 1u);
+  EXPECT_EQ(rootEntries.front().first, "Interface");
+  const auto interfaceEntries = rootEntries.front().second->listChildren();
+  ASSERT_EQ(interfaceEntries.size(), 1u);
+  EXPECT_EQ(interfaceEntries.front().first, "Compass.swf");
+
+  InodeTable inodes;
+  const auto index = VfsRuntimeIndex::build(tree, inodes);
+  const auto interface = index->lookup(1, "interface");
+  ASSERT_EQ(interface.source, VfsLookupSource::Base);
+  ASSERT_TRUE(interface.node.has_value());
+  const auto compass = index->lookup(interface.node->ino, "compass.swf");
+  ASSERT_EQ(compass.source, VfsLookupSource::Base);
+  ASSERT_TRUE(compass.node.has_value());
+  EXPECT_EQ(compass.node->virtual_path, "Interface/Compass.swf");
+  EXPECT_EQ(compass.node->real_path, "/mods/UI/interface/compass.swf");
+}

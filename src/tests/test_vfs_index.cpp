@@ -96,7 +96,8 @@ struct Sample
                          std::chrono::system_clock::time_point(
                              std::chrono::seconds(15)),
                          "_base_game", true, 0444, digest(8));
-    // Same normalized key, later provider wins and its display spelling wins.
+    // Same normalized key: later provider content wins, while the first
+    // established display spelling remains case-preserved.
     tree.root.insertFile({"textures", "stone.dds"},
                          (mod / "textures" / "stone.dds").string(), 3,
                          std::chrono::system_clock::time_point(

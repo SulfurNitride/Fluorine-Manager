@@ -41,6 +41,9 @@ struct CachedBaseFile
 struct VfsDirInfo
 {
   std::unordered_map<std::string, std::unique_ptr<VfsNode>> children;
+  // Case-preserving names keyed by the case-insensitive lookup key. The first
+  // spelling survives later provider overwrites, matching Windows replacement
+  // behavior while children still hold the highest-priority winning nodes.
   std::unordered_map<std::string, std::string> display_names;
 };
 

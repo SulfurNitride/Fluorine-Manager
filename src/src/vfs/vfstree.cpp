@@ -290,7 +290,11 @@ void VfsNode::insertFile(const std::vector<std::string>& components,
     }
 
     const std::string key = normalizeForLookup(part);
-    current->dir_info.display_names[key] = part;
+    // Replacing an existing entry through a differently-cased path does not
+    // rename that entry on a case-insensitive Windows filesystem. Preserve the
+    // spelling established by the first provider while still replacing the
+    // node below with the higher-priority provider's content.
+    current->dir_info.display_names.try_emplace(key, part);
 
     if (i + 1 == components.size()) {
       auto fileNode              = std::make_unique<VfsNode>();
@@ -332,7 +336,10 @@ void VfsNode::insertDirectory(const std::vector<std::string>& components)
     }
 
     const std::string key = normalizeForLookup(part);
-    current->dir_info.display_names[key] = part;
+    // Merged directories follow the same case-preserving rule as files: a
+    // later provider may add/replace children, but merely using another case
+    // does not rename the already-visible directory entry.
+    current->dir_info.display_names.try_emplace(key, part);
 
     auto it = current->dir_info.children.find(key);
     if (it == current->dir_info.children.end() || !it->second->is_directory) {
