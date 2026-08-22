@@ -17,6 +17,8 @@
 #include <lz4.h>
 #include <zlib.h>
 
+#include <algorithm>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -24,6 +26,20 @@
 #include "imoinfo.h"
 
 #define CHUNK 16384
+
+namespace
+{
+constexpr uint16_t COMPRESSION_NONE         = 0;
+constexpr uint16_t COMPRESSION_ZLIB         = 1;
+constexpr uint16_t COMPRESSION_LZ4          = 2;
+constexpr uint16_t COMPRESSION_CHUNKED_ZLIB = 3;
+
+bool isCompressed(uint16_t type)
+{
+  return type == COMPRESSION_ZLIB || type == COMPRESSION_LZ4 ||
+         type == COMPRESSION_CHUNKED_ZLIB;
+}
+}
 
 GamebryoSaveGame::GamebryoSaveGame(QString const& file, GameGamebryo const* game,
                                    bool const lightEnabled, bool const mediumEnabled)
@@ -98,7 +114,7 @@ GamebryoSaveGame::FileWrapper::FileWrapper(QString const& filepath,
                                            QString const& expected)
     : m_File(filepath), m_HasFieldMarkers(false),
       m_PluginString(StringType::TYPE_WSTRING),
-      m_PluginStringFormat(StringFormat::UTF8), m_NextChunk(0)
+      m_PluginStringFormat(StringFormat::UTF8)
 {
   if (!m_File.open(QIODevice::ReadOnly)) {
     throw std::runtime_error(
@@ -139,17 +155,23 @@ void GamebryoSaveGame::FileWrapper::setPluginStringFormat(StringFormat type)
 void GamebryoSaveGame::FileWrapper::readQDataStream(QDataStream& data, void* buff,
                                                     std::size_t length)
 {
-  int read    = data.readRawData(static_cast<char*>(buff), static_cast<int>(length));
-  bool result = true;
-  if (read != length && m_CompressionType == 1) {
-    bool result = readNextChunk();
-    if (result) {
-      read += data.readRawData(static_cast<char*>(buff) + read,
-                               static_cast<int>(length - read));
+  auto* output         = static_cast<char*>(buff);
+  std::size_t totalRead = 0;
+  QDataStream* current  = &data;
+
+  while (totalRead < length) {
+    const std::size_t remaining = length - totalRead;
+    const int request = static_cast<int>(std::min<std::size_t>(
+        remaining, static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    const int count = current->readRawData(output + totalRead, request);
+    if (count > 0) {
+      totalRead += static_cast<std::size_t>(count);
+      continue;
     }
-  }
-  if (read != length || !result) {
-    throw std::runtime_error("unexpected end of file");
+    if (m_CompressionType != COMPRESSION_CHUNKED_ZLIB || !readNextChunk()) {
+      throw std::runtime_error("unexpected end of compressed save data");
+    }
+    current = &compressedData();
   }
 }
 
@@ -163,17 +185,31 @@ void GamebryoSaveGame::FileWrapper::readQDataStream(QDataStream& data, T& value)
 void GamebryoSaveGame::FileWrapper::skipQDataStream(QDataStream& data,
                                                     std::size_t length)
 {
-  int skip    = data.skipRawData(static_cast<int>(length));
-  bool result = true;
-  if (skip != length && m_CompressionType == 1) {
-    result = readNextChunk();
-    if (result) {
-      skip += data.skipRawData(static_cast<int>(length - skip));
+  std::size_t totalSkipped = 0;
+  QDataStream* current     = &data;
+
+  while (totalSkipped < length) {
+    const std::size_t remaining = length - totalSkipped;
+    const int request = static_cast<int>(std::min<std::size_t>(
+        remaining, static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    const int count = current->skipRawData(request);
+    if (count > 0) {
+      totalSkipped += static_cast<std::size_t>(count);
+      continue;
     }
+    if (m_CompressionType != COMPRESSION_CHUNKED_ZLIB || !readNextChunk()) {
+      throw std::runtime_error("unexpected end of compressed save data");
+    }
+    current = &compressedData();
   }
-  if (skip != length || !result) {
-    throw std::runtime_error("unexpected end of file");
+}
+
+QDataStream& GamebryoSaveGame::FileWrapper::compressedData()
+{
+  if (m_Data == nullptr || m_Data->device() == nullptr) {
+    throw std::runtime_error("compressed save data is unavailable");
   }
+  return *m_Data;
 }
 
 template <>
@@ -211,15 +247,15 @@ void GamebryoSaveGame::FileWrapper::read<QString>(QString& value)
       value = QString::fromUtf8(buffer.constData());
     else
       value = QString::fromLocal8Bit(buffer.constData());
-  } else if (m_CompressionType == 1 || m_CompressionType == 2) {
+  } else if (isCompressed(m_CompressionType)) {
     unsigned short length;
     if (m_PluginString == StringType::TYPE_BSTRING ||
         m_PluginString == StringType::TYPE_BZSTRING) {
       unsigned char len;
-      readQDataStream(*m_Data, len);
+      readQDataStream(compressedData(), len);
       length = m_PluginString == StringType::TYPE_BZSTRING ? len + 1 : len;
     } else {
-      readQDataStream(*m_Data, length);
+      readQDataStream(compressedData(), length);
     }
 
     if (m_HasFieldMarkers) {
@@ -229,14 +265,14 @@ void GamebryoSaveGame::FileWrapper::read<QString>(QString& value)
     QByteArray buffer;
     buffer.resize(length);
 
-    readQDataStream(*m_Data, buffer.data(),
+    readQDataStream(compressedData(), buffer.data(),
                     m_PluginString == StringType::TYPE_BZSTRING ? length - 1 : length);
 
     if (m_PluginString == StringType::TYPE_BZSTRING)
       buffer[length - 1] = '\0';
 
     if (m_HasFieldMarkers) {
-      m_Data->skipRawData(1);
+      skipQDataStream(compressedData(), 1);
     }
 
     if (m_PluginStringFormat == StringFormat::UTF8)
@@ -289,50 +325,72 @@ void GamebryoSaveGame::FileWrapper::setCompressionType(uint16_t compressionType)
   m_CompressionType = compressionType;
 }
 
+void GamebryoSaveGame::FileWrapper::setChunkedCompression()
+{
+  m_CompressionType = COMPRESSION_CHUNKED_ZLIB;
+}
+
 void GamebryoSaveGame::FileWrapper::closeCompressedData()
 {
-  if (m_CompressionType == 0) {
-  } else if (m_CompressionType == 1 || m_CompressionType == 2) {
-    m_NextChunk        = 0;
-    m_UncompressedSize = 0;
-    m_Data->device()->close();
-    delete m_Data;
-  } else
-    MOBase::log::warn("Please create an issue on the MO github labeled \"Found unknown "
-                      "Compressed\" with your savefile attached");
+  m_NextChunk        = 0;
+  m_UncompressedSize = 0;
+  m_Data.reset();
 }
 
 bool GamebryoSaveGame::FileWrapper::openCompressedData(int bytesToIgnore)
 {
-  if (m_CompressionType == 0) {
+  if (m_CompressionType == COMPRESSION_NONE) {
     if (bytesToIgnore > 0)  // Just to make certain
       skip<char>(bytesToIgnore);
     return false;
-  } else if (m_CompressionType == 1) {
+  } else if (m_CompressionType == COMPRESSION_CHUNKED_ZLIB) {
     read(m_NextChunk);
     read(m_UncompressedSize);
-    QByteArray placeholder;
-    m_Data      = new QDataStream(placeholder);
-    bool result = readNextChunk();
-    if (result)
-      skipQDataStream(*m_Data, bytesToIgnore);
-    return result;
-  } else if (m_CompressionType == 2) {
+    if (!readNextChunk()) {
+      throw std::runtime_error("invalid chunked zlib save data");
+    }
+    skipQDataStream(compressedData(), bytesToIgnore);
+    return true;
+  } else if (m_CompressionType == COMPRESSION_ZLIB ||
+             m_CompressionType == COMPRESSION_LZ4) {
     uint32_t uncompressedSize;
     read(uncompressedSize);
     uint32_t compressedSize;
     read(compressedSize);
+    const qint64 remaining = m_File.size() - m_File.pos();
+    if (uncompressedSize == 0 || compressedSize == 0 ||
+        compressedSize > static_cast<uint64_t>(std::max<qint64>(remaining, 0)) ||
+        uncompressedSize > static_cast<uint64_t>(std::numeric_limits<int>::max()) ||
+        compressedSize > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+      throw std::runtime_error("invalid compressed save block size");
+    }
+
     QByteArray compressed;
-    compressed.resize(compressedSize);
+    compressed.resize(static_cast<qsizetype>(compressedSize));
     read(compressed.data(), compressedSize);
     QByteArray decompressed;
-    decompressed.resize(uncompressedSize);
-    LZ4_decompress_safe_partial(compressed.data(), decompressed.data(), compressedSize,
-                                uncompressedSize, uncompressedSize);
-    compressed.clear();
+    decompressed.resize(static_cast<qsizetype>(uncompressedSize));
 
-    m_Data = new QDataStream(decompressed);
-    skipQDataStream(*m_Data, bytesToIgnore);
+    if (m_CompressionType == COMPRESSION_ZLIB) {
+      uLongf decodedSize = static_cast<uLongf>(uncompressedSize);
+      const int result = ::uncompress(
+          reinterpret_cast<Bytef*>(decompressed.data()), &decodedSize,
+          reinterpret_cast<const Bytef*>(compressed.constData()),
+          static_cast<uLong>(compressedSize));
+      if (result != Z_OK || decodedSize != uncompressedSize) {
+        throw std::runtime_error("invalid zlib save data");
+      }
+    } else {
+      const int decodedSize = LZ4_decompress_safe(
+          compressed.constData(), decompressed.data(),
+          static_cast<int>(compressedSize), static_cast<int>(uncompressedSize));
+      if (decodedSize != static_cast<int>(uncompressedSize)) {
+        throw std::runtime_error("invalid LZ4 save data");
+      }
+    }
+
+    m_Data = std::make_unique<QDataStream>(decompressed);
+    skipQDataStream(compressedData(), bytesToIgnore);
 
     return true;
   } else {
@@ -349,31 +407,35 @@ bool GamebryoSaveGame::FileWrapper::readNextChunk()
   std::unique_ptr<char[]> inBuffer  = std::make_unique<char[]>(CHUNK);
   std::unique_ptr<char[]> outBuffer = std::make_unique<char[]>(CHUNK);
   QByteArray finalData;
-  m_Data->device()->close();
-  delete m_Data;
+  m_Data.reset();
   z_stream stream{};
+  bool inflateInitialized = false;
   try {
     stream.zalloc   = Z_NULL;
     stream.zfree    = Z_NULL;
     stream.opaque   = Z_NULL;
     stream.avail_in = 0;
     stream.next_in  = Z_NULL;
-    if (m_NextChunk >= m_File.size() || finalData.size() == m_UncompressedSize)
+    if (m_NextChunk >= static_cast<uint64_t>(m_File.size()) ||
+        finalData.size() == static_cast<qint64>(m_UncompressedSize))
       return false;
-    m_File.seek(m_NextChunk);
+    if (!m_File.seek(static_cast<qint64>(m_NextChunk))) {
+      return false;
+    }
     int zlibRet = inflateInit2(&stream, 15 + 32);
     if (zlibRet != Z_OK) {
       return false;
     }
+    inflateInitialized = true;
     do {
-      stream.avail_in = m_File.read(inBuffer.get(), CHUNK);
-      read += stream.avail_in;
-      if (!m_File.isReadable()) {
-        (void)inflateEnd(&stream);
+      const qint64 bytesRead = m_File.read(inBuffer.get(), CHUNK);
+      if (bytesRead <= 0) {
+        inflateEnd(&stream);
+        inflateInitialized = false;
         return false;
       }
-      if (stream.avail_in == 0)
-        break;
+      stream.avail_in = static_cast<uInt>(bytesRead);
+      read += static_cast<uint64_t>(bytesRead);
       stream.next_in = reinterpret_cast<Bytef*>(inBuffer.get());
       do {
         stream.avail_out = CHUNK;
@@ -381,6 +443,8 @@ bool GamebryoSaveGame::FileWrapper::readNextChunk()
         zlibRet          = inflate(&stream, Z_NO_FLUSH);
         if ((zlibRet != Z_OK) && (zlibRet != Z_STREAM_END) &&
             (zlibRet != Z_BUF_ERROR)) {
+          inflateEnd(&stream);
+          inflateInitialized = false;
           return false;
         }
         have = CHUNK - stream.avail_out;
@@ -389,14 +453,20 @@ bool GamebryoSaveGame::FileWrapper::readNextChunk()
       read -= stream.avail_in;
     } while (zlibRet != Z_STREAM_END);
     inflateEnd(&stream);
+    inflateInitialized = false;
     uint64_t remainder = (m_NextChunk + read) % 16;
     uint64_t next      = m_NextChunk + read + 16 - (remainder == 0 ? 16 : remainder);
     m_NextChunk        = next;
   } catch (const std::exception&) {
-    inflateEnd(&stream);
+    if (inflateInitialized) {
+      inflateEnd(&stream);
+    }
     return false;
   }
-  m_Data = new QDataStream(finalData);
+  if (finalData.isEmpty()) {
+    return false;
+  }
+  m_Data = std::make_unique<QDataStream>(finalData);
   return true;
 }
 
@@ -408,12 +478,12 @@ uint8_t GamebryoSaveGame::FileWrapper::readChar(int bytesToIgnore)
     uint8_t version;
     read(version);
     return version;
-  } else if (m_CompressionType == 1 || m_CompressionType == 2) {
+  } else if (isCompressed(m_CompressionType)) {
     // decompression already done by readSaveGameVersion
-    skipQDataStream(*m_Data, bytesToIgnore);
+    skipQDataStream(compressedData(), bytesToIgnore);
 
     uint8_t version;
-    readQDataStream(*m_Data, version);
+    readQDataStream(compressedData(), version);
     return version;
 
   } else {
@@ -431,12 +501,12 @@ uint16_t GamebryoSaveGame::FileWrapper::readShort(int bytesToIgnore)
     uint16_t size;
     read(size);
     return size;
-  } else if (m_CompressionType == 1 || m_CompressionType == 2) {
+  } else if (isCompressed(m_CompressionType)) {
     // decompression already done by readSaveGameVersion
-    skipQDataStream(*m_Data, bytesToIgnore);
+    skipQDataStream(compressedData(), bytesToIgnore);
 
     uint16_t size;
-    readQDataStream(*m_Data, size);
+    readQDataStream(compressedData(), size);
     return size;
   } else {
     MOBase::log::warn("Please create an issue on the MO github labeled \"Found unknown "
@@ -453,12 +523,12 @@ uint32_t GamebryoSaveGame::FileWrapper::readInt(int bytesToIgnore)
     uint32_t size;
     read(size);
     return size;
-  } else if (m_CompressionType == 1 || m_CompressionType == 2) {
+  } else if (isCompressed(m_CompressionType)) {
     // decompression already done by readSaveGameVersion
-    skipQDataStream(*m_Data, bytesToIgnore);
+    skipQDataStream(compressedData(), bytesToIgnore);
 
     uint32_t size;
-    readQDataStream(*m_Data, size);
+    readQDataStream(compressedData(), size);
     return size;
   } else {
     MOBase::log::warn("Please create an issue on the MO github labeled \"Found unknown "
@@ -475,12 +545,12 @@ uint64_t GamebryoSaveGame::FileWrapper::readLong(int bytesToIgnore)
     uint64_t size;
     read(size);
     return size;
-  } else if (m_CompressionType == 1 || m_CompressionType == 2) {
+  } else if (isCompressed(m_CompressionType)) {
     // decompression already done by readSaveGameVersion
-    skipQDataStream(*m_Data, bytesToIgnore);
+    skipQDataStream(compressedData(), bytesToIgnore);
 
     uint64_t size;
-    readQDataStream(*m_Data, size);
+    readQDataStream(compressedData(), size);
     return size;
   } else {
     MOBase::log::warn("Please create an issue on the MO github labeled \"Found unknown "
@@ -497,12 +567,12 @@ float_t GamebryoSaveGame::FileWrapper::readFloat(int bytesToIgnore)
     float_t value;
     read(value);
     return value;
-  } else if (m_CompressionType == 1 || m_CompressionType == 2) {
+  } else if (isCompressed(m_CompressionType)) {
     // decompression already done by readSaveGameVersion
-    skipQDataStream(*m_Data, bytesToIgnore);
+    skipQDataStream(compressedData(), bytesToIgnore);
 
     float_t value;
-    readQDataStream(*m_Data, value);
+    readQDataStream(compressedData(), value);
     return value;
   } else {
     MOBase::log::warn("Please create an issue on the MO github labeled \"Found unknown "
@@ -520,10 +590,10 @@ QStringList GamebryoSaveGame::FileWrapper::readPlugins(int bytesToIgnore, int ex
     uint8_t count;
     read(count);
     return readPluginData(count, extraData, corePlugins);
-  } else if (m_CompressionType == 1 || m_CompressionType == 2) {
-    skipQDataStream(*m_Data, bytesToIgnore);
+  } else if (isCompressed(m_CompressionType)) {
+    skipQDataStream(compressedData(), bytesToIgnore);
     uint8_t count;
-    readQDataStream(*m_Data, count);
+    readQDataStream(compressedData(), count);
     return readPluginData(count, extraData, corePlugins);
   }
   return {};
@@ -539,10 +609,10 @@ GamebryoSaveGame::FileWrapper::readLightPlugins(int bytesToIgnore, int extraData
     uint16_t count;
     read(count);
     return readPluginData(count, extraData, corePlugins);
-  } else if (m_CompressionType == 1 || m_CompressionType == 2) {
-    skipQDataStream(*m_Data, bytesToIgnore);
+  } else if (isCompressed(m_CompressionType)) {
+    skipQDataStream(compressedData(), bytesToIgnore);
     uint16_t count;
-    readQDataStream(*m_Data, count);
+    readQDataStream(compressedData(), count);
     return readPluginData(count, extraData, corePlugins);
   }
   return {};
@@ -552,12 +622,12 @@ QStringList
 GamebryoSaveGame::FileWrapper::readMediumPlugins(int bytesToIgnore, int extraData,
                                                  const QStringList& corePlugins)
 {
-  if (m_CompressionType != 1) {
+  if (m_CompressionType != COMPRESSION_CHUNKED_ZLIB) {
     return {};
   } else {
-    skipQDataStream(*m_Data, bytesToIgnore);
+    skipQDataStream(compressedData(), bytesToIgnore);
     uint32_t count;
-    readQDataStream(*m_Data, count);
+    readQDataStream(compressedData(), count);
     return readPluginData(count, extraData, corePlugins);
   }
 }
@@ -581,7 +651,7 @@ QStringList GamebryoSaveGame::FileWrapper::readPluginData(uint32_t count, int ex
       bool isCustomPlugin;
       if (extraData) {
         if (extraData > 1) {
-          readQDataStream(*m_Data, isCustomPlugin);
+          readQDataStream(compressedData(), isCustomPlugin);
         } else {
           isCustomPlugin = !corePlugins.contains(name);
         }
@@ -592,9 +662,9 @@ QStringList GamebryoSaveGame::FileWrapper::readPluginData(uint32_t count, int ex
           uint8_t isCreation;
           read(creationName);
           read(creationId);
-          readQDataStream(*m_Data, flagsSize);
-          skipQDataStream(*m_Data, flagsSize);
-          readQDataStream(*m_Data, isCreation);
+          readQDataStream(compressedData(), flagsSize);
+          skipQDataStream(compressedData(), flagsSize);
+          readQDataStream(compressedData(), isCreation);
         }
       }
     }

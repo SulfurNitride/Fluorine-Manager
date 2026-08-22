@@ -11,6 +11,7 @@
 #include <QStringList>
 
 #include <cstdint>
+#include <memory>
 #include <stddef.h>
 #include <stdexcept>
 
@@ -158,6 +159,11 @@ protected:
     /* Sets the compression type. */
     void setCompressionType(uint16_t type);
 
+    /* Starfield stores a sequence of independently compressed zlib chunks.
+     * Its on-disk value historically overlapped Skyrim's single-stream zlib
+     * type, so keep the modes distinct inside the shared parser. */
+    void setChunkedCompression();
+
     /* uncompress the begining of the compressed block */
     bool openCompressedData(int bytesToIgnore = 0);
 
@@ -194,12 +200,12 @@ protected:
 
   private:
     QFile m_File;
-    uint64_t m_NextChunk;
-    uint64_t m_UncompressedSize;
+    uint64_t m_NextChunk = 0;
+    uint64_t m_UncompressedSize = 0;
     bool m_HasFieldMarkers;
     StringType m_PluginString;
     StringFormat m_PluginStringFormat;
-    QDataStream* m_Data;
+    std::unique_ptr<QDataStream> m_Data;
     uint16_t m_CompressionType = 0;
 
   private:
@@ -209,6 +215,8 @@ protected:
     void readQDataStream(QDataStream& data, void* buff, std::size_t length);
 
     void skipQDataStream(QDataStream& data, std::size_t length);
+
+    QDataStream& compressedData();
 
     QStringList readPluginData(uint32_t count, int extraData,
                                const QStringList corePlugins);
