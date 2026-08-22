@@ -205,6 +205,16 @@ struct Mo2FsContext
   std::atomic<uint64_t> read_bytes{0};
   std::atomic<uint64_t> write_bytes{0};
   std::atomic<uint64_t> cow_write_count{0};
+  // Opt-in streamed-read diagnostics for audio assets and audio archives.
+  // Normal reads remain zero-copy. When FLUORINE_VFS_TRACE_AUDIO_READS is set,
+  // matching reads use pread() so requested and actual byte counts can be
+  // compared and short/error replies can be observed precisely.
+  std::atomic<uint64_t> audio_trace_read_count{0};
+  std::atomic<uint64_t> audio_trace_short_read_count{0};
+  std::atomic<uint64_t> audio_trace_error_count{0};
+  std::atomic<uint64_t> audio_trace_bytes_requested{0};
+  std::atomic<uint64_t> audio_trace_bytes_returned{0};
+  std::atomic<uint64_t> audio_trace_log_count{0};
   // CPU snapshot from previous stats tick (microseconds, from getrusage).
   // Used to compute per-tick CPU delta so we can distinguish disk-bound vs
   // CPU-bound slowness in the VFS layer.
@@ -255,6 +265,7 @@ struct Mo2FsContext
   bool disable_no_opendir = false;
   bool readdirplus_enabled = false;
   bool zero_file_flags = false;
+  bool trace_audio_reads = false;
 
   // When true, mo2_lookup inserts phantom directories for missing path
   // components that look like directories (no dot).  Needed by Starfield

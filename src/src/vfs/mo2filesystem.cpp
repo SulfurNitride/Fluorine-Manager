@@ -19,6 +19,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #if __has_include(<linux/msdos_fs.h>)
 #include <linux/msdos_fs.h>
@@ -47,6 +48,7 @@ double attrCacheSeconds(const Mo2FsContext* ctx) { return ctx->cache_disabled ? 
 int vfsKeepCache(const Mo2FsContext* ctx) { return ctx->cache_disabled ? 0 : 1; }
 constexpr size_t MAX_RETAINED_RO_FDS  = 1024;
 constexpr uint64_t SLOW_OP_LOG_NS     = 100ull * 1000ull * 1000ull;
+constexpr uint64_t AUDIO_TRACE_LOG_LIMIT = 4096;
 
 void fillStatForDir(struct stat* st, fuse_ino_t ino, uid_t uid, gid_t gid);
 void fillStatForFile(struct stat* st, fuse_ino_t ino, uid_t uid, gid_t gid,
@@ -61,6 +63,7 @@ bool pathTouchesMutation(const std::string& cachedPath,
                          const std::string& changedPath);
 bool isStrictDescendantPath(const std::string& path, const std::string& parent);
 bool shouldTracePath(const std::string& path);
+bool shouldTraceAudioReadPath(const std::string& path);
 std::shared_ptr<VfsRuntimeIndex> runtimeIndex(const Mo2FsContext* ctx);
 
 void markCatalogDirty(Mo2FsContext* ctx, const std::string& relativePath,
@@ -289,6 +292,22 @@ void maybeLogCounters(Mo2FsContext* ctx)
                    ctx->write_bytes.load(std::memory_order_relaxed)),
                static_cast<unsigned long long>(
                    ctx->cow_write_count.load(std::memory_order_relaxed)));
+  if (ctx->trace_audio_reads) {
+    std::fprintf(
+        stderr,
+        "[VFS audio-io] summary reads=%llu short=%llu errors=%llu "
+        "requested=%llu actual=%llu\n",
+        static_cast<unsigned long long>(
+            ctx->audio_trace_read_count.load(std::memory_order_relaxed)),
+        static_cast<unsigned long long>(
+            ctx->audio_trace_short_read_count.load(std::memory_order_relaxed)),
+        static_cast<unsigned long long>(
+            ctx->audio_trace_error_count.load(std::memory_order_relaxed)),
+        static_cast<unsigned long long>(
+            ctx->audio_trace_bytes_requested.load(std::memory_order_relaxed)),
+        static_cast<unsigned long long>(
+            ctx->audio_trace_bytes_returned.load(std::memory_order_relaxed)));
+  }
   {
     size_t lookupSize = 0;
     size_t attrSize = 0;
@@ -619,6 +638,51 @@ bool shouldTracePath(const std::string& path)
   const std::string lower = normalizeForLookup(path);
   return lower.ends_with(".hkx") ||
          lower.find("meshes/actors/") != std::string::npos;
+}
+
+bool shouldTraceAudioReadPath(const std::string& path)
+{
+  const std::string lower = normalizeForLookup(path);
+  if (lower.ends_with(".xwm") || lower.ends_with(".fuz") ||
+      lower.ends_with(".wav") || lower.ends_with(".ogg") ||
+      lower.ends_with(".lip")) {
+    return true;
+  }
+
+  const bool archive = lower.ends_with(".bsa") || lower.ends_with(".ba2");
+  return archive &&
+         (lower.find("sound") != std::string::npos ||
+          lower.find("voice") != std::string::npos ||
+          lower.find("music") != std::string::npos ||
+          lower.find("audio") != std::string::npos);
+}
+
+void logAudioRead(Mo2FsContext* ctx, const char* event,
+                  const std::string& path, const std::string& realPath,
+                  off_t offset, size_t requested, ssize_t actual,
+                  uint64_t virtualSize, int error)
+{
+  const uint64_t line =
+      ctx->audio_trace_log_count.fetch_add(1, std::memory_order_relaxed);
+  if (line < AUDIO_TRACE_LOG_LIMIT) {
+    const bool atEof = actual >= 0 &&
+                       static_cast<uint64_t>(offset) +
+                               static_cast<uint64_t>(actual) >=
+                           virtualSize;
+    std::fprintf(stderr,
+                 "[VFS audio-io] %s path='%s' source='%s' offset=%lld "
+                 "requested=%zu actual=%zd size=%llu eof=%d errno=%d "
+                 "message='%s'\n",
+                 event, path.c_str(), realPath.c_str(),
+                 static_cast<long long>(offset), requested, actual,
+                 static_cast<unsigned long long>(virtualSize), atEof ? 1 : 0,
+                 error, error == 0 ? "" : std::strerror(error));
+  } else if (line == AUDIO_TRACE_LOG_LIMIT) {
+    std::fprintf(stderr,
+                 "[VFS audio-io] per-read log limit reached (%llu); "
+                 "aggregate counters remain active\n",
+                 static_cast<unsigned long long>(AUDIO_TRACE_LOG_LIMIT));
+  }
 }
 
 // Clear all node_cache entries whose path is |path|, any descendant under
@@ -1702,6 +1766,17 @@ void mo2_init(void* userdata, struct fuse_conn_info* conn)
 {
   auto* ctx = static_cast<Mo2FsContext*>(userdata);
 
+  if (ctx != nullptr) {
+    ctx->trace_audio_reads =
+        std::getenv("FLUORINE_VFS_TRACE_AUDIO_READS") != nullptr;
+    if (ctx->trace_audio_reads) {
+      std::fprintf(stderr,
+                   "[VFS audio-io] enabled: matching reads use streamed pread "
+                   "diagnostics (log limit %llu)\n",
+                   static_cast<unsigned long long>(AUDIO_TRACE_LOG_LIMIT));
+    }
+  }
+
   // Bump RLIMIT_NOFILE.  We hold one real fd per open file so games that
   // stream hundreds of BSAs concurrently would otherwise hit the default
   // 1024 soft limit.  Raise to hard limit (or a sane cap).
@@ -2558,6 +2633,7 @@ void mo2_read(fuse_req_t req, fuse_ino_t /*ino*/, size_t size, off_t off,
   std::string realPath;
   bool isBacking = false;
   bool writable = false;
+  uint64_t virtualSize = 0;
   {
     std::shared_lock lock(ctx->open_files_mutex);
     auto it = ctx->open_files.find(fi->fh);
@@ -2570,6 +2646,7 @@ void mo2_read(fuse_req_t req, fuse_ino_t /*ino*/, size_t size, off_t off,
     isBacking = it->second.is_backing;
     writable = it->second.writable;
     _t.path = it->second.relative_path;
+    virtualSize = it->second.virtual_size;
   }
   if (writable) {
     std::scoped_lock lock(ctx->open_files_mutex);
@@ -2579,6 +2656,13 @@ void mo2_read(fuse_req_t req, fuse_ino_t /*ino*/, size_t size, off_t off,
     }
   }
   ctx->read_bytes.fetch_add(static_cast<uint64_t>(size), std::memory_order_relaxed);
+  const bool traceAudioRead =
+      ctx->trace_audio_reads && shouldTraceAudioReadPath(_t.path);
+  if (traceAudioRead) {
+    ctx->audio_trace_read_count.fetch_add(1, std::memory_order_relaxed);
+    ctx->audio_trace_bytes_requested.fetch_add(
+        static_cast<uint64_t>(size), std::memory_order_relaxed);
+  }
 
   int localFd = fd;
   if (localFd < 0) {
@@ -2588,6 +2672,12 @@ void mo2_read(fuse_req_t req, fuse_ino_t /*ino*/, size_t size, off_t off,
       localFd = open(realPath.c_str(), O_RDONLY);
     }
     if (localFd < 0) {
+      const int openError = errno != 0 ? errno : EIO;
+      if (traceAudioRead) {
+        ctx->audio_trace_error_count.fetch_add(1, std::memory_order_relaxed);
+        logAudioRead(ctx, "open-error", _t.path, realPath, off, size, -1,
+                     virtualSize, openError);
+      }
       fuse_reply_err(req, EIO);
       return;
     }
@@ -2619,6 +2709,43 @@ void mo2_read(fuse_req_t req, fuse_ino_t /*ino*/, size_t size, off_t off,
     if (it != ctx->open_files.end()) {
       it->second.last_read_tick = tick;
     }
+  }
+
+  if (traceAudioRead) {
+    std::vector<char> data(size);
+    ssize_t actual = 0;
+    if (size != 0) {
+      do {
+        actual = pread(localFd, data.data(), size, off);
+      } while (actual < 0 && errno == EINTR);
+    }
+
+    if (actual < 0) {
+      const int readError = errno != 0 ? errno : EIO;
+      ctx->audio_trace_error_count.fetch_add(1, std::memory_order_relaxed);
+      logAudioRead(ctx, "read-error", _t.path, realPath, off, size, actual,
+                   virtualSize, readError);
+      fuse_reply_err(req, readError);
+      return;
+    }
+
+    ctx->audio_trace_bytes_returned.fetch_add(
+        static_cast<uint64_t>(actual), std::memory_order_relaxed);
+    if (static_cast<size_t>(actual) != size) {
+      ctx->audio_trace_short_read_count.fetch_add(1,
+                                                  std::memory_order_relaxed);
+    }
+    logAudioRead(ctx, "read", _t.path, realPath, off, size, actual,
+                 virtualSize, 0);
+    const int replyStatus = fuse_reply_buf(
+        req, actual == 0 ? nullptr : data.data(), static_cast<size_t>(actual));
+    if (replyStatus != 0) {
+      const int replyError = replyStatus < 0 ? -replyStatus : replyStatus;
+      ctx->audio_trace_error_count.fetch_add(1, std::memory_order_relaxed);
+      logAudioRead(ctx, "reply-error", _t.path, realPath, off, size, actual,
+                   virtualSize, replyError);
+    }
+    return;
   }
 
   // Zero-copy read: splice data directly from backing fd to /dev/fuse,
