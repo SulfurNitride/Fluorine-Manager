@@ -125,10 +125,8 @@ private:
   bool stepWin11Mode();
   bool stepPostSetup();
 
-  // -- DirectX cab extraction helpers ----------------------------------------
+  // -- DirectX runtime helper -------------------------------------------------
   bool ensureDirectXRedist(QString& redistPath);
-  bool extractFromRedist(const QString& redistPath, const QString& cabFilter,
-                         const QString& dllFilter, const QString& destDir);
 
   // -- tool management -------------------------------------------------------
   bool downloadFile(const QString& url, const QString& destPath,

@@ -187,8 +187,8 @@ static const char* D3DCOMPILER_47_64_URL =
 static const char* D3DCOMPILER_47_64_SHA256 =
     "4432bbd1a390874f3f0a503d45cc48d346abc3a8c0213c289f4b615bf0ee84f3";
 
-// DirectX End-User Runtimes (June 2010) — shared by d3dcompiler_43, d3dx9,
-// d3dx11_43, xact, xact_x64.
+// DirectX End-User Runtimes (June 2010). The contained DXSETUP installs the
+// complete legacy side-by-side runtime, including both x86 and x64 XACT/XAudio.
 static const QStringList DIRECTX_JUN2010_URLS = {
     // Current link exposed by Microsoft's official Download Center (id=8109).
     QStringLiteral(
@@ -1268,53 +1268,6 @@ bool PrefixSetupRunner::ensureDirectXRedist(QString& redistPath)
   return true;
 }
 
-bool PrefixSetupRunner::extractFromRedist(const QString& redistPath,
-                                          const QString& cabFilter,
-                                          const QString& dllFilter,
-                                          const QString& destDir)
-{
-  const QString tmpDir = fluorineTmpDir() + "/dxextract";
-  QDir().mkpath(tmpDir);
-
-  // Clean tmp dir.
-  QDir tmp(tmpDir);
-  for (const QString& f : tmp.entryList(QDir::Files))
-    tmp.remove(f);
-
-  const QString cabextractBin = fluorineBinDir() + "/cabextract";
-
-  // Stage 1: extract inner cab(s) matching filter from the outer redist.
-  int rc = runHostProcess(cabextractBin,
-      {"-d", tmpDir, "-L", "-F", cabFilter, redistPath});
-  if (rc != 0) {
-    currentStep().errorMessage =
-        QStringLiteral("cabextract failed (filter: %1, exit %2)").arg(cabFilter).arg(rc);
-    return false;
-  }
-
-  // Stage 2: extract DLL(s) from each inner cab.
-  const QStringList cabs = QDir(tmpDir).entryList({"*.cab"}, QDir::Files);
-  if (cabs.isEmpty()) {
-    currentStep().errorMessage =
-        QStringLiteral("No inner cab found for filter: %1").arg(cabFilter);
-    return false;
-  }
-
-  for (const QString& cab : cabs) {
-    rc = runHostProcess(cabextractBin,
-        {"-d", destDir, "-L", "-F", dllFilter, tmpDir + "/" + cab});
-    if (rc != 0) {
-      currentStep().errorMessage =
-          QStringLiteral("cabextract inner failed (filter: %1, exit %2)").arg(dllFilter).arg(rc);
-      return false;
-    }
-  }
-
-  // Clean up tmp.
-  QDir(tmpDir).removeRecursively();
-  return true;
-}
-
 // ============================================================================
 // DirectX DLL steps
 // ============================================================================
@@ -1375,9 +1328,6 @@ bool PrefixSetupRunner::stepDirectXRuntime()
   if (!applyDllOverrides(DIRECTX_NATIVE_DLLS, DIRECTX_NATIVE_BUILTIN_DLLS))
     return false;
 
-  const QString dllDir64 = m_prefixPath + "/drive_c/windows/system32";
-  const QString dllDir32 = m_prefixPath + "/drive_c/windows/syswow64";
-
   // d3dcompiler_47: prebuilt DLLs from Mozilla fxc2 (not in the June 2010 redist).
   if (!stepD3DCompiler47())
     return false;
@@ -1387,89 +1337,45 @@ bool PrefixSetupRunner::stepDirectXRuntime()
   if (!ensureDirectXRedist(redistPath))
     return false;
 
-  // All single-DLL extractions: {cabFilter, dllFilter, displayName}
-  struct DllEntry { const char* cabFilter; const char* dllFilter; const char* name; };
-  static const DllEntry singleDlls[] = {
-    {.cabFilter="*d3dcompiler_42*", .dllFilter="d3dcompiler_42.dll", .name="d3dcompiler_42"},
-    {.cabFilter="*d3dcompiler_43*", .dllFilter="d3dcompiler_43.dll", .name="d3dcompiler_43"},
-    {.cabFilter="*d3dx11_42*",      .dllFilter="d3dx11_42.dll",      .name="d3dx11_42"},
-    {.cabFilter="*d3dx11_43*",      .dllFilter="d3dx11_43.dll",      .name="d3dx11_43"},
-  };
-
-  // Multi-DLL extractions (wildcards): {cabFilter, dllFilter, displayName}
-  static const DllEntry multiDlls[] = {
-    {.cabFilter="*d3dx9*",    .dllFilter="d3dx9*.dll",  .name="d3dx9"},
-    {.cabFilter="*d3dx10*",   .dllFilter="d3dx10*.dll", .name="d3dx10"},
-    {.cabFilter="*_xinput_*", .dllFilter="xinput*.dll", .name="xinput"},
-  };
-
-  // Extract single DLLs (both arches).
-  for (const auto& e : singleDlls) {
-    if (isCancelled()) return false;
-    emit logMessage(QStringLiteral("Extracting %1...").arg(e.name));
-    extractFromRedist(redistPath, QStringLiteral("%1x86*").arg(e.cabFilter), e.dllFilter, dllDir32);
-    extractFromRedist(redistPath, QStringLiteral("%1x64*").arg(e.cabFilter), e.dllFilter, dllDir64);
+  // Steam's Common Redistributable invokes the DXSETUP executable inside the
+  // outer redist. Extract the complete payload, then run the same silent setup
+  // so its version checks, registration, and x86/x64 component selection all
+  // remain Microsoft's responsibility.
+  const QString setupDir = fluorineTmpDir() + "/directx_Jun2010_setup";
+  QDir(setupDir).removeRecursively();
+  if (!QDir().mkpath(setupDir)) {
+    currentStep().errorMessage = "Failed to create DirectX setup directory";
+    return false;
   }
 
-  // Extract multi-DLLs (both arches).
-  for (const auto& e : multiDlls) {
-    if (isCancelled()) return false;
-    emit logMessage(QStringLiteral("Extracting %1...").arg(e.name));
-    extractFromRedist(redistPath, QStringLiteral("%1x86*").arg(e.cabFilter), e.dllFilter, dllDir32);
-    extractFromRedist(redistPath, QStringLiteral("%1x64*").arg(e.cabFilter), e.dllFilter, dllDir64);
+  emit logMessage("Extracting DirectX June 2010 setup...");
+  const QString cabextractBin = fluorineBinDir() + "/cabextract";
+  int rc = runHostProcess(cabextractBin, {"-q", "-d", setupDir, redistPath});
+  const QString dxsetupPath = setupDir + "/DXSETUP.exe";
+  if (rc != 0 || !QFileInfo::exists(dxsetupPath)) {
+    currentStep().errorMessage =
+        QStringLiteral("DirectX redistributable extraction failed (exit code %1)").arg(rc);
+    QDir(setupDir).removeRecursively();
+    return false;
   }
 
-  // XACT / XAudio / X3DAudio / XAPOFX — 32-bit.
-  if (!isCancelled()) {
-    emit logMessage("Extracting XACT (32-bit)...");
-    for (const char* cabPat : {"*_xact_*x86*", "*_x3daudio_*x86*", "*_xaudio_*x86*"})
-      for (const char* dllPat : {"xactengine*.dll", "xaudio*.dll", "x3daudio*.dll", "xapofx*.dll"})
-        extractFromRedist(redistPath, cabPat, dllPat, dllDir32);
-  }
-
-  // XACT — 64-bit.
-  if (!isCancelled()) {
-    emit logMessage("Extracting XACT (64-bit)...");
-    for (const char* cabPat : {"*_xact_*x64*", "*_x3daudio_*x64*", "*_xaudio_*x64*"})
-      for (const char* dllPat : {"xactengine*.dll", "xaudio*.dll", "x3daudio*.dll", "xapofx*.dll"})
-        extractFromRedist(redistPath, cabPat, dllPat, dllDir64);
-  }
-
-  // Batch-register XACT DLLs via regsvr32.
-  auto collectRegDlls = [](const QString& dir) -> QStringList {
-    QStringList dlls;
-    dlls.append(QDir(dir).entryList({"xactengine*.dll"}, QDir::Files));
-    for (int i = 0; i <= 7; ++i) {
-      const QString dll = QStringLiteral("xaudio2_%1.dll").arg(i);
-      if (QFileInfo::exists(dir + "/" + dll))
-        dlls.append(dll);
-    }
-    return dlls;
-  };
-
+  emit logMessage("Running DXSETUP.exe /silent (x86 and x64 runtimes)...");
   QMap<QString, QString> env = baseWineEnv();
   env["WINEDLLOVERRIDES"] = makeDllOverrideEnv(
       "mshtml=d", DIRECTX_NATIVE_DLLS, DIRECTX_NATIVE_BUILTIN_DLLS);
+  env["PROTON_USE_XALIA"] = "0";
 
-  // 32-bit registration.
-  QStringList reg32 = collectRegDlls(dllDir32);
-  if (!reg32.isEmpty()) {
-    emit logMessage(QStringLiteral("Registering %1 32-bit DLLs...").arg(reg32.size()));
-    QStringList args = {"regsvr32", "/S"};
-    args.append(reg32);
-    runProcess(m_wineBin, args, env);
+  rc = runProcess(m_wineBin, {dxsetupPath, "/silent"}, env);
+  QDir(setupDir).removeRecursively();
+  if (!isMicrosoftInstallerSuccess(rc)) {
+    currentStep().errorMessage =
+        QStringLiteral("DXSETUP.exe failed (%1)").arg(describeInstallerExitCode(rc));
+    return false;
+  } else if (rc != 0) {
+    emit logMessage(QStringLiteral("DXSETUP.exe returned nonfatal exit code %1").arg(rc));
   }
 
-  // 64-bit registration.
-  QStringList reg64 = collectRegDlls(dllDir64);
-  if (!reg64.isEmpty()) {
-    emit logMessage(QStringLiteral("Registering %1 64-bit DLLs...").arg(reg64.size()));
-    QStringList args = {"regsvr32", "/S"};
-    args.append(reg64);
-    runProcess(m_wineBin, args, env);
-  }
-
-  emit logMessage("DirectX runtimes installed");
+  emit logMessage("DirectX June 2010 runtimes installed (x86 and x64)");
   return true;
 }
 
