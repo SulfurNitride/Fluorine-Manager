@@ -100,7 +100,7 @@ private:
   bool stepDriveCleanup();
   bool stepD3DCompiler47();
   bool stepDirectXRuntime();
-  bool stepVcrun2022();
+  bool stepVisualCppRuntimes();
   bool stepDotNetRuntimes();
   bool stepDotNetInstall(const QString& url, const QString& name,
                          const QStringList& knownSha256 = {});
@@ -108,11 +108,11 @@ private:
                              const QString& name,
                              const QStringList& knownSha25632 = {},
                              const QStringList& knownSha25664 = {});
-  int runDotNetInstaller(const QString& installerPath,
-                         const QString& displayName,
-                         const QMap<QString, QString>& env,
-                         QByteArray* captured,
-                         QString* installerLogPath);
+  int runMicrosoftInstaller(const QString& installerPath,
+                            const QString& displayName,
+                            const QMap<QString, QString>& env,
+                            QByteArray* captured,
+                            QString* installerLogPath);
   QStringList storageDiagnostics(const QString& installerPath) const;
   QString reportInstallerFailure(const QString& displayName,
                                  const QString& installerPath,

@@ -59,17 +59,6 @@ static const char* CABEXTRACT_URL =
 static const char* SEVENZIP_URL =
     "https://github.com/ip7z/7zip/releases/download/26.00/7z2600-linux-x64.tar.xz";
 
-static const char* DOTNET9_X86_URL =
-    "https://builds.dotnet.microsoft.com/dotnet/Runtime/9.0.14/"
-    "dotnet-runtime-9.0.14-win-x86.exe";
-static const char* DOTNET9_X64_URL =
-    "https://builds.dotnet.microsoft.com/dotnet/Runtime/9.0.14/"
-    "dotnet-runtime-9.0.14-win-x64.exe";
-
-static const char* DOTNET10_SDK_URL =
-    "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.201/"
-    "dotnet-sdk-10.0.201-win-x64.exe";
-
 static const char* NUGET_CONFIG_TEMPLATE = R"(<?xml version="1.0" encoding="utf-8"?>
 <configuration>
   <config>
@@ -212,37 +201,112 @@ static const QStringList DIRECTX_JUN2010_SHA256 = {
     QStringLiteral("8746ee1a84a083a90e37899d71d50d5c7c015e69688a466aa80447f011780c0d"),
 };
 
-// Visual C++ 2015-2022 redistributable.
-static const char* VCRUN2022_X86_URL = "https://aka.ms/vs/17/release/vc_redist.x86.exe";
-static const char* VCRUN2022_X64_URL = "https://aka.ms/vs/17/release/vc_redist.x64.exe";
-static const QStringList VCRUN2022_X86_SHA256 = {
-    QStringLiteral("0c09f2611660441084ce0df425c51c11e147e6447963c3690f97e0b25c55ed64"),
-};
-static const QStringList VCRUN2022_X64_SHA256 = {
-    QStringLiteral("cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"),
+struct VisualCppRedistPair {
+  const char* version;
+  const char* url32;
+  const char* url64;
+  const char* sha25632;
+  const char* sha25664;
 };
 
-// .NET runtimes (x86 + x64 pairs for Wine prefix).
+// Unsupported legacy Visual C++ runtimes remain side-by-side with v14.  Keep
+// each original Microsoft payload immutable and checksum-pinned.
+static const VisualCppRedistPair LEGACY_VCRUNS[] = {
+    {.version="2005",
+     .url32="https://download.microsoft.com/download/8/B/4/"
+            "8B42259F-5D70-43F4-AC2E-4B208FD8D66A/vcredist_x86.EXE",
+     .url64="https://download.microsoft.com/download/8/B/4/"
+            "8B42259F-5D70-43F4-AC2E-4B208FD8D66A/vcredist_x64.EXE",
+     .sha25632="8648c5fc29c44b9112fe52f9a33f80e7fc42d10f3b5b42b2121542a13e44adfd",
+     .sha25664="4487570bd86e2e1aac29db2a1d0a91eb63361fcaac570808eb327cd4e0e2240d"},
+    {.version="2008",
+     .url32="https://download.microsoft.com/download/5/D/8/"
+            "5D8C65CB-C849-4025-8E95-C3966CAFD8AE/vcredist_x86.exe",
+     .url64="https://download.microsoft.com/download/5/D/8/"
+            "5D8C65CB-C849-4025-8E95-C3966CAFD8AE/vcredist_x64.exe",
+     .sha25632="8742bcbf24ef328a72d2a27b693cc7071e38d3bb4b9b44dec42aa3d2c8d61d92",
+     .sha25664="c5e273a4a16ab4d5471e91c7477719a2f45ddadb76c7f98a38fa5074a6838654"},
+    {.version="2010",
+     .url32="https://download.microsoft.com/download/5/B/C/"
+            "5BC5DBB3-652D-4DCE-B14A-475AB85EEF6E/vcredist_x86.exe",
+     .url64="https://download.microsoft.com/download/A/8/0/"
+            "A80747C3-41BD-45DF-B505-E9710D2744E0/vcredist_x64.exe",
+     .sha25632="31d32fa39d52cac9a765a43660431f7a127eee784b54b2f5e2af3e2b763a1af8",
+     .sha25664="2fddbc3aaaab784c16bc673c3bae5f80929d5b372810dbc28649283566d33255"},
+    {.version="2012",
+     .url32="https://download.microsoft.com/download/1/6/B/"
+            "16B06F60-3B20-4FF2-B699-5E9B7962F9AE/VSU_4/vcredist_x86.exe",
+     .url64="https://download.microsoft.com/download/1/6/B/"
+            "16B06F60-3B20-4FF2-B699-5E9B7962F9AE/VSU_4/vcredist_x64.exe",
+     .sha25632="b924ad8062eaf4e70437c8be50fa612162795ff0839479546ce907ffa8d6e386",
+     .sha25664="681be3e5ba9fd3da02c09d7e565adfa078640ed66a0d58583efad2c1e3cc4064"},
+    {.version="2013",
+     .url32="https://download.microsoft.com/download/0/5/6/"
+            "056dcda9-d667-4e27-8001-8a0c6971d6b1/vcredist_x86.exe",
+     .url64="https://download.microsoft.com/download/0/5/6/"
+            "056dcda9-d667-4e27-8001-8a0c6971d6b1/vcredist_x64.exe",
+     .sha25632="89f4e593ea5541d1c53f983923124f9fd061a1c0c967339109e375c661573c17",
+     .sha25664="20e2645b7cd5873b1fa3462b99a665ac8d6e14aae83ded9d875fea35ffdd7d7e"},
+};
+
+// Visual C++ v14.51.36247 (Visual Studio 2015-2026 compatible).  These are
+// immutable targets resolved from Microsoft's rolling vc14 links on 2026-08-21.
+static const char* VCRUN14_X86_URL =
+    "https://download.visualstudio.microsoft.com/download/pr/"
+    "355d2512-13c2-400a-bf9f-8a296abb5932/"
+    "F0BAB33A302B3CDB2E11113760D016F54FD3D2632C65BA7834FAC4F0ABD7F1A3/"
+    "VC_redist.x86.exe";
+static const char* VCRUN14_X64_URL =
+    "https://download.visualstudio.microsoft.com/download/pr/"
+    "ebdab8e5-1d7b-4d9f-a11b-cbb1720c3b12/"
+    "843068991DAAA1F73AD9F6239BCE4D0F6A07A51F18C37EA2A867E9BECA71295C/"
+    "VC_redist.x64.exe";
+static const QStringList VCRUN14_X86_SHA256 = {
+    QStringLiteral("f0bab33a302b3cdb2e11113760d016f54fd3d2632c65ba7834fac4f0abd7f1a3"),
+};
+static const QStringList VCRUN14_X64_SHA256 = {
+    QStringLiteral("843068991daaa1f73ad9f6239bce4d0f6a07a51f18c37ea2a867e9beca71295c"),
+};
+
+// Latest patch in each .NET line as published in Microsoft's release metadata
+// on 2026-08-21.  6 and 7 are EOL and therefore remain at their final patches.
 static const char* DOTNET6_X86_URL =
-    "https://download.visualstudio.microsoft.com/download/pr/727d79cb-6a4c-4a6b-bd9e-af99ad62de0b/"
-    "5cd3550f1589a2f1b3a240c745dd1023/dotnet-runtime-6.0.36-win-x86.exe";
+    "https://builds.dotnet.microsoft.com/dotnet/Runtime/6.0.36/"
+    "dotnet-runtime-6.0.36-win-x86.exe";
 static const char* DOTNET6_X64_URL =
-    "https://download.visualstudio.microsoft.com/download/pr/1a5fc50a-9222-4f33-8f73-3c78485a55c7/"
-    "1cb55899b68fcb9d98d206ba56f28b66/dotnet-runtime-6.0.36-win-x64.exe";
+    "https://builds.dotnet.microsoft.com/dotnet/Runtime/6.0.36/"
+    "dotnet-runtime-6.0.36-win-x64.exe";
 
 static const char* DOTNET7_X86_URL =
-    "https://download.visualstudio.microsoft.com/download/pr/b2e820bd-b591-43df-ab10-1eeb7998cc18/"
-    "661ca79db4934c6247f5c7a809a62238/dotnet-runtime-7.0.20-win-x86.exe";
+    "https://builds.dotnet.microsoft.com/dotnet/Runtime/7.0.20/"
+    "dotnet-runtime-7.0.20-win-x86.exe";
 static const char* DOTNET7_X64_URL =
-    "https://download.visualstudio.microsoft.com/download/pr/be7eaed0-4e32-472b-b53e-b08ac3433a22/"
-    "fc99a5977c57cbfb93b4afb401953818/dotnet-runtime-7.0.20-win-x64.exe";
+    "https://builds.dotnet.microsoft.com/dotnet/Runtime/7.0.20/"
+    "dotnet-runtime-7.0.20-win-x64.exe";
 
 static const char* DOTNET8_X86_URL =
-    "https://download.visualstudio.microsoft.com/download/pr/3210417e-ab32-4d14-a152-1ad9a2fcfdd2/"
-    "da097cee5aa85bd79b6d593e3866fb7f/dotnet-runtime-8.0.12-win-x86.exe";
+    "https://builds.dotnet.microsoft.com/dotnet/Runtime/8.0.30/"
+    "dotnet-runtime-8.0.30-win-x86.exe";
 static const char* DOTNET8_X64_URL =
-    "https://download.visualstudio.microsoft.com/download/pr/136f4593-e3cd-4d52-bc25-579cdf46e80c/"
-    "8b98c1347293b48c56c3a68d72f586a1/dotnet-runtime-8.0.12-win-x64.exe";
+    "https://builds.dotnet.microsoft.com/dotnet/Runtime/8.0.30/"
+    "dotnet-runtime-8.0.30-win-x64.exe";
+
+static const char* DOTNET9_X86_URL =
+    "https://builds.dotnet.microsoft.com/dotnet/Runtime/9.0.19/"
+    "dotnet-runtime-9.0.19-win-x86.exe";
+static const char* DOTNET9_X64_URL =
+    "https://builds.dotnet.microsoft.com/dotnet/Runtime/9.0.19/"
+    "dotnet-runtime-9.0.19-win-x64.exe";
+
+static const char* DOTNET10_X86_URL =
+    "https://builds.dotnet.microsoft.com/dotnet/Runtime/10.0.11/"
+    "dotnet-runtime-10.0.11-win-x86.exe";
+static const char* DOTNET10_X64_URL =
+    "https://builds.dotnet.microsoft.com/dotnet/Runtime/10.0.11/"
+    "dotnet-runtime-10.0.11-win-x64.exe";
+static const char* DOTNET10_SDK_URL =
+    "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.400/"
+    "dotnet-sdk-10.0.400-win-x64.exe";
 
 static const QStringList DOTNET6_X86_SHA256 = {
     QStringLiteral("3b3cb4636251a582158f4b6b340f20b3861e6793eb9a3e64bda29cbf32da3604"),
@@ -257,19 +321,50 @@ static const QStringList DOTNET7_X64_SHA256 = {
     QStringLiteral("10f48feee0f7fb4c2ed61ecef5e58699743afc9531f8a293680a99fc2d0a78a5"),
 };
 static const QStringList DOTNET8_X86_SHA256 = {
-    QStringLiteral("eb0d8f39fa2dbb4ff3ff72ad325b6030773df875ab509824ea18c87a368985fa"),
+    QStringLiteral("2b4b0d08bde8567ed63a07e50eb23c4a7da5064c954d62dd5949de90d6eac379"),
 };
 static const QStringList DOTNET8_X64_SHA256 = {
-    QStringLiteral("a7c394e6ee4e8104d7a01f78103700052cc504370941b7f620e3aa5afbbc61df"),
+    QStringLiteral("e40f199c6d5584aff0554c01163c3c8d9ccf6bec3a577e4d967e41070772a1c1"),
 };
 static const QStringList DOTNET9_X86_SHA256 = {
-    QStringLiteral("a99eb555e90eaa6703efa20f3b8fe676a9ba24bd24d439f016c20815d4ff815c"),
+    QStringLiteral("3c50f69de15db43fe7231c4c01780dfdf290d7142d79b07e4a98a9c300f3e3ce"),
 };
 static const QStringList DOTNET9_X64_SHA256 = {
-    QStringLiteral("690f85d3592edb3e5810f8cd8b4a630bbaa2a8abc354061d44d7d6c0f0d8a0dd"),
+    QStringLiteral("0213f4005607233f5fd565b3924b6587d195ad424b09fd7a9bf96162a6e0a2aa"),
+};
+static const QStringList DOTNET10_X86_SHA256 = {
+    QStringLiteral("82ed8f3b15908ee18399338d679a7a61e52c4136d2064f168da5950b71d956b8"),
+};
+static const QStringList DOTNET10_X64_SHA256 = {
+    QStringLiteral("33de99eeda0f06f4b4ad43a1fd23977343e1358f5dbb4b0d5e1b84850dc18afc"),
+};
+static const QStringList DOTNET10_SDK_SHA256 = {
+    QStringLiteral("ea44e5caf1e135623dd98c6652d44ee3a9922ce3b0d1bcc2db9e28a2349b318c"),
 };
 
 static const QStringList VCRUN_DLLS = {
+    QStringLiteral("atl80"),
+    QStringLiteral("msvcm80"),
+    QStringLiteral("msvcp80"),
+    QStringLiteral("msvcr80"),
+    QStringLiteral("vcomp"),
+    QStringLiteral("atl90"),
+    QStringLiteral("msvcm90"),
+    QStringLiteral("msvcp90"),
+    QStringLiteral("msvcr90"),
+    QStringLiteral("vcomp90"),
+    QStringLiteral("atl100"),
+    QStringLiteral("msvcp100"),
+    QStringLiteral("msvcr100"),
+    QStringLiteral("vcomp100"),
+    QStringLiteral("atl110"),
+    QStringLiteral("msvcp110"),
+    QStringLiteral("msvcr110"),
+    QStringLiteral("vcomp110"),
+    QStringLiteral("atl120"),
+    QStringLiteral("msvcp120"),
+    QStringLiteral("msvcr120"),
+    QStringLiteral("vcomp120"),
     QStringLiteral("concrt140"),
     QStringLiteral("msvcp140"),
     QStringLiteral("msvcp140_1"),
@@ -697,12 +792,15 @@ void PrefixSetupRunner::buildStepList()
           [this] { return stepDirectXRuntime(); });
 
   // Runtime installers (run via Wine).
-  addStep("vcrun2022", "Visual C++ 2022",
-          [this] { return stepVcrun2022(); });
-  addStep("dotnet_runtimes", ".NET Runtimes (6-9)",
+  addStep("vcruntimes", "Visual C++ Runtimes (2005-2026)",
+          [this] { return stepVisualCppRuntimes(); });
+  addStep("dotnet_runtimes", ".NET Runtimes (6-10)",
           [this] { return stepDotNetRuntimes(); });
-  addStep("dotnet10_sdk", ".NET 10 SDK",
-          [this] { return stepDotNetInstall(DOTNET10_SDK_URL, ".NET 10 SDK"); });
+  addStep("dotnet10_sdk", ".NET 10 SDK (10.0.400)",
+          [this] {
+            return stepDotNetInstall(DOTNET10_SDK_URL, ".NET 10 SDK 10.0.400",
+                                     DOTNET10_SDK_SHA256);
+          });
   addStep("nuget_signature_policy", "NuGet Signature Policy",
           [this] { return stepNuGetSignaturePolicy(); });
 
@@ -728,7 +826,7 @@ void PrefixSetupRunner::start()
   m_cancelled.storeRelease(0);
 
   // Ensure tools are available before starting steps.
-  // cabextract is needed for DirectX cab extraction and vcrun2022 workaround.
+  // cabextract is needed for DirectX and Visual C++ runtime extraction.
   // winetricks is only needed for win11 mode (non-fatal if missing).
   if (!ensureCabextract()) {
     emit finished(false);
@@ -1383,15 +1481,15 @@ bool PrefixSetupRunner::stepDirectXRuntime()
 // Runtime installer steps
 // ============================================================================
 
-bool PrefixSetupRunner::stepVcrun2022()
+bool PrefixSetupRunner::stepVisualCppRuntimes()
 {
-  emit logMessage("Installing Visual C++ 2022...");
+  emit logMessage("Installing Visual C++ runtimes (2005-2026)...");
 
   if (!applyDllOverrides({}, VCRUN_DLLS))
     return false;
 
-  const QString cacheDir = fluorineCacheDir() + "/vcrun2022";
-  const QString tmpDir   = fluorineTmpDir() + "/vcrun2022";
+  const QString cacheDir = fluorineCacheDir() + "/vcruntimes";
+  const QString tmpDir   = fluorineTmpDir() + "/vcruntimes";
   QDir().mkpath(cacheDir);
   QDir().mkpath(tmpDir);
 
@@ -1399,107 +1497,206 @@ bool PrefixSetupRunner::stepVcrun2022()
   const QString dllDir32 = m_prefixPath + "/drive_c/windows/syswow64";
   const QString cabextractBin = fluorineBinDir() + "/cabextract";
 
-  // Download x86 installer.
-  const QString x86Path = cacheDir + "/vc_redist.x86.exe";
-  if (!QFileInfo::exists(x86Path)) {
-    emit logMessage("Downloading vc_redist.x86.exe...");
-    if (!downloadRuntimeInstaller(VCRUN2022_X86_URL, x86Path,
-                                  "vc_redist.x86.exe",
-                                  VCRUN2022_X86_SHA256)) {
+  auto installExtractedDll = [this](const QString& sourcePath,
+                                    const QString& targetPath,
+                                    const QString& displayName) {
+    QFile source(sourcePath);
+    if (!source.open(QIODevice::ReadOnly)) {
+      currentStep().errorMessage =
+          QStringLiteral("%1 was not found in the Visual C++ redistributable")
+              .arg(displayName);
       return false;
     }
-  } else if (!downloadRuntimeInstaller(VCRUN2022_X86_URL, x86Path,
-                                       "vc_redist.x86.exe",
-                                       VCRUN2022_X86_SHA256)) {
-    return false;
-  }
 
-  // Wine bug #57518 workaround: manually extract msvcp140.dll before running
-  // the installer, because the installer refuses to replace the builtin
-  // (builtin version number is higher).
-  emit logMessage("Extracting msvcp140.dll (32-bit)...");
-  int rc = runHostProcess(cabextractBin,
-      {"--directory=" + tmpDir + "/win32", x86Path, "-F", "a10"});
-  if (rc != 0) {
-    currentStep().errorMessage =
-        QStringLiteral("vc_redist.x86.exe cab extraction failed (exit code %1)").arg(rc);
-    return false;
-  }
-  rc = runHostProcess(cabextractBin,
-      {"--directory=" + dllDir32, tmpDir + "/win32/a10", "-F", "msvcp140.dll"});
-  if (rc != 0) {
-    currentStep().errorMessage =
-        QStringLiteral("msvcp140.dll x86 extraction failed (exit code %1)").arg(rc);
-    return false;
-  }
+    const QByteArray contents = source.readAll();
+    QSaveFile target(targetPath);
+    if (!target.open(QIODevice::WriteOnly) ||
+        target.write(contents) != contents.size() || !target.commit()) {
+      currentStep().errorMessage =
+          QStringLiteral("Failed to install %1 at %2")
+              .arg(displayName, targetPath);
+      return false;
+    }
+    return true;
+  };
 
-  // Run 32-bit installer.
-  emit logMessage("Running vc_redist.x86.exe...");
   QMap<QString, QString> env = baseWineEnv();
   env["WINEDLLOVERRIDES"] = makeDllOverrideEnv("mshtml=d", {}, VCRUN_DLLS);
+  env["PROTON_USE_XALIA"] = "0";
 
-  rc = runProcess(m_wineBin, {x86Path, "/install", "/quiet", "/norestart"}, env);
-  if (!isMicrosoftInstallerSuccess(rc)) {
+  auto runLegacyInstaller = [this, &env](const QString& path,
+                                         const QString& displayName) {
+    emit logMessage(QStringLiteral("Installing %1...").arg(displayName));
+    QByteArray output;
+    const int rc = runProcess(m_wineBin, {path, "/q"}, env, -1, &output);
+    if (isMicrosoftInstallerSuccess(rc)) {
+      if (rc != 0) {
+        emit logMessage(QStringLiteral("%1 returned nonfatal exit code %2")
+                            .arg(displayName)
+                            .arg(rc));
+      }
+      return true;
+    }
+
+    const QString diagnosticsPath =
+        reportInstallerFailure(displayName, path, rc, output, {});
     currentStep().errorMessage =
-        QStringLiteral("vc_redist.x86.exe failed (%1, SHA256 %2)")
-            .arg(describeInstallerExitCode(rc))
-            .arg(fileSha256(x86Path));
+        QStringLiteral("%1 failed (%2, SHA256 %3)")
+            .arg(displayName, describeInstallerExitCode(rc), fileSha256(path));
+    if (!diagnosticsPath.isEmpty())
+      currentStep().errorMessage +=
+          QStringLiteral("; diagnostics: %1").arg(diagnosticsPath);
     return false;
-  } else if (rc != 0) {
-    emit logMessage(QStringLiteral("vc_redist.x86.exe returned nonfatal exit code %1").arg(rc));
-  }
+  };
 
-  // Download and run x64 installer.
-  const QString x64Path = cacheDir + "/vc_redist.x64.exe";
-  if (!QFileInfo::exists(x64Path)) {
-    emit logMessage("Downloading vc_redist.x64.exe...");
-    if (!downloadRuntimeInstaller(VCRUN2022_X64_URL, x64Path,
-                                  "vc_redist.x64.exe",
-                                  VCRUN2022_X64_SHA256)) {
+  // Install the legacy side-by-side families first, oldest to newest.
+  for (const auto& redist : LEGACY_VCRUNS) {
+    if (isCancelled())
+      return false;
+
+    const QString version = QString::fromLatin1(redist.version);
+    const QString displayBase = QStringLiteral("Visual C++ %1").arg(version);
+    const QString path32 =
+        QDir(cacheDir).filePath(QStringLiteral("vc%1_x86.exe").arg(version));
+    const QString path64 =
+        QDir(cacheDir).filePath(QStringLiteral("vc%1_x64.exe").arg(version));
+
+    if (!downloadRuntimeInstaller(
+            redist.url32, path32, displayBase + " x86",
+            {QString::fromLatin1(redist.sha25632)}) ||
+        !downloadRuntimeInstaller(
+            redist.url64, path64, displayBase + " x64",
+            {QString::fromLatin1(redist.sha25664)})) {
       return false;
     }
-  } else if (!downloadRuntimeInstaller(VCRUN2022_X64_URL, x64Path,
-                                       "vc_redist.x64.exe",
-                                       VCRUN2022_X64_SHA256)) {
+
+    // Wine's builtin VC 2013 DLLs must be removed so the native installer does
+    // not mistake them for an already-current installation.
+    if (version == QStringLiteral("2013")) {
+      for (const QString& dll : {QStringLiteral("msvcp120.dll"),
+                                 QStringLiteral("msvcr120.dll"),
+                                 QStringLiteral("vcomp120.dll")}) {
+        QFile::remove(QDir(dllDir32).filePath(dll));
+        QFile::remove(QDir(dllDir64).filePath(dll));
+      }
+    }
+
+    if (!runLegacyInstaller(path32, displayBase + " x86") ||
+        !runLegacyInstaller(path64, displayBase + " x64")) {
+      return false;
+    }
+  }
+
+  const QString x86Path = cacheDir + "/vc14.51.36247_x86.exe";
+  const QString x64Path = cacheDir + "/vc14.51.36247_x64.exe";
+  if (!downloadRuntimeInstaller(VCRUN14_X86_URL, x86Path,
+                                "Visual C++ v14.51.36247 x86",
+                                VCRUN14_X86_SHA256) ||
+      !downloadRuntimeInstaller(VCRUN14_X64_URL, x64Path,
+                                "Visual C++ v14.51.36247 x64",
+                                VCRUN14_X64_SHA256)) {
     return false;
   }
 
-  emit logMessage("Extracting msvcp140.dll (64-bit)...");
-  rc = runHostProcess(cabextractBin,
-      {"--directory=" + tmpDir + "/win64", x64Path, "-F", "a12"});
-  if (rc != 0) {
-    currentStep().errorMessage =
-        QStringLiteral("vc_redist.x64.exe cab extraction failed (exit code %1)").arg(rc);
-    return false;
-  }
-  rc = runHostProcess(cabextractBin,
-      {"--directory=" + dllDir64, tmpDir + "/win64/a12", "-F", "msvcp140.dll"});
-  if (rc != 0) {
-    currentStep().errorMessage =
-        QStringLiteral("msvcp140.dll x64 extraction failed (exit code %1)").arg(rc);
+  // Wine bug #57518: the installer may consider Wine's builtin msvcp140 DLLs
+  // newer and skip them.  Extract the native files from v14's nested cabinets
+  // and verify the architecture-suffixed names instead of trusting cabextract's
+  // success status (a filter matching no files also exits successfully).
+  auto extractV14Dlls = [&](const QString& installerPath,
+                            const QString& cabinetName,
+                            const QString& architecture,
+                            const QString& filenameSuffix,
+                            const QString& targetDir,
+                            bool includeVcruntime140_1) {
+    const QString extractDir = tmpDir + "/" + architecture;
+    QDir(extractDir).removeRecursively();
+    if (!QDir().mkpath(extractDir)) {
+      currentStep().errorMessage =
+          QStringLiteral("Failed to create Visual C++ %1 extraction directory")
+              .arg(architecture);
+      return false;
+    }
+
+    int rc = runHostProcess(
+        cabextractBin,
+        {"--directory=" + extractDir, installerPath, "-F", cabinetName});
+    if (rc == 0) {
+      rc = runHostProcess(cabextractBin,
+                          {"--directory=" + extractDir,
+                           extractDir + "/" + cabinetName});
+    }
+    if (rc != 0) {
+      currentStep().errorMessage =
+          QStringLiteral("Visual C++ %1 DLL extraction failed (exit code %2)")
+              .arg(architecture)
+              .arg(rc);
+      return false;
+    }
+
+    if (!installExtractedDll(extractDir + "/msvcp140.dll_" + filenameSuffix,
+                             targetDir + "/msvcp140.dll",
+                             "msvcp140.dll (" + architecture + ")") ||
+        !installExtractedDll(
+            extractDir + "/msvcp140_2.dll_" + filenameSuffix,
+            targetDir + "/msvcp140_2.dll",
+            "msvcp140_2.dll (" + architecture + ")")) {
+      return false;
+    }
+
+    return !includeVcruntime140_1 ||
+           installExtractedDll(
+               extractDir + "/vcruntime140_1.dll_" + filenameSuffix,
+               targetDir + "/vcruntime140_1.dll",
+               "vcruntime140_1.dll (" + architecture + ")");
+  };
+
+  emit logMessage("Extracting Visual C++ v14 workaround DLLs...");
+  if (!extractV14Dlls(x86Path, "a2", "x86", "x86", dllDir32, false) ||
+      !extractV14Dlls(x64Path, "a4", "x64", "amd64", dllDir64, true)) {
     return false;
   }
 
-  emit logMessage("Running vc_redist.x64.exe...");
-  rc = runProcess(m_wineBin, {x64Path, "/install", "/quiet", "/norestart"}, env);
-  if (!isMicrosoftInstallerSuccess(rc)) {
+  auto runV14Installer = [this, &env](const QString& path,
+                                      const QString& displayName) {
+    emit logMessage(QStringLiteral("Installing %1...").arg(displayName));
+    QByteArray output;
+    QString logPath;
+    const int rc =
+        runMicrosoftInstaller(path, displayName, env, &output, &logPath);
+    if (isMicrosoftInstallerSuccess(rc)) {
+      if (rc != 0) {
+        emit logMessage(QStringLiteral("%1 returned nonfatal exit code %2")
+                            .arg(displayName)
+                            .arg(rc));
+      }
+      QFile::remove(logPath);
+      return true;
+    }
+
+    const QString diagnosticsPath =
+        reportInstallerFailure(displayName, path, rc, output, logPath);
     currentStep().errorMessage =
-        QStringLiteral("vc_redist.x64.exe failed (%1, SHA256 %2)")
-            .arg(describeInstallerExitCode(rc))
-            .arg(fileSha256(x64Path));
+        QStringLiteral("%1 failed (%2, SHA256 %3)")
+            .arg(displayName, describeInstallerExitCode(rc), fileSha256(path));
+    if (!diagnosticsPath.isEmpty())
+      currentStep().errorMessage +=
+          QStringLiteral("; diagnostics: %1").arg(diagnosticsPath);
     return false;
-  } else if (rc != 0) {
-    emit logMessage(QStringLiteral("vc_redist.x64.exe returned nonfatal exit code %1").arg(rc));
+  };
+
+  if (!runV14Installer(x86Path, "Visual C++ v14.51.36247 x86") ||
+      !runV14Installer(x64Path, "Visual C++ v14.51.36247 x64")) {
+    return false;
   }
 
   QDir(tmpDir).removeRecursively();
-  emit logMessage("Visual C++ 2022 installed");
+  emit logMessage("Visual C++ runtimes (2005-2026) installed");
   return true;
 }
 
 bool PrefixSetupRunner::stepDotNetRuntimes()
 {
-  emit logMessage("Installing .NET Runtimes (6-9)...");
+  emit logMessage("Installing .NET Runtimes (6-10)...");
 
   struct RuntimePair {
     const char* url32;
@@ -1509,14 +1706,16 @@ bool PrefixSetupRunner::stepDotNetRuntimes()
     const QStringList* sha64;
   };
   static const RuntimePair runtimes[] = {
-    {.url32=DOTNET6_X86_URL, .url64=DOTNET6_X64_URL, .name=".NET 6",
+    {.url32=DOTNET6_X86_URL, .url64=DOTNET6_X64_URL, .name=".NET 6.0.36",
      .sha32=&DOTNET6_X86_SHA256, .sha64=&DOTNET6_X64_SHA256},
-    {.url32=DOTNET7_X86_URL, .url64=DOTNET7_X64_URL, .name=".NET 7",
+    {.url32=DOTNET7_X86_URL, .url64=DOTNET7_X64_URL, .name=".NET 7.0.20",
      .sha32=&DOTNET7_X86_SHA256, .sha64=&DOTNET7_X64_SHA256},
-    {.url32=DOTNET8_X86_URL, .url64=DOTNET8_X64_URL, .name=".NET 8",
+    {.url32=DOTNET8_X86_URL, .url64=DOTNET8_X64_URL, .name=".NET 8.0.30",
      .sha32=&DOTNET8_X86_SHA256, .sha64=&DOTNET8_X64_SHA256},
-    {.url32=DOTNET9_X86_URL, .url64=DOTNET9_X64_URL, .name=".NET 9",
+    {.url32=DOTNET9_X86_URL, .url64=DOTNET9_X64_URL, .name=".NET 9.0.19",
      .sha32=&DOTNET9_X86_SHA256, .sha64=&DOTNET9_X64_SHA256},
+    {.url32=DOTNET10_X86_URL, .url64=DOTNET10_X64_URL, .name=".NET 10.0.11",
+     .sha32=&DOTNET10_X86_SHA256, .sha64=&DOTNET10_X64_SHA256},
   };
 
   for (const auto& rt : runtimes) {
@@ -1562,8 +1761,9 @@ bool PrefixSetupRunner::stepDotNetInstallPair(const QString& url32, const QStrin
     emit logMessage(QStringLiteral("Installing %1 (32-bit)...").arg(name));
     QByteArray installerOutput;
     QString installerLogPath;
-    const int rc = runDotNetInstaller(path, QStringLiteral("%1 x86").arg(name),
-                                      env, &installerOutput, &installerLogPath);
+    const int rc = runMicrosoftInstaller(
+        path, QStringLiteral("%1 x86").arg(name), env, &installerOutput,
+        &installerLogPath);
     if (!isMicrosoftInstallerSuccess(rc)) {
       const QString diagnosticsPath = reportInstallerFailure(
           QStringLiteral("%1 x86").arg(name), path, rc, installerOutput,
@@ -1604,8 +1804,9 @@ bool PrefixSetupRunner::stepDotNetInstallPair(const QString& url32, const QStrin
     emit logMessage(QStringLiteral("Installing %1 (64-bit)...").arg(name));
     QByteArray installerOutput;
     QString installerLogPath;
-    const int rc = runDotNetInstaller(path, QStringLiteral("%1 x64").arg(name),
-                                      env, &installerOutput, &installerLogPath);
+    const int rc = runMicrosoftInstaller(
+        path, QStringLiteral("%1 x64").arg(name), env, &installerOutput,
+        &installerLogPath);
     if (!isMicrosoftInstallerSuccess(rc)) {
       const QString diagnosticsPath = reportInstallerFailure(
           QStringLiteral("%1 x64").arg(name), path, rc, installerOutput,
@@ -1656,8 +1857,8 @@ bool PrefixSetupRunner::stepDotNetInstall(const QString& url, const QString& nam
 
   QByteArray installerOutput;
   QString installerLogPath;
-  const int rc = runDotNetInstaller(installerPath, name, env,
-                                    &installerOutput, &installerLogPath);
+  const int rc = runMicrosoftInstaller(installerPath, name, env,
+                                       &installerOutput, &installerLogPath);
 
   if (!isMicrosoftInstallerSuccess(rc)) {
     const QString diagnosticsPath = reportInstallerFailure(
@@ -1679,7 +1880,7 @@ bool PrefixSetupRunner::stepDotNetInstall(const QString& url, const QString& nam
   return true;
 }
 
-int PrefixSetupRunner::runDotNetInstaller(
+int PrefixSetupRunner::runMicrosoftInstaller(
     const QString& installerPath,
     const QString& displayName,
     const QMap<QString, QString>& env,
@@ -1791,16 +1992,21 @@ QString PrefixSetupRunner::reportInstallerFailure(
     emit logMessage(line);
 
   QByteArray installerLog;
-  QFile sourceLog(installerLogPath);
-  if (sourceLog.open(QIODevice::ReadOnly))
-    installerLog = sourceLog.readAll();
-
-  emit logMessage(QStringLiteral("--- Microsoft installer log (%1) ---")
-                      .arg(installerLogPath));
-  if (installerLog.isEmpty()) {
-    emit logMessage(QStringLiteral("(installer did not produce a log)"));
+  if (installerLogPath.isEmpty()) {
+    emit logMessage(
+        QStringLiteral("(this legacy installer does not support a log path)"));
   } else {
-    emit logMessage(QString::fromUtf8(installerLog));
+    QFile sourceLog(installerLogPath);
+    if (sourceLog.open(QIODevice::ReadOnly))
+      installerLog = sourceLog.readAll();
+
+    emit logMessage(QStringLiteral("--- Microsoft installer log (%1) ---")
+                        .arg(installerLogPath));
+    if (installerLog.isEmpty()) {
+      emit logMessage(QStringLiteral("(installer did not produce a log)"));
+    } else {
+      emit logMessage(QString::fromUtf8(installerLog));
+    }
   }
 
   const QString diagnosticsDir = fluorineDataDir() + "/logs";
@@ -1835,8 +2041,12 @@ QString PrefixSetupRunner::reportInstallerFailure(
   diagnostics.write(processOutput.isEmpty() ? QByteArray("(no console output)\n")
                                              : processOutput);
   diagnostics.write("\n\n=== Microsoft installer log ===\n");
-  diagnostics.write(installerLog.isEmpty() ? QByteArray("(no installer log)\n")
-                                            : installerLog);
+  if (installerLogPath.isEmpty()) {
+    diagnostics.write("(log path unsupported by this legacy installer)\n");
+  } else {
+    diagnostics.write(installerLog.isEmpty() ? QByteArray("(no installer log)\n")
+                                              : installerLog);
+  }
   diagnostics.close();
 
   emit logMessage(
@@ -2253,31 +2463,14 @@ bool PrefixSetupRunner::downloadRuntimeInstaller(const QString& url,
                                                  const QString& displayName,
                                                  const QStringList& knownSha256)
 {
-  const QString stampPath = destPath + ".sha256";
-  bool refreshExisting = false;
   bool knownHashMatch = false;
   if (QFileInfo::exists(destPath) &&
       validateRuntimeInstaller(destPath, displayName, knownSha256,
                                &knownHashMatch)) {
-    if (knownSha256.isEmpty() || knownHashMatch)
-      return true;
-
-    const QString cachedSha = fileSha256(destPath);
-    QFile stamp(stampPath);
-    if (!cachedSha.isEmpty() && stamp.open(QIODevice::ReadOnly | QIODevice::Text) &&
-        QString::fromUtf8(stamp.readAll()).trimmed().compare(
-            cachedSha, Qt::CaseInsensitive) == 0) {
-      emit logMessage(QStringLiteral(
-          "Cached %1 has a previously accepted rolling hash.").arg(displayName));
-      return true;
-    }
-
-    emit logMessage(QStringLiteral(
-        "Cached %1 has an unknown hash, refreshing once...").arg(displayName));
-    refreshExisting = true;
+    return true;
   }
 
-  if (QFileInfo::exists(destPath) && !refreshExisting) {
+  if (QFileInfo::exists(destPath)) {
     emit logMessage(QStringLiteral("Cached %1 failed validation, re-downloading...")
                         .arg(displayName));
     QFile::remove(destPath);
@@ -2304,12 +2497,6 @@ bool PrefixSetupRunner::downloadRuntimeInstaller(const QString& url,
     currentStep().errorMessage =
         QStringLiteral("Failed to cache %1").arg(displayName);
     return false;
-  }
-
-  QFile stamp(stampPath);
-  if (stamp.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
-    stamp.write(fileSha256(destPath).toUtf8());
-    stamp.write("\n");
   }
 
   return true;
@@ -2358,12 +2545,10 @@ bool PrefixSetupRunner::validateRuntimeInstaller(const QString& path,
     if (knownHashMatch)
       *knownHashMatch = matched;
     if (!matched) {
-      emit logMessage(
-          QStringLiteral(
-              "WARNING: %1 hash is not in the known list; accepting because "
-              "the installer passed PE validation and Microsoft may have "
-              "updated the rolling download.")
-              .arg(displayName));
+      currentStep().errorMessage =
+          QStringLiteral("SHA256 mismatch for %1 (got %2)")
+              .arg(displayName, sha);
+      return false;
     }
   }
 
@@ -2888,6 +3073,9 @@ QString PrefixSetupRunner::describeInstallerExitCode(int exitCode)
   switch (exitCode) {
   case 5:
     return QStringLiteral("exit code 5: installer was cancelled or access was denied");
+  case 67:
+    return QStringLiteral(
+        "exit code 67: likely HRESULT 0x80070643 (MSI fatal error 1603)");
   case 112:
     return QStringLiteral(
         "exit code 112: not enough disk space in the prefix or target filesystem");
