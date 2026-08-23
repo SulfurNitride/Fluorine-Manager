@@ -34,6 +34,7 @@ static const char* ASSET_NAME   = "BethiniPie-linux.tar.gz";
 // MO2 game plugins sometimes return a short name (e.g. "New Vegas") that
 // differs from BethINI Pie's app folder name ("Fallout New Vegas").
 static const QMap<QString, QString> s_MO2ToBethiniName = {
+    {"Oblivion", "Oblivion"},
     {"Skyrim Special Edition", "Skyrim Special Edition"},
     {"Fallout 4", "Fallout 4"},
     {"Fallout New Vegas", "Fallout New Vegas"},
@@ -44,6 +45,7 @@ static const QMap<QString, QString> s_MO2ToBethiniName = {
 
 // Maps the BethINI Pie app name to its Bethini.json INI directory key.
 static const QMap<QString, QString> s_GameIniKeys = {
+    {"Oblivion", "sOblivionINIPath"},
     {"Skyrim Special Edition", "sSkyrim Special EditionINIPath"},
     {"Fallout 4", "sFallout 4INIPath"},
     {"Fallout New Vegas", "sFallout New VegasINIPath"},
@@ -80,7 +82,7 @@ QString BethiniPie::description() const
 
 VersionInfo BethiniPie::version() const
 {
-  return VersionInfo(1, 0, 0, VersionInfo::RELEASE_FINAL);
+  return VersionInfo(1, 1, 0, VersionInfo::RELEASE_FINAL);
 }
 
 QList<PluginSetting> BethiniPie::settings() const
@@ -402,8 +404,8 @@ void BethiniPie::display() const
         m_MOInfo->managedGame() ? m_MOInfo->managedGame()->gameName() : "unknown";
     QMessageBox::warning(
         parentWidget(), tr("Unsupported Game"),
-        tr("BethINI Pie does not support %1.\n\nSupported games: Skyrim Special "
-           "Edition, Fallout 4, Fallout New Vegas, Starfield.")
+        tr("BethINI Pie does not support %1.\n\nSupported games: Oblivion, Skyrim "
+           "Special Edition, Fallout 4, Fallout New Vegas, Starfield.")
             .arg(currentGame));
     return;
   }
