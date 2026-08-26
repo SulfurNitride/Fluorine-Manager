@@ -52,7 +52,8 @@ public:
     Managed,
     HasGameData,
     HasNexusID,
-    Tracked
+    Tracked,
+    FomodReview
   };
 
 public:

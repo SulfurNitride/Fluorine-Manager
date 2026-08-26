@@ -422,6 +422,11 @@ bool ModListSortProxy::categoryMatchesMod(ModInfo::Ptr info, bool enabled,
     break;
   }
 
+  case CategoryFactory::FomodReview: {
+    b = info->hasFlag(ModInfo::FLAG_FOMOD_REVIEW);
+    break;
+  }
+
   default: {
     b = (info->categorySet(category));
     break;

@@ -145,6 +145,28 @@ target_link_libraries(test_metainiutils PRIVATE
 add_test(NAME test_metainiutils COMMAND test_metainiutils)
 
 # ---------------------------------------------------------------------------
+# FOMOD dependency-transition and rerun recommendation tests
+# ---------------------------------------------------------------------------
+add_executable(test_fomoddependency EXCLUDE_FROM_ALL
+    test_fomoddependency.cpp
+    ${CMAKE_SOURCE_DIR}/libs/installer_fomod/src/fomoddependency.cpp
+)
+set_target_properties(test_fomoddependency PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_fomoddependency PRIVATE
+    ${CMAKE_SOURCE_DIR}/libs/installer_fomod/src
+)
+target_link_libraries(test_fomoddependency PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_fomoddependency COMMAND test_fomoddependency)
+
+# ---------------------------------------------------------------------------
 # Heroic/Legendary JSON schema normalization tests
 # ---------------------------------------------------------------------------
 add_executable(test_heroicjson EXCLUDE_FROM_ALL
@@ -479,7 +501,7 @@ set_tests_properties(test_python_module_switch PROPERTIES
 # Register a "fluorine-tests" umbrella target that builds every test exe.
 add_custom_target(fluorine-tests
     DEPENDS test_esptk_tes3 test_bsatk_extraction
-            test_plugincompatibility test_metainiutils
+            test_plugincompatibility test_metainiutils test_fomoddependency
             test_vfs_backend
             test_fluorineconfigownership
             test_heroicjson test_protondetection

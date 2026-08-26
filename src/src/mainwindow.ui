@@ -820,6 +820,26 @@
                 </spacer>
                </item>
                <item>
+                <widget class="QPushButton" name="fomodReviewsButton">
+                 <property name="enabled">
+                  <bool>false</bool>
+                 </property>
+                 <property name="toolTip">
+                  <string>Show mods whose FOMOD choices should be reviewed.</string>
+                 </property>
+                 <property name="text">
+                  <string>FOMOD Reviews (0)</string>
+                 </property>
+                 <property name="icon">
+                  <iconset resource="resources.qrc">
+                   <normaloff>:/MO/gui/warning_16</normaloff>:/MO/gui/warning_16</iconset>
+                 </property>
+                 <property name="checkable">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+               <item>
                 <widget class="QPushButton" name="sortButton">
                  <property name="toolTip">
                   <string>Sort plugins using LOOT.</string>

@@ -147,6 +147,18 @@ QString ModList::getFlagText(ModInfo::EFlag flag, ModInfo::Ptr modInfo)
     return tr("Mod is being tracked on the website");
   case ModInfo::FLAG_HIDDEN_FILES:
     return tr("Contains hidden files");
+  case ModInfo::FLAG_FOMOD_REVIEW: {
+    QString reason =
+        modInfo
+            ->pluginSetting(QStringLiteral("Fomod Installer"),
+                            QStringLiteral("dependencyReviewReason"))
+            .toString()
+            .toHtmlEscaped();
+    reason.replace(QLatin1Char('\n'), QStringLiteral("<br>"));
+    return tr("This FOMOD should be reviewed because installed mod or plugin "
+              "conditions changed:<br>%1")
+        .arg(reason);
+  }
   default:
     return "";
   }

@@ -94,6 +94,7 @@ public:  // Type definitions:
     FLAG_PLUGIN_SELECTED,
     FLAG_ALTERNATE_GAME,
     FLAG_TRACKED,
+    FLAG_FOMOD_REVIEW,
   };
 
   enum EHighlight

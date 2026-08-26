@@ -738,6 +738,12 @@ std::vector<ModInfo::EFlag> ModInfoRegular::getFlags() const
   if (m_IsAlternate && !m_Converted) {
     result.push_back(ModInfo::FLAG_ALTERNATE_GAME);
   }
+  if (!pluginSetting(QStringLiteral("Fomod Installer"),
+                     QStringLiteral("dependencyReviewReason"), QVariant())
+           .toString()
+           .isEmpty()) {
+    result.push_back(ModInfo::FLAG_FOMOD_REVIEW);
+  }
   return result;
 }
 

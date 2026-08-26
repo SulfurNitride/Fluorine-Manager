@@ -512,6 +512,12 @@ void ModListContextMenu::addRegularActions(ModInfo::Ptr mod)
   addAction(tr("Rename Mod..."), [=, this]() {
     m_actions.renameMod(m_index);
   });
+  if (std::find(flags.begin(), flags.end(), ModInfo::FLAG_FOMOD_REVIEW) !=
+      flags.end()) {
+    addAction(tr("Review FOMOD changes..."), [=, this]() {
+      m_actions.reinstallMod(m_index);
+    });
+  }
   addAction(tr("Reinstall Mod"), [=, this]() {
     m_actions.reinstallMod(m_index);
   });

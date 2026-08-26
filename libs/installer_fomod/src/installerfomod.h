@@ -5,6 +5,8 @@
 #include <uibase/iplugininstallersimple.h>
 #include <uibase/ipluginlist.h>
 
+#include <QByteArray>
+
 class InstallerFomod : public MOBase::IPluginInstallerSimple,
                        public MOBase::IPluginDiagnose
 {
@@ -40,6 +42,8 @@ public:
                                    MOBase::IModInterface* currentMod) override;
   virtual void onInstallationEnd(EInstallResult result,
                                  MOBase::IModInterface* newMod) override;
+
+  bool supportsDependencyTracking(const QString& fileName) const;
 
 public:  // IPluginDiagnose interface
   virtual std::vector<unsigned int> activeProblems() const;
@@ -84,6 +88,10 @@ private:
 
   MOBase::IPluginList::PluginStates fileState(const QString& fileName) const;
 
+  void scheduleDependencyEvaluation();
+  void evaluateDependencies();
+  void requestModListRefresh();
+
 private:
   static const unsigned int PROBLEM_IMAGETYPE_UNSUPPORTED = 1;
 
@@ -93,8 +101,12 @@ private:
   bool allowAnyFile() const;
   bool checkDisabledMods() const;
 
-  bool m_InstallerUsed;
+  bool m_InstallerUsed{false};
   QString m_Url;
+  QByteArray m_DependencySnapshot;
+  QByteArray m_PreviousDependencySnapshot;
+  bool m_DependencyEvaluationQueued{false};
+  bool m_RefreshQueued{false};
 };
 
 #endif  // INSTALLERFOMOD_H

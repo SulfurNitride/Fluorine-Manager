@@ -3,8 +3,10 @@
 #include <algorithm>
 
 #include <QImageReader>
+#include <QJsonDocument>
 #include <QDir>
 #include <QStringList>
+#include <QTimer>
 #include <QtPlugin>
 
 #include <uibase/iinstallationmanager.h>
@@ -15,6 +17,7 @@
 #include <uibase/utility.h>
 
 #include "fomodinstallerdialog.h"
+#include "fomoddependency.h"
 
 using namespace MOBase;
 
@@ -25,6 +28,16 @@ InstallerFomod::InstallerFomod() : m_MOInfo(nullptr) {}
 bool InstallerFomod::init(IOrganizer* moInfo)
 {
   m_MOInfo = moInfo;
+  m_MOInfo->pluginList()->onRefreshed(
+      [this] { scheduleDependencyEvaluation(); });
+  m_MOInfo->pluginList()->onPluginStateChanged(
+      [this](const auto&) { scheduleDependencyEvaluation(); });
+  m_MOInfo->modList()->onModInstalled(
+      [this](auto*) { scheduleDependencyEvaluation(); });
+  m_MOInfo->modList()->onModRemoved(
+      [this](const auto&) { scheduleDependencyEvaluation(); });
+  m_MOInfo->modList()->onModStateChanged(
+      [this](const auto&) { scheduleDependencyEvaluation(); });
   return true;
 }
 
@@ -45,7 +58,7 @@ QString InstallerFomod::description() const
 
 VersionInfo InstallerFomod::version() const
 {
-  return VersionInfo(1, 7, 0, VersionInfo::RELEASE_FINAL);
+  return VersionInfo(1, 8, 0, VersionInfo::RELEASE_FINAL);
 }
 
 QString InstallerFomod::localizedName() const
@@ -87,17 +100,127 @@ bool InstallerFomod::isManualInstaller() const
   return false;
 }
 
-void InstallerFomod::onInstallationStart(QString const&, bool, IModInterface*)
+void InstallerFomod::onInstallationStart(QString const&, bool,
+                                         IModInterface* currentMod)
 {
   m_InstallerUsed = false;
+  m_DependencySnapshot.clear();
+  m_PreviousDependencySnapshot.clear();
+  if (currentMod != nullptr) {
+    m_PreviousDependencySnapshot =
+        currentMod->pluginSetting(name(), FomodDependency::SnapshotKey)
+            .toString()
+            .toUtf8();
+  }
+}
+
+bool InstallerFomod::supportsDependencyTracking(const QString& fileName) const
+{
+  const QString suffix = QFileInfo(fileName).suffix().toLower();
+  return suffix == QLatin1String("esp") || suffix == QLatin1String("esm") ||
+         suffix == QLatin1String("esl") || allowAnyFile();
 }
 
 void InstallerFomod::onInstallationEnd(EInstallResult result, IModInterface* newMod)
 {
-  if (result == EInstallResult::RESULT_SUCCESS && m_InstallerUsed &&
-      newMod->url().isEmpty()) {
-    newMod->setUrl(m_Url);
+  if (result == EInstallResult::RESULT_SUCCESS && m_InstallerUsed && newMod != nullptr) {
+    if (newMod->url().isEmpty()) {
+      newMod->setUrl(m_Url);
+    }
+    if (!m_DependencySnapshot.isEmpty()) {
+      newMod->setPluginSetting(name(), FomodDependency::SnapshotKey,
+                               QString::fromUtf8(m_DependencySnapshot));
+      newMod->setPluginSetting(name(), FomodDependency::ReviewReasonKey, QString());
+    }
   }
+  scheduleDependencyEvaluation();
+}
+
+void InstallerFomod::scheduleDependencyEvaluation()
+{
+  if (m_DependencyEvaluationQueued || m_MOInfo == nullptr) {
+    return;
+  }
+  m_DependencyEvaluationQueued = true;
+  QTimer::singleShot(0, this, [this] {
+    m_DependencyEvaluationQueued = false;
+    evaluateDependencies();
+  });
+}
+
+void InstallerFomod::evaluateDependencies()
+{
+  if (m_MOInfo == nullptr) {
+    return;
+  }
+
+  const auto resolve = [this](const QString& file) {
+    const IPluginList::PluginStates state = fileState(file);
+    if (state == IPluginList::STATE_ACTIVE) {
+      return FomodDependency::FileState::Active;
+    }
+    if (state == IPluginList::STATE_INACTIVE) {
+      return FomodDependency::FileState::Inactive;
+    }
+    return FomodDependency::FileState::Missing;
+  };
+
+  bool reviewStateChanged = false;
+  IModList* modList        = m_MOInfo->modList();
+  for (const QString& modName : modList->allMods()) {
+    IModInterface* mod = modList->getMod(modName);
+    if (mod == nullptr) {
+      continue;
+    }
+    QByteArray snapshot =
+        mod->pluginSetting(name(), FomodDependency::SnapshotKey).toString().toUtf8();
+    if (snapshot.isEmpty()) {
+      continue;
+    }
+
+    QString reason;
+    if (!FomodDependency::isBaselined(snapshot)) {
+      snapshot = FomodDependency::rebaseline(snapshot, resolve);
+      if (!snapshot.isEmpty()) {
+        mod->setPluginSetting(name(), FomodDependency::SnapshotKey,
+                              QString::fromUtf8(snapshot));
+      }
+    } else if ((modList->state(modName) & IModList::STATE_ACTIVE) != 0) {
+      QStringList reasons = FomodDependency::reviewReasons(snapshot, resolve);
+      constexpr qsizetype MaxDisplayedReasons = 3;
+      if (reasons.size() > MaxDisplayedReasons) {
+        const qsizetype additional = reasons.size() - MaxDisplayedReasons;
+        reasons = reasons.mid(0, MaxDisplayedReasons);
+        reasons.append(tr("%1 more FOMOD changes").arg(additional));
+      }
+      reason = reasons.join(QLatin1Char('\n'));
+    }
+
+    const QString previous =
+        mod->pluginSetting(name(), FomodDependency::ReviewReasonKey).toString();
+    if (reason != previous) {
+      mod->setPluginSetting(name(), FomodDependency::ReviewReasonKey, reason);
+      reviewStateChanged = true;
+    }
+  }
+
+  if (reviewStateChanged) {
+    requestModListRefresh();
+  }
+}
+
+void InstallerFomod::requestModListRefresh()
+{
+  if (m_RefreshQueued) {
+    return;
+  }
+  m_RefreshQueued = true;
+  QTimer::singleShot(0, this, [this] {
+    m_RefreshQueued = false;
+    if (m_MOInfo != nullptr) {
+      m_MOInfo->refresh(false);
+    }
+  });
 }
 
 std::shared_ptr<const IFileTree>
@@ -250,6 +373,9 @@ InstallerFomod::install(GuessedValue<QString>& modName,
           this, modName, extractionRoot, fomodPath, fomodDirName,
           std::bind(&InstallerFomod::fileState, this, std::placeholders::_1));
       dialog.initData(m_MOInfo);
+      if (!m_PreviousDependencySnapshot.isEmpty()) {
+        dialog.restoreTrackedSelections(m_PreviousDependencySnapshot);
+      }
       if (!dialog.getVersion().isEmpty()) {
         version = dialog.getVersion();
       }
@@ -267,7 +393,12 @@ InstallerFomod::install(GuessedValue<QString>& modName,
       auto result = dialog.exec();
       if (result == QDialog::Accepted) {
         modName.update(dialog.getName(), GUESS_USER);
-        return dialog.updateTree(tree);
+        const auto installResult = dialog.updateTree(tree);
+        if (installResult == IPluginInstaller::RESULT_SUCCESS) {
+          m_DependencySnapshot =
+              QJsonDocument(dialog.dependencySnapshot()).toJson(QJsonDocument::Compact);
+        }
+        return installResult;
       } else {
         if (dialog.manualRequested()) {
           modName.update(dialog.getName(), GUESS_USER);

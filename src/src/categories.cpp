@@ -455,6 +455,9 @@ QString CategoryFactory::getSpecialCategoryName(SpecialCategories type)
   case Tracked:
     label = QObject::tr("Tracked on Nexus");
     break;
+  case FomodReview:
+    label = QObject::tr("FOMOD review needed");
+    break;
   default:
     return {};
   }

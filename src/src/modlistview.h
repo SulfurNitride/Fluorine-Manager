@@ -214,6 +214,7 @@ private:  // private structures
     QLabel* currentCategory;
     QPushButton* clearFilters;
     QComboBox* filterSeparators;
+    QPushButton* fomodReviews;
 
     // the plugin list (for highlights)
     PluginListView* pluginList;
@@ -303,6 +304,7 @@ private:  // private functions
   // compute the counters for mods according to the current filter
   //
   ModCounters counters() const;
+  void updateFomodReviewButton();
 
   // get/set the selected items on the view, this method return/take indices
   // from the mod list model, not the view, so it's safe to restore

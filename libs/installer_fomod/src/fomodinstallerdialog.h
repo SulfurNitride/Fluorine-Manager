@@ -21,6 +21,8 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <QDialog>
 #include <QGroupBox>
+#include <QJsonObject>
+#include <QByteArray>
 #include <QMetaType>
 #include <QObject>
 #include <QString>
@@ -254,6 +256,14 @@ public:
 
   void transformToSmallInstall();
 
+  // Capture the user's final choices and every externally file-driven condition.
+  // The installer persists this after the mod has been committed to disk.
+  QJsonObject dependencySnapshot() const;
+
+  // Restore compatible choices from the previous install and annotate controls so
+  // the wizard can explain which options are old, newly relevant, or stale.
+  void restoreTrackedSelections(const QByteArray& snapshot);
+
 protected:
   virtual bool eventFilter(QObject* object, QEvent* event);
 
@@ -368,6 +378,7 @@ private:
   static ItemOrder getItemOrder(const QString& orderString);
   static GroupType getGroupType(const QString& typeString);
   static PluginType getPluginType(const QString& typeString);
+  static int pluginTypeRank(PluginType type);
   static bool byPriority(const FileDescriptor* LHS, const FileDescriptor* RHS);
 
   PluginType getPluginDependencyType(int page, PluginTypeInfo const& info) const;
@@ -394,6 +405,8 @@ private:
   void readStepList(XmlReader& reader);
   void readModuleConfiguration(XmlReader& reader);
   void highlightControl(QAbstractButton* button);
+
+  QJsonObject serializeCondition(int maxIndex, const Condition* condition) const;
 
   std::pair<bool, QString> testCondition(int maxIndex, const QString& flag,
                                          const QString& value) const;

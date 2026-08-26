@@ -1,6 +1,10 @@
 #include "modlistview.h"
+
+#include <algorithm>
+
 #include <QMimeData>
 #include <QProxyStyle>
+#include <QSignalBlocker>
 #include <QUrl>
 
 #include <widgetutility.h>
@@ -561,6 +565,25 @@ void ModListView::updateModCount()
                              .arg(c.visible.backup)
                              .arg(c.separator)
                              .arg(c.visible.separator));
+  updateFomodReviewButton();
+}
+
+void ModListView::updateFomodReviewButton()
+{
+  int count = 0;
+  for (unsigned int index = 0; index < ModInfo::getNumMods(); ++index) {
+    if (ModInfo::getByIndex(index)->hasFlag(ModInfo::FLAG_FOMOD_REVIEW)) {
+      ++count;
+    }
+  }
+
+  ui.fomodReviews->setText(tr("FOMOD Reviews (%1)").arg(count));
+  ui.fomodReviews->setEnabled(count > 0 || ui.fomodReviews->isChecked());
+  ui.fomodReviews->setToolTip(
+      count == 0
+          ? tr("No FOMOD installations currently need review.")
+          : tr("Show %n mod(s) whose FOMOD choices should be reviewed.", nullptr,
+               count));
 }
 
 void ModListView::refreshFilters()
@@ -758,6 +781,7 @@ void ModListView::setup(OrganizerCore& core, CategoryFactory& factory, MainWindo
         mwui->currentCategoryLabel,
         mwui->clearFiltersButton,
         mwui->filtersSeparators,
+        mwui->fomodReviewsButton,
         mwui->espList};
 
   connect(m_core, &OrganizerCore::modInstalled, [=, this](auto&& name) {
@@ -831,6 +855,17 @@ void ModListView::setup(OrganizerCore& core, CategoryFactory& factory, MainWindo
 
   connect(m_sortProxy, &ModListSortProxy::filterInvalidated, this,
           &ModListView::updateModCount);
+
+  connect(ui.fomodReviews, &QPushButton::toggled, [this](bool checked) {
+    std::vector<ModListSortProxy::Criteria> criteria;
+    if (checked) {
+      ui.filter->clear();
+      criteria.push_back({ModListSortProxy::TypeSpecial,
+                          CategoryFactory::FomodReview, false});
+    }
+    m_filters->setSelection(criteria);
+    onFiltersCriteria(criteria);
+  });
 
   connect(header(), &QHeaderView::sortIndicatorChanged, [=, this](int, Qt::SortOrder) {
     verticalScrollBar()->repaint();
@@ -1354,6 +1389,14 @@ QString ModListView::contentsTooltip(const QModelIndex& index) const
 void ModListView::onFiltersCriteria(
     const std::vector<ModListSortProxy::Criteria>& criteria)
 {
+  const bool fomodReviewSelected =
+      std::any_of(criteria.begin(), criteria.end(), [](const auto& criterion) {
+        return criterion.type == ModListSortProxy::TypeSpecial &&
+               criterion.id == CategoryFactory::FomodReview && !criterion.inverse;
+      });
+  const QSignalBlocker blocker(ui.fomodReviews);
+  ui.fomodReviews->setChecked(fomodReviewSelected);
+  updateFomodReviewButton();
   setFilterCriteria(criteria);
 
   QString label = "?";

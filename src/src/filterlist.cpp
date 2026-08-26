@@ -308,6 +308,7 @@ void FilterList::refresh()
   using F = CategoryFactory;
   addSpecialCriteria(F::Checked);
   addSpecialCriteria(F::UpdateAvailable);
+  addSpecialCriteria(F::FomodReview);
   addSpecialCriteria(F::Backup);
   addSpecialCriteria(F::Managed);
   addSpecialCriteria(F::HasCategory);

@@ -32,6 +32,8 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <QFile>
 #include <QImage>
 #include <QDesktopServices>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QRadioButton>
 #include <QScrollArea>
 #include <QUrl>
@@ -51,6 +53,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <uibase/utility.h>
 
 #include "fomodscreenshotdialog.h"
+#include "fomoddependency.h"
 #include "xmlreader.h"
 
 using namespace MOBase;
@@ -343,6 +346,280 @@ int FomodInstallerDialog::getModID() const
 QString FomodInstallerDialog::getURL() const
 {
   return m_URL;
+}
+
+QJsonObject FomodInstallerDialog::serializeCondition(
+    int maxIndex, const Condition* condition) const
+{
+  if (const auto* file = dynamic_cast<const FileCondition*>(condition)) {
+    if (!m_Installer->supportsDependencyTracking(file->m_File)) {
+      return QJsonObject{
+          {QStringLiteral("kind"), QStringLiteral("constant")},
+          {QStringLiteral("value"), condition->test(maxIndex, this).first}};
+    }
+    return QJsonObject{{QStringLiteral("kind"), QStringLiteral("file")},
+                       {QStringLiteral("file"), file->m_File.trimmed()},
+                       {QStringLiteral("state"), file->m_State.trimmed()}};
+  }
+  if (const auto* composite = dynamic_cast<const SubCondition*>(condition)) {
+    QJsonArray children;
+    for (const Condition* child : composite->m_Conditions) {
+      children.append(serializeCondition(maxIndex, child));
+    }
+    return QJsonObject{
+        {QStringLiteral("kind"),
+         composite->m_Operator == OP_OR ? QStringLiteral("or")
+                                         : QStringLiteral("and")},
+        {QStringLiteral("children"), children}};
+  }
+
+  // Flags are determined by the choices made in this same installer and version
+  // gates do not change merely because another mod was installed. Freeze both at
+  // their final install-time result while retaining surrounding AND/OR structure.
+  const bool value = condition != nullptr && condition->test(maxIndex, this).first;
+  return QJsonObject{{QStringLiteral("kind"), QStringLiteral("constant")},
+                     {QStringLiteral("value"), value}};
+}
+
+QJsonObject FomodInstallerDialog::dependencySnapshot() const
+{
+  QJsonArray records;
+
+  for (int pageIndex = 0; pageIndex < ui->stepsStack->count(); ++pageIndex) {
+    QWidget* page         = ui->stepsStack->widget(pageIndex);
+    const QString stepName = qobject_cast<QGroupBox*>(page) != nullptr
+                                 ? qobject_cast<QGroupBox*>(page)->title()
+                                 : tr("FOMOD step %1").arg(pageIndex + 1);
+
+    const QVariant visibleCondition = page->property("conditional");
+    if (visibleCondition.isValid()) {
+      const SubCondition condition = visibleCondition.value<SubCondition>();
+      const QJsonObject encoded = serializeCondition(pageIndex, &condition);
+      if (FomodDependency::conditionUsesFile(encoded)) {
+        records.append(QJsonObject{
+            {QStringLiteral("kind"), QStringLiteral("predicate")},
+            {QStringLiteral("label"), tr("Step '%1'").arg(stepName)},
+            {QStringLiteral("baseline"), testVisible(pageIndex)},
+            {QStringLiteral("condition"), encoded}});
+      }
+    }
+
+    const auto layouts = page->findChildren<QVBoxLayout*>("grouplayout");
+    for (qsizetype groupIndex = 0; groupIndex < layouts.size(); ++groupIndex) {
+      QVBoxLayout* layout = layouts.at(groupIndex);
+      const auto* groupBox = qobject_cast<QGroupBox*>(layout->parentWidget());
+      const QString groupName = groupBox != nullptr ? groupBox->title() : QString();
+      int optionIndex = 0;
+      for (int i = 0; i < layout->count(); ++i) {
+        const QLayoutItem* item = layout->itemAt(i);
+        const auto* choice =
+            item != nullptr ? qobject_cast<QAbstractButton*>(item->widget()) : nullptr;
+        if (choice == nullptr || choice->objectName() != QLatin1String("choice")) {
+          continue;
+        }
+
+        const PluginTypeInfo info =
+            choice->property("plugintypeinfo").value<PluginTypeInfo>();
+        QJsonArray patterns;
+        bool usesFile = false;
+        for (const DependencyPattern& pattern : info.m_DependencyPatterns) {
+          const QJsonObject condition = serializeCondition(pageIndex, &pattern.condition);
+          usesFile = usesFile || FomodDependency::conditionUsesFile(condition);
+          patterns.append(QJsonObject{{QStringLiteral("type"), pattern.type},
+                                      {QStringLiteral("condition"), condition}});
+        }
+        QStringList labelParts{stepName};
+        if (!groupName.isEmpty()) {
+          labelParts.append(groupName);
+        }
+        labelParts.append(choice->text());
+        records.append(QJsonObject{
+            {QStringLiteral("kind"), QStringLiteral("option")},
+            {QStringLiteral("label"), labelParts.join(QStringLiteral(" › "))},
+            {QStringLiteral("stepIndex"), pageIndex},
+            {QStringLiteral("stepName"), stepName},
+            {QStringLiteral("groupIndex"), groupIndex},
+            {QStringLiteral("groupName"), groupName},
+            {QStringLiteral("optionIndex"), optionIndex++},
+            {QStringLiteral("optionName"), choice->text()},
+            {QStringLiteral("selected"), choice->isChecked()},
+            {QStringLiteral("dependencyDriven"), usesFile},
+            {QStringLiteral("baselineType"), getPluginDependencyType(pageIndex, info)},
+            {QStringLiteral("defaultType"), info.m_DefaultType},
+            {QStringLiteral("patterns"), patterns}});
+      }
+    }
+  }
+
+  for (qsizetype i = 0; i < static_cast<qsizetype>(m_ConditionalInstalls.size()); ++i) {
+    const ConditionalInstall& install = m_ConditionalInstalls[static_cast<size_t>(i)];
+    const QJsonObject condition =
+        serializeCondition(ui->stepsStack->count(), &install.m_Condition);
+    if (!FomodDependency::conditionUsesFile(condition)) {
+      continue;
+    }
+    records.append(QJsonObject{
+        {QStringLiteral("kind"), QStringLiteral("predicate")},
+        {QStringLiteral("label"), tr("Conditional file set %1").arg(i + 1)},
+        {QStringLiteral("baseline"),
+         install.m_Condition.test(ui->stepsStack->count(), this).first},
+        {QStringLiteral("condition"), condition}});
+  }
+
+  return QJsonObject{{QStringLiteral("schema"), 1},
+                     {QStringLiteral("baselined"), false},
+                     {QStringLiteral("records"), records}};
+}
+
+int FomodInstallerDialog::pluginTypeRank(PluginType type)
+{
+  switch (type) {
+  case TYPE_REQUIRED:
+    return 4;
+  case TYPE_RECOMMENDED:
+    return 3;
+  case TYPE_OPTIONAL:
+    return 2;
+  case TYPE_COULDBEUSABLE:
+    return 1;
+  case TYPE_NOTUSABLE:
+    return 0;
+  }
+  return 2;
+}
+
+void FomodInstallerDialog::restoreTrackedSelections(const QByteArray& snapshot)
+{
+  QJsonParseError error;
+  const QJsonDocument document = QJsonDocument::fromJson(snapshot, &error);
+  if (error.error != QJsonParseError::NoError || !document.isObject()) {
+    return;
+  }
+  const QJsonArray records = document.object().value(QStringLiteral("records")).toArray();
+  if (records.isEmpty()) {
+    return;
+  }
+
+  const auto findRecord = [&records](int stepIndex, const QString& stepName,
+                                     int groupIndex, const QString& groupName,
+                                     int optionIndex, const QString& optionName) {
+    QJsonObject indexFallback;
+    for (const auto& value : records) {
+      const QJsonObject record = value.toObject();
+      if (record.value(QStringLiteral("kind")).toString() !=
+          QLatin1String("option")) {
+        continue;
+      }
+      const bool namesMatch =
+          record.value(QStringLiteral("stepName"))
+                  .toString()
+                  .compare(stepName, Qt::CaseInsensitive) == 0 &&
+          record.value(QStringLiteral("groupName"))
+                  .toString()
+                  .compare(groupName, Qt::CaseInsensitive) == 0 &&
+          record.value(QStringLiteral("optionName"))
+                  .toString()
+                  .compare(optionName, Qt::CaseInsensitive) == 0;
+      if (namesMatch) {
+        return record;
+      }
+      if (record.value(QStringLiteral("stepIndex")).toInt(-1) == stepIndex &&
+          record.value(QStringLiteral("groupIndex")).toInt(-1) == groupIndex &&
+          record.value(QStringLiteral("optionIndex")).toInt(-1) == optionIndex) {
+        indexFallback = record;
+      }
+    }
+    return indexFallback;
+  };
+
+  const int originalPage = ui->stepsStack->currentIndex();
+  for (int pageIndex = 0; pageIndex < ui->stepsStack->count(); ++pageIndex) {
+    QWidget* page = ui->stepsStack->widget(pageIndex);
+    ui->stepsStack->setCurrentIndex(pageIndex);
+    displayCurrentPage();
+
+    const auto* pageBox = qobject_cast<QGroupBox*>(page);
+    const QString stepName = pageBox != nullptr ? pageBox->title() : QString();
+    const auto layouts = page->findChildren<QVBoxLayout*>("grouplayout");
+    for (qsizetype groupIndex = 0; groupIndex < layouts.size(); ++groupIndex) {
+      QVBoxLayout* layout = layouts.at(groupIndex);
+      const auto* groupBox = qobject_cast<QGroupBox*>(layout->parentWidget());
+      const QString groupName = groupBox != nullptr ? groupBox->title() : QString();
+      const GroupType groupType = layout->property("groupType").value<GroupType>();
+
+      QList<QAbstractButton*> controls;
+      for (int i = 0; i < layout->count(); ++i) {
+        if (const QLayoutItem* item = layout->itemAt(i)) {
+          if (auto* choice = qobject_cast<QAbstractButton*>(item->widget());
+              choice != nullptr && choice->objectName() == QLatin1String("choice")) {
+            controls.append(choice);
+          }
+        }
+      }
+
+      QAbstractButton* priorValidSingleChoice = nullptr;
+      QAbstractButton* requiredSingleChoice   = nullptr;
+      bool priorSingleChoiceBecameInvalid     = false;
+      for (qsizetype optionIndex = 0; optionIndex < controls.size(); ++optionIndex) {
+        QAbstractButton* choice = controls.at(optionIndex);
+        const QJsonObject record = findRecord(
+            pageIndex, stepName, groupIndex, groupName, optionIndex, choice->text());
+        if (record.isEmpty()) {
+          continue;
+        }
+
+        const bool wasSelected = record.value(QStringLiteral("selected")).toBool();
+        const auto baselineType = static_cast<PluginType>(
+            record.value(QStringLiteral("baselineType")).toInt(TYPE_OPTIONAL));
+        const PluginTypeInfo info =
+            choice->property("plugintypeinfo").value<PluginTypeInfo>();
+        const PluginType currentType = getPluginDependencyType(pageIndex, info);
+        choice->setProperty("fomodTracked", true);
+        choice->setProperty("fomodTrackedSelected", wasSelected);
+        choice->setProperty("fomodTrackedBaselineType", baselineType);
+
+        const bool singleChoice = groupType == TYPE_SELECTEXACTLYONE ||
+                                  groupType == TYPE_SELECTATMOSTONE;
+        if (singleChoice && currentType == TYPE_REQUIRED) {
+          requiredSingleChoice = choice;
+        }
+        if (singleChoice && wasSelected) {
+          if (currentType != TYPE_NOTUSABLE) {
+            priorValidSingleChoice = choice;
+          } else {
+            priorSingleChoiceBecameInvalid = true;
+          }
+        } else if (!singleChoice && groupType != TYPE_SELECTALL) {
+          const bool newlyRecommended =
+              !wasSelected && pluginTypeRank(currentType) > pluginTypeRank(baselineType) &&
+              pluginTypeRank(currentType) >= pluginTypeRank(TYPE_RECOMMENDED);
+          choice->setChecked(currentType == TYPE_REQUIRED ||
+                             (currentType != TYPE_NOTUSABLE &&
+                              (wasSelected || newlyRecommended)));
+        }
+      }
+
+      if (requiredSingleChoice != nullptr) {
+        requiredSingleChoice->setChecked(true);
+      } else if (priorValidSingleChoice != nullptr) {
+        priorValidSingleChoice->setChecked(true);
+      } else if (groupType == TYPE_SELECTATMOSTONE &&
+                 !priorSingleChoiceBecameInvalid) {
+        for (QAbstractButton* choice : controls) {
+          if (choice->property("fomodTracked").toBool()) {
+            choice->setChecked(false);
+          }
+        }
+      }
+    }
+    displayCurrentPage();
+  }
+
+  if (originalPage >= 0 && originalPage < ui->stepsStack->count()) {
+    ui->stepsStack->setCurrentIndex(originalPage);
+    displayCurrentPage();
+    updateNextbtnText();
+  }
 }
 
 void FomodInstallerDialog::applyPriority(Leaves& leaves, IFileTree const* tree,
@@ -1578,8 +1855,11 @@ void FomodInstallerDialog::displayCurrentPage()
 {
   // Iterate over all buttons and set the tool tips as appropriate
   int const page = ui->stepsStack->currentIndex();
+  QWidget* const currentPage = ui->stepsStack->widget(page);
+  const bool initializeSelections =
+      !currentPage->property("fomodDefaultsApplied").toBool();
   for (QVBoxLayout* layout :
-       ui->stepsStack->widget(page)->findChildren<QVBoxLayout*>("grouplayout")) {
+       currentPage->findChildren<QVBoxLayout*>("grouplayout")) {
     // Create a list of buttons, as in order to attempt to keep users existing choices
     // intact, we may need to cycle over this twice
     QList<QAbstractButton*> controls;
@@ -1597,26 +1877,26 @@ void FomodInstallerDialog::displayCurrentPage()
       }
     }
 
-    // FIXME If we are displaying this for the 2nd time, we should do two passes,
-    // as currently if you have decided against a recommended option, gone back,
-    // and then gone forward, your selection will be lost.
-    // For tick boxes it requires a bit of thought, because the first time we come
-    // in here, all tick boxes are clear, which is a valid condition. For radio
-    // buttons, that's not a valid condition so we can override. But we should
-    // possibly override anyway if the plugin types have changed since last time.
     GroupType groupType(layout->property("groupType").value<GroupType>());
     if (groupType != TYPE_SELECTALL) {
       bool const mustSelectOne =
           groupType == TYPE_SELECTEXACTLYONE || groupType == TYPE_SELECTATLEASTONE;
-      bool maySelectMore              = true;
-      QAbstractButton* first_optional = nullptr;
-      QAbstractButton* first_couldbe  = nullptr;
+      bool maySelectMore                  = true;
+      QAbstractButton* forced_control     = nullptr;
+      QAbstractButton* first_recommended = nullptr;
+      QAbstractButton* first_optional    = nullptr;
+      QAbstractButton* first_couldbe     = nullptr;
 
       for (QAbstractButton* const control : controls) {
         PluginTypeInfo const info =
             control->property("plugintypeinfo").value<PluginTypeInfo>();
         PluginType const type = getPluginDependencyType(page, info);
         control->setEnabled(true);
+        control->setIcon(QIcon());
+        QFont trackingFont = control->font();
+        trackingFont.setBold(false);
+        trackingFont.setItalic(false);
+        control->setFont(trackingFont);
         switch (type) {
         case TYPE_REQUIRED: {
           if ((groupType == TYPE_SELECTEXACTLYONE) ||
@@ -1626,9 +1906,7 @@ void FomodInstallerDialog::displayCurrentPage()
             // forced, otherwise the user can pick.
             // This means that in this case the option is forced, and no user
             // selection should be possible
-            for (QAbstractButton* groupControl : controls) {
-              groupControl->setEnabled(false);
-            }
+            forced_control = control;
           } else {
             control->setEnabled(false);
           }
@@ -1636,7 +1914,10 @@ void FomodInstallerDialog::displayCurrentPage()
           control->setToolTip(tr("This component is required"));
         } break;
         case TYPE_RECOMMENDED: {
-          if (maySelectMore || !mustSelectOne) {
+          if (first_recommended == nullptr) {
+            first_recommended = control;
+          }
+          if (initializeSelections && (maySelectMore || !mustSelectOne)) {
             control->setChecked(true);
           }
           control->setToolTip(tr("It is recommended you enable this component"));
@@ -1666,18 +1947,65 @@ void FomodInstallerDialog::displayCurrentPage()
         if (control->isChecked()) {
           maySelectMore = false;
         }
+
+        if (control->property("fomodTracked").toBool()) {
+          const bool wasSelected =
+              control->property("fomodTrackedSelected").toBool();
+          const auto baselineType = static_cast<PluginType>(
+              control->property("fomodTrackedBaselineType").toInt());
+          const bool newlyAvailable =
+              !wasSelected && baselineType == TYPE_NOTUSABLE &&
+              type != TYPE_NOTUSABLE;
+          const bool newlyRecommended =
+              !wasSelected && pluginTypeRank(type) > pluginTypeRank(baselineType) &&
+              pluginTypeRank(type) >= pluginTypeRank(TYPE_RECOMMENDED);
+
+          QString trackingTip;
+          if (wasSelected && type == TYPE_NOTUSABLE) {
+            trackingTip = tr("Previously selected, but no longer usable");
+            control->setIcon(QIcon(":/new/guiresources/warning_16"));
+          } else if (newlyRecommended) {
+            trackingTip = tr("Newly recommended since the previous install");
+            control->setIcon(QIcon(":/new/guiresources/warning_16"));
+          } else if (newlyAvailable) {
+            trackingTip = tr("Newly available since the previous install");
+            control->setIcon(QIcon(":/new/guiresources/warning_16"));
+          } else if (wasSelected) {
+            trackingTip = tr("Selected in the previous install");
+          }
+
+          if (!trackingTip.isEmpty()) {
+            control->setToolTip(control->toolTip() + QStringLiteral("\n\n") +
+                                trackingTip);
+            trackingFont = control->font();
+            trackingFont.setBold(true);
+            trackingFont.setItalic(!wasSelected);
+            control->setFont(trackingFont);
+          }
+        }
+      }
+      if (forced_control != nullptr) {
+        forced_control->setChecked(true);
+        for (QAbstractButton* groupControl : controls) {
+          groupControl->setEnabled(false);
+        }
+        if (none_button != nullptr) {
+          none_button->setEnabled(false);
+        }
       }
       if (maySelectMore) {
         if (none_button != nullptr) {
           none_button->setChecked(true);
         } else if (mustSelectOne) {
-          if (first_optional != nullptr) {
+          if (first_recommended != nullptr) {
+            first_recommended->setChecked(true);
+          } else if (first_optional != nullptr) {
             first_optional->setChecked(true);
           } else if (first_couldbe != nullptr) {
             qWarning("User should select at least one plugin but the only ones "
                      "available could cause instability");
             first_couldbe->setChecked(true);
-          } else {
+          } else if (!controls.isEmpty()) {
             // FIXME Should this generate an error
             qWarning("User should select at least one plugin but none are available");
             controls[0]->setChecked(true);
@@ -1686,6 +2014,7 @@ void FomodInstallerDialog::displayCurrentPage()
       }
     }
   }
+  currentPage->setProperty("fomodDefaultsApplied", true);
 }
 
 void FomodInstallerDialog::on_nextBtn_clicked()
