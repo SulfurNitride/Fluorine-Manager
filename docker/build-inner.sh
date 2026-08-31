@@ -774,9 +774,16 @@ else
     unset FONTCONFIG_FILE FONTCONFIG_PATH
 fi
 
-# Raise open file descriptor limit — large modlists with FUSE VFS
-# can easily exceed the default 1024
-ulimit -n 65536 2>/dev/null
+# Raise the soft open-file limit for large FUSE modlists without exceeding the
+# session's hard limit (commonly lower under non-systemd init systems).
+FLUORINE_NOFILE_TARGET=65536
+FLUORINE_NOFILE_HARD="$(ulimit -Hn 2>/dev/null || true)"
+if [[ "${FLUORINE_NOFILE_HARD}" =~ ^[0-9]+$ ]] &&
+   (( FLUORINE_NOFILE_HARD < FLUORINE_NOFILE_TARGET )); then
+    FLUORINE_NOFILE_TARGET="${FLUORINE_NOFILE_HARD}"
+fi
+ulimit -Sn "${FLUORINE_NOFILE_TARGET}" 2>/dev/null || true
+unset FLUORINE_NOFILE_TARGET FLUORINE_NOFILE_HARD
 
 cd "${RUN}"
 exec "${RUN}/ModOrganizer-core" "$@"
