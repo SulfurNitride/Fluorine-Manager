@@ -253,6 +253,28 @@ target_link_libraries(test_shell_operations PRIVATE
 add_test(NAME test_shell_operations COMMAND test_shell_operations)
 
 # ---------------------------------------------------------------------------
+# Portable instance launcher-script tests
+# ---------------------------------------------------------------------------
+add_executable(test_portablelauncherscript EXCLUDE_FROM_ALL
+    test_portablelauncherscript.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/portablelauncherscript.cpp
+)
+set_target_properties(test_portablelauncherscript PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_portablelauncherscript PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_portablelauncherscript PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_portablelauncherscript COMMAND test_portablelauncherscript)
+
+# ---------------------------------------------------------------------------
 # VFS file-operation regression tests
 # ---------------------------------------------------------------------------
 add_executable(test_vfs_file_ops EXCLUDE_FROM_ALL
@@ -505,7 +527,8 @@ add_custom_target(fluorine-tests
             test_vfs_backend
             test_fluorineconfigownership
             test_heroicjson test_protondetection
-            test_external_dir_mapping test_vfs_file_ops
+            test_external_dir_mapping test_portablelauncherscript
+            test_vfs_file_ops
             test_shell_operations
             test_vfs_descriptor_cleanup test_mount_path_utils
             test_vfs_runtime_index
