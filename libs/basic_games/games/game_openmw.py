@@ -40,7 +40,6 @@ from .openmw_support.flatpak_access import (
 from .openmw_support.openmw_cfg import (
     VANILLA_BSAS,
     find_openmw_cfg,
-    is_openmw_player_stub,
     order_selected_files,
     parse_openmw_selection_chain,
     read_openmw_data_dirs,
@@ -341,36 +340,12 @@ class OpenMWGame(BasicGame):
             # Data Files may contain enabled archives that are not one of the
             # canonical vanilla BSAs, such as Morrowind - Invalidation.bsa.
             _scan_archives(data_files)
-            # Plugin scanning is discovery-only here. Version-3 state already owns
-            # activation and order; scans only build data paths, collect archives,
-            # and provide non-destructive groundcover hints.
-            masters: list[str] = []         # .esm / .omwgame
-            normal_plugins: list[str] = []  # .esp / .omwaddon
+            # Version-3 state already owns plugin activation and order. Physical
+            # scans only build data paths and collect archives.
 
             def _scan_mod(path: Path) -> None:
                 data_dirs.append(path)
-                try:
-                    entries = sorted(path.iterdir(), key=lambda p: p.name.lower())
-                except OSError:
-                    return
-                for f in entries:
-                    if not f.is_file():
-                        continue
-                    # Skip Kezyma "OpenMW Player" stub esps: empty TES3 esps named
-                    # <name>.omwaddon.esp / <name>.omwscripts.esp that some MO2<->OpenMW
-                    # tools drop next to the real .omwaddon/.omwscripts purely so the
-                    # entry shows up in MO2's plugin list. The real file is scanned
-                    # separately; loading the empty stub as content= is at best useless
-                    # and at worst aborts OpenMW ("sub-record incomplete").
-                    if is_openmw_player_stub(f.name):
-                        continue
-                    ext = f.suffix.lower()
-                    if ext in {".esm", ".omwgame"}:
-                        masters.append(f.name)
-                    elif ext in {".esp", ".omwaddon"}:
-                        normal_plugins.append(f.name)
-                    elif ext == ".bsa":
-                        bsa_archives.append(f.name)
+                _scan_archives(path)
 
             for name in modlist.allModsByProfilePriority():
                 if name == "Overwrite":
@@ -478,19 +453,6 @@ class OpenMWGame(BasicGame):
             selected_archives = order_selected_files(
                 bsa_archives, state["archives"]
             )
-
-            # Helpful, non-destructive nudge: flag likely groundcover plugins the
-            # user hasn't listed yet (we never reroute automatically).
-            for p in masters + normal_plugins:
-                low = p.casefold()
-                if low not in groundcover_keys and (
-                    "grass" in low or "groundcover" in low
-                ):
-                    qInfo(
-                        f"OpenMW: '{p}' looks like a groundcover plugin. If it is, "
-                        f"add it to {Path(self._organizer.profile().absolutePath()) / 'groundcover.txt'} "
-                        "so it loads as groundcover= (better performance)."
-                    )
 
             log_fn = lambda m: qInfo("OpenMW:" + m)
             launcher_cfg = cfg.parent / "launcher.cfg"
