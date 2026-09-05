@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "recipes": [
+    {
+      "id": "vnv-base",
+      "manifest": "vnv-base.json",
+      "manifestSha256": "688ada52de7b2de9f7ef53ab6f4a7226c0f360c0a36a45cb5b38e2fcd3b08b79",
+      "lock": "vnv-base.lock.json",
+      "lockSha256": "75212196272403f90779b26efdf31108bb9bd7149ad95a5dcfc624ae4e07b25e"
+    },
+    {
+      "id": "vnv-extended",
+      "manifest": "vnv-extended.json",
+      "manifestSha256": "55353a63408165ec4809f9cf1994a24ef58a33694b04bbe44eb93c303f48385f",
+      "lock": "vnv-extended.lock.json",
+      "lockSha256": "89744774c06b18c4119dbf27c7af2d08ca04b45099f487f6d049d78a11eb54b0"
+    },
+    {
+      "id": "tbot-essentials",
+      "manifest": "tbot-essentials.json",
+      "manifestSha256": "fb08b4d75a7040a307ebf016b95997f18c42b697912f8d9fcedc0afe12558063",
+      "lock": "tbot-essentials.lock.json",
+      "lockSha256": "41eea470f1c8782450c883de63ebba6212712fe88ee088939e98549428a7cdc2"
+    }
+  ]
+}

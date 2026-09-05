@@ -251,16 +251,16 @@ int run(int argc, char* argv[])
         log::warn("nxm listener could not be started");
       } else {
         QObject::connect(
-            &nxmHandler, &NxmHandlerLinux::nxmReceived, &app.core(),
+            &nxmHandler, &NxmHandlerLinux::nxmReceived, &app,
             [&](const NxmLink& link) {
-              app.core().downloadRequestedNXM(
-                  QString("nxm://%1/mods/%2/files/%3?key=%4&expires=%5&user_id=%6")
-                      .arg(link.game_domain)
-                      .arg(link.mod_id)
-                      .arg(link.file_id)
-                      .arg(link.key)
-                      .arg(link.expires)
-                      .arg(link.user_id));
+              app.routeNxmMessage(
+                QString("nxm://%1/mods/%2/files/%3?key=%4&expires=%5&user_id=%6")
+                    .arg(link.game_domain)
+                    .arg(link.mod_id)
+                    .arg(link.file_id)
+                    .arg(link.key)
+                    .arg(link.expires)
+                    .arg(link.user_id));
             });
 
         QObject::connect(&nxmHandler, &NxmHandlerLinux::directDownloadReceived,

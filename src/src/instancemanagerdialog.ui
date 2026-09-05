@@ -52,15 +52,12 @@
        </widget>
       </item>
       <item>
-       <widget class="QPushButton" name="downloadCollection">
-        <property name="enabled">
-         <bool>false</bool>
-        </property>
+       <widget class="QPushButton" name="installWabbajack">
         <property name="text">
-         <string>Download Collection</string>
+         <string>Install Wabbajack Modlist</string>
         </property>
         <property name="toolTip">
-         <string>Coming soon: browse Nexus Collections and install one as a new instance.</string>
+         <string>Browse and install a Wabbajack modlist using the bundled CLF3 engine.</string>
         </property>
        </widget>
       </item>

@@ -1,8 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
 
-find_package(Qt6 REQUIRED COMPONENTS Core)
+find_package(Qt6 REQUIRED COMPONENTS Core Network)
 find_package(GTest REQUIRED)
 find_package(SQLite3 REQUIRED)
+find_package(ZLIB REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(TEST_FUSE3 REQUIRED IMPORTED_TARGET fuse3)
@@ -35,6 +36,11 @@ add_test(
 add_test(
     NAME test_openmw_loot_sort
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_openmw_loot_sort.py
+)
+add_test(
+    NAME test_wabbajack_compatibility
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_wabbajack_compatibility.py
 )
 
 # ---------------------------------------------------------------------------
@@ -97,6 +103,64 @@ target_link_libraries(test_plugincompatibility PRIVATE
     GTest::gtest_main
 )
 add_test(NAME test_plugincompatibility COMMAND test_plugincompatibility)
+
+# ---------------------------------------------------------------------------
+# Deterministic PE Large Address Aware patching used by older-game adapters
+# ---------------------------------------------------------------------------
+add_executable(test_pefileutils EXCLUDE_FROM_ALL
+    test_pefileutils.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/pefileutils.cpp
+)
+set_target_properties(test_pefileutils PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_pefileutils PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_pefileutils PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_pefileutils COMMAND test_pefileutils)
+
+# ---------------------------------------------------------------------------
+# Curated guide recipe validation and resumable state journal
+# ---------------------------------------------------------------------------
+add_executable(test_curatedguide EXCLUDE_FROM_ALL
+    test_curatedguide.cpp
+    curatedguide_test_resources.qrc
+    ${CMAKE_SOURCE_DIR}/src/src/curatedfomod.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/curatedgamemanifest.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/curatedinstancebootstrap.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/curatedmodlayout.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/curatedguiderecipe.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/curatedguideinstallstate.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/vdfparser.cpp
+)
+set_target_properties(test_curatedguide PROPERTIES
+    AUTOMOC OFF
+    AUTORCC ON
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_curatedguide PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_compile_definitions(test_curatedguide PRIVATE
+    FLUORINE_TEST_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+target_link_libraries(test_curatedguide PRIVATE
+    Qt6::Core
+    Qt6::Network
+    BLAKE3::blake3
+    ZLIB::ZLIB
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_curatedguide COMMAND test_curatedguide)
 
 # ---------------------------------------------------------------------------
 # Per-instance FUSE/USVFS selection and Wine launch-request serialization
@@ -496,6 +560,29 @@ target_link_libraries(test_staging_promotion PRIVATE
 add_test(NAME test_staging_promotion COMMAND test_staging_promotion)
 
 # ---------------------------------------------------------------------------
+# Shared NXM authorization routing for CLF3 and curated-guide downloads
+# ---------------------------------------------------------------------------
+add_executable(test_clf3_nxm_broker EXCLUDE_FROM_ALL
+    test_clf3_nxm_broker.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/curatedguidenxmbroker.cpp
+)
+set_target_properties(test_clf3_nxm_broker PROPERTIES
+    AUTOMOC ON
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_clf3_nxm_broker PRIVATE
+    ${CMAKE_SOURCE_DIR}/libs/uibase/include
+)
+target_link_libraries(test_clf3_nxm_broker PRIVATE
+    Qt6::Core
+    mo2::uibase
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_clf3_nxm_broker COMMAND test_clf3_nxm_broker)
+
+# ---------------------------------------------------------------------------
 # Embedded-Python package replacement across in-process instance switches
 # ---------------------------------------------------------------------------
 add_executable(test_python_module_switch EXCLUDE_FROM_ALL
@@ -520,10 +607,27 @@ set_tests_properties(test_python_module_switch PROPERTIES
         "PLUGIN_DIR=${CMAKE_SOURCE_DIR}/libs/plugin_python/tests/runner/plugins;PYTHONPATH=$<TARGET_FILE_DIR:mobase>"
 )
 
+# CLF3 process lifecycle, preflight, setup recovery, and log redaction.
+find_package(Qt6 REQUIRED COMPONENTS Test)
+add_executable(test_clf3_install EXCLUDE_FROM_ALL
+    test_clf3_install.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/clf3processcontroller.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/clf3installutils.cpp
+)
+set_target_properties(test_clf3_install PROPERTIES
+    AUTOMOC ON
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_link_libraries(test_clf3_install PRIVATE Qt6::Core Qt6::Test GTest::gtest)
+add_test(NAME test_clf3_install COMMAND test_clf3_install)
+set_tests_properties(test_clf3_install PROPERTIES TIMEOUT 90)
+
 # Register a "fluorine-tests" umbrella target that builds every test exe.
 add_custom_target(fluorine-tests
     DEPENDS test_esptk_tes3 test_bsatk_extraction
-            test_plugincompatibility test_metainiutils test_fomoddependency
+            test_plugincompatibility test_pefileutils test_curatedguide
+            test_metainiutils test_fomoddependency
             test_vfs_backend
             test_fluorineconfigownership
             test_heroicjson test_protondetection
@@ -535,4 +639,4 @@ add_custom_target(fluorine-tests
             test_gamebryo_save_compression
             test_game_save_migration
             test_vfs_catalog test_vfs_index
-            test_staging_promotion test_python_module_switch)
+            test_staging_promotion test_clf3_nxm_broker test_clf3_install test_python_module_switch)

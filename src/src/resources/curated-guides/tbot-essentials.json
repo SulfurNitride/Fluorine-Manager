@@ -1,0 +1,1292 @@
+{
+  "schemaVersion": 1,
+  "id": "tbot-essentials",
+  "displayName": "The Best of Times - Essentials",
+  "version": "0.1.0",
+  "description": "Reviewed automation draft generated from the pinned guide pages.",
+  "gamePlugin": "TTW",
+  "guideUrl": "https://thebestoftimes.moddinglinked.com/",
+  "sourceRepository": "https://github.com/ModdingLinked/The-Best-of-Times",
+  "sourceCommit": "bc92ebf67e252bd90b23118ea68de342b0d26b33",
+  "metadata": {
+    "updatedAt": "2026-08-08T17:07:05+02:00",
+    "artwork": {
+      "url": "https://raw.githubusercontent.com/ModdingLinked/The-Best-of-Times/bc92ebf67e252bd90b23118ea68de342b0d26b33/img/Others/Card.webp",
+      "sha256": "f39cbb31a97b587893f608aaa038c71a9753b38e1fe59dbd05b1762a0b94599f"
+    },
+    "sizeEstimates": {
+      "downloadBytes": 2147483648,
+      "installedBytes": 42949672960,
+      "note": "Conservative guide requirement including both isolated game copies and TTW output."
+    }
+  },
+  "pages": [
+    {
+      "path": "setup.html",
+      "sha256": "beff31aa6fac04a0897eb4f61a04df5ddbf9367ef5d154d3d52cd132cdd12fa8"
+    },
+    {
+      "path": "mo2.html",
+      "sha256": "c667ff52f0edbd215fba7bacaabee4d3084d8f0f6481267c944468f2612a26cb"
+    },
+    {
+      "path": "ttw.html",
+      "sha256": "2100da5621ed18c72b894cfc75e92539a58b71a92e59d92eec2b2a331935571f"
+    },
+    {
+      "path": "essentials.html",
+      "sha256": "4cd22e30abd6704a36854652bce7366ad3f74ee74f48b02bdd8b7f23004ce3af"
+    },
+    {
+      "path": "finish.html",
+      "sha256": "6093e5e2c70a53b1b84acc2b18ba8d3d972f01b1ac717042850846a8c9fc5386"
+    }
+  ],
+  "supportedStores": [
+    "Steam",
+    "GOG",
+    "Epic Games"
+  ],
+  "requiredGames": [
+    "falloutnv",
+    "fallout3"
+  ],
+  "artifacts": [
+    {
+      "id": "ttw-mpi",
+      "name": "Tale of Two Wastelands MPI package",
+      "source": "manual",
+      "filename": "TTW 3.4.0 Installer.mpi",
+      "version": "3.4.0",
+      "sourceUrl": "https://mod.pub/ttw/133/files"
+    },
+    {
+      "id": "ttw-linux-installer",
+      "name": "TTW Linux Installer",
+      "source": "nexus",
+      "domain": "site",
+      "modId": 1657,
+      "fileId": 0,
+      "fileLabel": "TTW Linux Installer",
+      "filename": "ttw-linux-installer.archive",
+      "latestCompatible": true,
+      "minimumVersion": "0.2.0",
+      "sourceUrl": "https://www.nexusmods.com/site/mods/1657"
+    },
+    {
+      "id": "newvegas-67883-new-vegas-script-extender-xnvse",
+      "name": "New Vegas Script Extender (NVSE xNVSE)",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 67883,
+      "fileId": 0,
+      "fileLabel": "New Vegas Script Extender (xNVSE)",
+      "fileCategory": "main files",
+      "filename": "newvegas-67883-new-vegas-script-extender-xnvse.archive",
+      "sourceUrl": "https://www.nexusmods.com/newvegas/mods/67883"
+    },
+    {
+      "id": "newvegas-62552-4gb-patcher",
+      "name": "4GB Patcher",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 62552,
+      "fileId": 0,
+      "fileLabel": "4GB Patcher",
+      "fileCategory": "main files",
+      "filename": "newvegas-62552-4gb-patcher.archive",
+      "sourceUrl": "https://www.nexusmods.com/newvegas/mods/62552"
+    },
+    {
+      "id": "newvegas-81281-epic-games-patcher",
+      "name": "Epic Games Patcher",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 81281,
+      "fileId": 0,
+      "fileLabel": "Epic Games Patcher",
+      "fileCategory": "main files",
+      "filename": "newvegas-81281-epic-games-patcher.archive",
+      "sourceUrl": "https://www.nexusmods.com/newvegas/mods/81281"
+    },
+    {
+      "id": "newvegas-77415-ttwnvse",
+      "name": "TTW NVSE Plugin",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 77415,
+      "fileId": 0,
+      "fileLabel": "TTWNVSE",
+      "fileCategory": "main files",
+      "filename": "newvegas-77415-ttwnvse.archive",
+      "sourceUrl": "https://www.nexusmods.com/newvegas/mods/77415"
+    },
+    {
+      "id": "newvegas-58277-jip-ln-nvse-plugin",
+      "name": "JIP LN NVSE Plugin",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 58277,
+      "fileId": 0,
+      "fileLabel": "JIP LN NVSE Plugin",
+      "fileCategory": "main files",
+      "filename": "newvegas-58277-jip-ln-nvse-plugin.archive",
+      "sourceUrl": "https://www.nexusmods.com/newvegas/mods/58277"
+    },
+    {
+      "id": "newvegas-58277-jip-ln-settings-ini",
+      "name": "JIP LN NVSE Plugin",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 58277,
+      "fileId": 0,
+      "fileLabel": "JIP LN Settings INI",
+      "fileCategory": "main files",
+      "filename": "newvegas-58277-jip-ln-settings-ini.archive",
+      "sourceUrl": "https://www.nexusmods.com/newvegas/mods/58277"
+    },
+    {
+      "id": "newvegas-66927-johnnyguitar-nvse",
+      "name": "JohnnyGuitar NVSE",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 66927,
+      "fileId": 0,
+      "fileLabel": "JohnnyGuitar NVSE",
+      "fileCategory": "main files",
+      "filename": "newvegas-66927-johnnyguitar-nvse.archive",
+      "sourceUrl": "https://www.nexusmods.com/newvegas/mods/66927"
+    },
+    {
+      "id": "newvegas-86200-johnnyguitar-nvse-all-tweaks-preset",
+      "name": "JohnnyGuitar NVSE - INI Presets",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 86200,
+      "fileId": 0,
+      "fileLabel": "JohnnyGuitar NVSE - All Tweaks Preset",
+      "fileCategory": "main files",
+      "filename": "newvegas-86200-johnnyguitar-nvse-all-tweaks-preset.archive",
+      "sourceUrl": "https://www.nexusmods.com/newvegas/mods/86200"
+    },
+    {
+      "id": "newvegas-72541-showoff-nvse",
+      "name": "ShowOff xNVSE Plugin",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 72541,
+      "fileId": 0,
+      "fileLabel": "ShowOff NVSE",
+      "fileCategory": "main files",
+      "filename": "newvegas-72541-showoff-nvse.archive",
+      "sourceUrl": "https://www.nexusmods.com/newvegas/mods/72541"
+    },
+    {
+      "id": "newvegas-72541-showoff-ini",
+      "name": "ShowOff xNVSE Plugin",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 72541,
+      "fileId": 0,
+      "fileLabel": "ShowOff INI",
+      "fileCategory": "optional files",
+      "filename": "newvegas-72541-showoff-ini.archive",
+      "sourceUrl": "https://www.nexusmods.com/newvegas/mods/72541"
+    },
+    {
+      "id": "newvegas-66537-nvtf",
+      "name": "NVTF - New Vegas Tick Fix",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 66537,
+      "fileId": 0,
+      "fileLabel": "NVTF",
+      "fileCategory": "main files",
+      "filename": "newvegas-66537-nvtf.archive",
+      "sourceUrl": "https://www.nexusmods.com/newvegas/mods/66537"
+    },
+    {
+      "id": "newvegas-66537-nvtf-ini",
+      "name": "NVTF - New Vegas Tick Fix",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 66537,
+      "fileId": 0,
+      "fileLabel": "NVTF - INI",
+      "fileCategory": "main files",
+      "filename": "newvegas-66537-nvtf-ini.archive",
+      "sourceUrl": "https://www.nexusmods.com/newvegas/mods/66537"
+    },
+    {
+      "id": "newvegas-66347-stewie-tweaks",
+      "name": "lStewieAl's Tweaks and Engine Fixes",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 66347,
+      "fileId": 0,
+      "fileLabel": "Stewie Tweaks",
+      "fileCategory": "main files",
+      "filename": "newvegas-66347-stewie-tweaks.archive",
+      "sourceUrl": "https://www.nexusmods.com/newvegas/mods/66347"
+    },
+    {
+      "id": "newvegas-80993-engine-optimizations",
+      "name": "lStewieAl's Engine Optimizations",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 80993,
+      "fileId": 0,
+      "fileLabel": "Engine Optimizations",
+      "fileCategory": "main files",
+      "filename": "newvegas-80993-engine-optimizations.archive",
+      "sourceUrl": "https://www.nexusmods.com/newvegas/mods/80993"
+    },
+    {
+      "id": "newvegas-71973-fast-weapon-lag-fix",
+      "name": "Combat Lag Fix (NVSE)",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 71973,
+      "fileId": 0,
+      "fileLabel": "Fast Weapon Lag Fix",
+      "fileCategory": "main files",
+      "filename": "newvegas-71973-fast-weapon-lag-fix.archive",
+      "sourceUrl": "https://www.nexusmods.com/newvegas/mods/71973"
+    },
+    {
+      "id": "newvegas-84823-vats-lag-fix",
+      "name": "VATS Lag Fix",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 84823,
+      "fileId": 0,
+      "fileLabel": "VATS Lag Fix",
+      "fileCategory": "main files",
+      "filename": "newvegas-84823-vats-lag-fix.archive",
+      "sourceUrl": "https://www.nexusmods.com/newvegas/mods/84823"
+    },
+    {
+      "id": "newvegas-80666-actorcause-save-bloat-fix",
+      "name": "ActorCause Save Bloat Fix",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 80666,
+      "fileId": 0,
+      "fileLabel": "ActorCause Save Bloat Fix",
+      "fileCategory": "main files",
+      "filename": "newvegas-80666-actorcause-save-bloat-fix.archive",
+      "sourceUrl": "https://www.nexusmods.com/newvegas/mods/80666"
+    },
+    {
+      "id": "newvegas-71336-knvse",
+      "name": "kNVSE Animation Plugin",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 71336,
+      "fileId": 0,
+      "fileLabel": "kNVSE",
+      "fileCategory": "main files",
+      "filename": "newvegas-71336-knvse.archive",
+      "sourceUrl": "https://www.nexusmods.com/newvegas/mods/71336"
+    },
+    {
+      "id": "newvegas-57174-uio-user-interface-organizer",
+      "name": "UIO - User Interface Organizer",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 57174,
+      "fileId": 0,
+      "fileLabel": "UIO - User Interface Organizer",
+      "fileCategory": "main files",
+      "filename": "newvegas-57174-uio-user-interface-organizer.archive",
+      "sourceUrl": "https://www.nexusmods.com/newvegas/mods/57174"
+    },
+    {
+      "id": "newvegas-68714-mlf",
+      "name": "FNV Mod Limit Fix",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 68714,
+      "fileId": 0,
+      "fileLabel": "MLF",
+      "fileCategory": "main files",
+      "filename": "newvegas-68714-mlf.archive",
+      "sourceUrl": "https://www.nexusmods.com/newvegas/mods/68714"
+    },
+    {
+      "id": "newvegas-82540-crash-logger",
+      "name": "Yvile's Crash Logger",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 82540,
+      "fileId": 0,
+      "fileLabel": "Crash Logger",
+      "fileCategory": "main files",
+      "filename": "newvegas-82540-crash-logger.archive",
+      "sourceUrl": "https://www.nexusmods.com/newvegas/mods/82540"
+    },
+    {
+      "id": "newvegas-70801-improved-console",
+      "name": "Improved Console (NVSE)",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 70801,
+      "fileId": 0,
+      "fileLabel": "Improved Console",
+      "fileCategory": "main files",
+      "filename": "newvegas-70801-improved-console.archive",
+      "sourceUrl": "https://www.nexusmods.com/newvegas/mods/70801"
+    },
+    {
+      "id": "newvegas-65906-console-paste",
+      "name": "Console Paste Support",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 65906,
+      "fileId": 0,
+      "fileLabel": "Console Paste",
+      "fileCategory": "main files",
+      "filename": "newvegas-65906-console-paste.archive",
+      "sourceUrl": "https://www.nexusmods.com/newvegas/mods/65906"
+    }
+  ],
+  "actions": [
+    {
+      "id": "copy-falloutnv",
+      "type": "copy_game",
+      "name": "Create isolated falloutnv copy",
+      "condition": {
+        "isolated": true
+      },
+      "parameters": {
+        "sourceOption": "fnvSource",
+        "destination": "stock/Fallout New Vegas"
+      }
+    },
+    {
+      "id": "copy-fallout3",
+      "type": "copy_game",
+      "name": "Create isolated fallout3 copy",
+      "condition": {
+        "isolated": true
+      },
+      "parameters": {
+        "sourceOption": "fo3Source",
+        "destination": "stock/Fallout 3"
+      }
+    },
+    {
+      "id": "acquire-ttw-mpi",
+      "type": "acquire",
+      "name": "Acquire ttw-mpi",
+      "artifact": "ttw-mpi",
+      "dependsOn": [
+        "copy-falloutnv",
+        "copy-fallout3"
+      ]
+    },
+    {
+      "id": "acquire-ttw-linux-installer",
+      "type": "acquire",
+      "name": "Acquire ttw-linux-installer",
+      "artifact": "ttw-linux-installer",
+      "dependsOn": [
+        "acquire-ttw-mpi"
+      ]
+    },
+    {
+      "id": "extract-ttw-linux-installer",
+      "type": "extract",
+      "name": "Extract native TTW installer",
+      "artifact": "ttw-linux-installer",
+      "dependsOn": [
+        "acquire-ttw-linux-installer"
+      ]
+    },
+    {
+      "id": "verify-ttw-games",
+      "type": "run_native",
+      "name": "Verify clean Fallout 3 and New Vegas sources",
+      "dependsOn": [
+        "extract-ttw-linux-installer",
+        "acquire-ttw-mpi"
+      ],
+      "parameters": {
+        "program": "${action:extract-ttw-linux-installer}/mpi_installer",
+        "arguments": [
+          "verify",
+          "--fo3",
+          "${option:fo3Source}",
+          "--fnv",
+          "${option:fnvSource}"
+        ]
+      }
+    },
+    {
+      "id": "install-ttw",
+      "type": "run_native",
+      "name": "Build Tale of Two Wastelands",
+      "dependsOn": [
+        "verify-ttw-games"
+      ],
+      "parameters": {
+        "program": "${action:extract-ttw-linux-installer}/mpi_installer",
+        "arguments": [
+          "install",
+          "--mpi",
+          "${artifact:ttw-mpi}",
+          "--fo3",
+          "${option:fo3Source}",
+          "--fnv",
+          "${option:fnvSource}",
+          "--dest",
+          "${instance}/mods/Tale of Two Wastelands"
+        ],
+        "output": "mods/Tale of Two Wastelands"
+      },
+      "validation": {
+        "requiredFiles": [
+          "TaleOfTwoWastelands.esm",
+          "YUPTTW.esm"
+        ]
+      }
+    },
+    {
+      "id": "acquire-newvegas-67883-new-vegas-script-extender-xnvse",
+      "type": "acquire",
+      "name": "Download New Vegas Script Extender (xNVSE)",
+      "artifact": "newvegas-67883-new-vegas-script-extender-xnvse",
+      "dependsOn": [
+        "install-ttw"
+      ]
+    },
+    {
+      "id": "extract-newvegas-67883-new-vegas-script-extender-xnvse",
+      "type": "extract",
+      "name": "Extract New Vegas Script Extender (xNVSE)",
+      "artifact": "newvegas-67883-new-vegas-script-extender-xnvse",
+      "dependsOn": [
+        "acquire-newvegas-67883-new-vegas-script-extender-xnvse"
+      ]
+    },
+    {
+      "id": "install-newvegas-67883-new-vegas-script-extender-xnvse",
+      "type": "install_root",
+      "name": "Install New Vegas Script Extender (xNVSE)",
+      "dependsOn": [
+        "extract-newvegas-67883-new-vegas-script-extender-xnvse"
+      ],
+      "parameters": {
+        "sourceAction": "extract-newvegas-67883-new-vegas-script-extender-xnvse",
+        "folder": "New Vegas Script Extender (xNVSE)"
+      },
+      "validation": {
+        "requiredFiles": [
+          "nvse_loader.exe",
+          "nvse_1_4.dll",
+          "nvse_steam_loader.dll",
+          "Data/NVSE/nvse_config.ini"
+        ]
+      }
+    },
+    {
+      "id": "acquire-newvegas-62552-4gb-patcher",
+      "type": "acquire",
+      "name": "Download 4GB Patcher",
+      "artifact": "newvegas-62552-4gb-patcher",
+      "dependsOn": [
+        "install-newvegas-67883-new-vegas-script-extender-xnvse"
+      ],
+      "condition": {
+        "store": [
+          "Steam",
+          "GOG"
+        ]
+      }
+    },
+    {
+      "id": "extract-newvegas-62552-4gb-patcher",
+      "type": "extract",
+      "name": "Extract 4GB Patcher",
+      "artifact": "newvegas-62552-4gb-patcher",
+      "dependsOn": [
+        "acquire-newvegas-62552-4gb-patcher"
+      ],
+      "condition": {
+        "store": [
+          "Steam",
+          "GOG"
+        ]
+      }
+    },
+    {
+      "id": "install-newvegas-62552-4gb-patcher",
+      "type": "run_proton",
+      "name": "Run 4GB Patcher",
+      "dependsOn": [
+        "extract-newvegas-62552-4gb-patcher"
+      ],
+      "condition": {
+        "store": [
+          "Steam",
+          "GOG"
+        ]
+      },
+      "parameters": {
+        "executable": "${action:extract-newvegas-62552-4gb-patcher}/FNVpatch.exe",
+        "stageSourceAction": "extract-newvegas-62552-4gb-patcher",
+        "workingDirectory": "${option:managedGamePath}",
+        "output": "${option:managedGamePath}"
+      },
+      "validation": {
+        "requiredFiles": [
+          "FalloutNV.exe",
+          "FalloutNV_backup.exe"
+        ]
+      }
+    },
+    {
+      "id": "acquire-newvegas-81281-epic-games-patcher",
+      "type": "acquire",
+      "name": "Download Epic Games Patcher",
+      "artifact": "newvegas-81281-epic-games-patcher",
+      "dependsOn": [
+        "install-newvegas-62552-4gb-patcher"
+      ],
+      "condition": {
+        "store": "Epic Games"
+      }
+    },
+    {
+      "id": "extract-newvegas-81281-epic-games-patcher",
+      "type": "extract",
+      "name": "Extract Epic Games Patcher",
+      "artifact": "newvegas-81281-epic-games-patcher",
+      "dependsOn": [
+        "acquire-newvegas-81281-epic-games-patcher"
+      ],
+      "condition": {
+        "store": "Epic Games"
+      }
+    },
+    {
+      "id": "install-newvegas-81281-epic-games-patcher",
+      "type": "run_proton",
+      "name": "Run Epic Games Patcher",
+      "dependsOn": [
+        "extract-newvegas-81281-epic-games-patcher"
+      ],
+      "condition": {
+        "store": "Epic Games"
+      },
+      "parameters": {
+        "executable": "${action:extract-newvegas-81281-epic-games-patcher}/Patcher.exe",
+        "stageSourceAction": "extract-newvegas-81281-epic-games-patcher",
+        "workingDirectory": "${option:managedGamePath}",
+        "output": "${option:managedGamePath}"
+      },
+      "validation": {
+        "requiredFiles": [
+          "FalloutNV.exe",
+          "FalloutNV_backup.exe"
+        ]
+      }
+    },
+    {
+      "id": "acquire-newvegas-77415-ttwnvse",
+      "type": "acquire",
+      "name": "Download TTWNVSE",
+      "artifact": "newvegas-77415-ttwnvse",
+      "dependsOn": [
+        "install-newvegas-81281-epic-games-patcher"
+      ]
+    },
+    {
+      "id": "extract-newvegas-77415-ttwnvse",
+      "type": "extract",
+      "name": "Extract TTWNVSE",
+      "artifact": "newvegas-77415-ttwnvse",
+      "dependsOn": [
+        "acquire-newvegas-77415-ttwnvse"
+      ]
+    },
+    {
+      "id": "install-newvegas-77415-ttwnvse",
+      "type": "install_mod",
+      "name": "Install TTWNVSE",
+      "dependsOn": [
+        "extract-newvegas-77415-ttwnvse"
+      ],
+      "parameters": {
+        "sourceAction": "extract-newvegas-77415-ttwnvse",
+        "folder": "TTWNVSE"
+      }
+    },
+    {
+      "id": "acquire-newvegas-58277-jip-ln-nvse-plugin",
+      "type": "acquire",
+      "name": "Download JIP LN NVSE Plugin",
+      "artifact": "newvegas-58277-jip-ln-nvse-plugin",
+      "dependsOn": [
+        "install-newvegas-77415-ttwnvse"
+      ]
+    },
+    {
+      "id": "extract-newvegas-58277-jip-ln-nvse-plugin",
+      "type": "extract",
+      "name": "Extract JIP LN NVSE Plugin",
+      "artifact": "newvegas-58277-jip-ln-nvse-plugin",
+      "dependsOn": [
+        "acquire-newvegas-58277-jip-ln-nvse-plugin"
+      ]
+    },
+    {
+      "id": "install-newvegas-58277-jip-ln-nvse-plugin",
+      "type": "install_mod",
+      "name": "Install JIP LN NVSE Plugin",
+      "dependsOn": [
+        "extract-newvegas-58277-jip-ln-nvse-plugin"
+      ],
+      "parameters": {
+        "sourceAction": "extract-newvegas-58277-jip-ln-nvse-plugin",
+        "folder": "JIP LN NVSE Plugin"
+      }
+    },
+    {
+      "id": "acquire-newvegas-58277-jip-ln-settings-ini",
+      "type": "acquire",
+      "name": "Download JIP LN Settings INI",
+      "artifact": "newvegas-58277-jip-ln-settings-ini",
+      "dependsOn": [
+        "install-newvegas-58277-jip-ln-nvse-plugin"
+      ]
+    },
+    {
+      "id": "extract-newvegas-58277-jip-ln-settings-ini",
+      "type": "extract",
+      "name": "Extract JIP LN Settings INI",
+      "artifact": "newvegas-58277-jip-ln-settings-ini",
+      "dependsOn": [
+        "acquire-newvegas-58277-jip-ln-settings-ini"
+      ]
+    },
+    {
+      "id": "install-newvegas-58277-jip-ln-settings-ini",
+      "type": "install_mod",
+      "name": "Install JIP LN Settings INI",
+      "dependsOn": [
+        "extract-newvegas-58277-jip-ln-settings-ini"
+      ],
+      "parameters": {
+        "sourceAction": "extract-newvegas-58277-jip-ln-settings-ini",
+        "folder": "JIP LN Settings INI"
+      }
+    },
+    {
+      "id": "acquire-newvegas-66927-johnnyguitar-nvse",
+      "type": "acquire",
+      "name": "Download JohnnyGuitar NVSE",
+      "artifact": "newvegas-66927-johnnyguitar-nvse",
+      "dependsOn": [
+        "install-newvegas-58277-jip-ln-settings-ini"
+      ]
+    },
+    {
+      "id": "extract-newvegas-66927-johnnyguitar-nvse",
+      "type": "extract",
+      "name": "Extract JohnnyGuitar NVSE",
+      "artifact": "newvegas-66927-johnnyguitar-nvse",
+      "dependsOn": [
+        "acquire-newvegas-66927-johnnyguitar-nvse"
+      ]
+    },
+    {
+      "id": "install-newvegas-66927-johnnyguitar-nvse",
+      "type": "install_mod",
+      "name": "Install JohnnyGuitar NVSE",
+      "dependsOn": [
+        "extract-newvegas-66927-johnnyguitar-nvse"
+      ],
+      "parameters": {
+        "sourceAction": "extract-newvegas-66927-johnnyguitar-nvse",
+        "folder": "JohnnyGuitar NVSE"
+      }
+    },
+    {
+      "id": "acquire-newvegas-86200-johnnyguitar-nvse-all-tweaks-preset",
+      "type": "acquire",
+      "name": "Download JohnnyGuitar NVSE - All Tweaks Preset",
+      "artifact": "newvegas-86200-johnnyguitar-nvse-all-tweaks-preset",
+      "dependsOn": [
+        "install-newvegas-66927-johnnyguitar-nvse"
+      ]
+    },
+    {
+      "id": "extract-newvegas-86200-johnnyguitar-nvse-all-tweaks-preset",
+      "type": "extract",
+      "name": "Extract JohnnyGuitar NVSE - All Tweaks Preset",
+      "artifact": "newvegas-86200-johnnyguitar-nvse-all-tweaks-preset",
+      "dependsOn": [
+        "acquire-newvegas-86200-johnnyguitar-nvse-all-tweaks-preset"
+      ]
+    },
+    {
+      "id": "install-newvegas-86200-johnnyguitar-nvse-all-tweaks-preset",
+      "type": "install_mod",
+      "name": "Install JohnnyGuitar NVSE - All Tweaks Preset",
+      "dependsOn": [
+        "extract-newvegas-86200-johnnyguitar-nvse-all-tweaks-preset"
+      ],
+      "parameters": {
+        "sourceAction": "extract-newvegas-86200-johnnyguitar-nvse-all-tweaks-preset",
+        "folder": "JohnnyGuitar NVSE - All Tweaks Preset"
+      }
+    },
+    {
+      "id": "acquire-newvegas-72541-showoff-nvse",
+      "type": "acquire",
+      "name": "Download ShowOff NVSE",
+      "artifact": "newvegas-72541-showoff-nvse",
+      "dependsOn": [
+        "install-newvegas-86200-johnnyguitar-nvse-all-tweaks-preset"
+      ]
+    },
+    {
+      "id": "extract-newvegas-72541-showoff-nvse",
+      "type": "extract",
+      "name": "Extract ShowOff NVSE",
+      "artifact": "newvegas-72541-showoff-nvse",
+      "dependsOn": [
+        "acquire-newvegas-72541-showoff-nvse"
+      ]
+    },
+    {
+      "id": "install-newvegas-72541-showoff-nvse",
+      "type": "install_mod",
+      "name": "Install ShowOff NVSE",
+      "dependsOn": [
+        "extract-newvegas-72541-showoff-nvse"
+      ],
+      "parameters": {
+        "sourceAction": "extract-newvegas-72541-showoff-nvse",
+        "folder": "ShowOff NVSE"
+      }
+    },
+    {
+      "id": "acquire-newvegas-72541-showoff-ini",
+      "type": "acquire",
+      "name": "Download ShowOff INI",
+      "artifact": "newvegas-72541-showoff-ini",
+      "dependsOn": [
+        "install-newvegas-72541-showoff-nvse"
+      ]
+    },
+    {
+      "id": "extract-newvegas-72541-showoff-ini",
+      "type": "extract",
+      "name": "Extract ShowOff INI",
+      "artifact": "newvegas-72541-showoff-ini",
+      "dependsOn": [
+        "acquire-newvegas-72541-showoff-ini"
+      ]
+    },
+    {
+      "id": "install-newvegas-72541-showoff-ini",
+      "type": "install_mod",
+      "name": "Install ShowOff INI",
+      "dependsOn": [
+        "extract-newvegas-72541-showoff-ini"
+      ],
+      "parameters": {
+        "sourceAction": "extract-newvegas-72541-showoff-ini",
+        "folder": "ShowOff INI"
+      }
+    },
+    {
+      "id": "acquire-newvegas-66537-nvtf",
+      "type": "acquire",
+      "name": "Download NVTF",
+      "artifact": "newvegas-66537-nvtf",
+      "dependsOn": [
+        "install-newvegas-72541-showoff-ini"
+      ]
+    },
+    {
+      "id": "extract-newvegas-66537-nvtf",
+      "type": "extract",
+      "name": "Extract NVTF",
+      "artifact": "newvegas-66537-nvtf",
+      "dependsOn": [
+        "acquire-newvegas-66537-nvtf"
+      ]
+    },
+    {
+      "id": "install-newvegas-66537-nvtf",
+      "type": "install_mod",
+      "name": "Install NVTF",
+      "dependsOn": [
+        "extract-newvegas-66537-nvtf"
+      ],
+      "parameters": {
+        "sourceAction": "extract-newvegas-66537-nvtf",
+        "folder": "NVTF"
+      }
+    },
+    {
+      "id": "acquire-newvegas-66537-nvtf-ini",
+      "type": "acquire",
+      "name": "Download NVTF - INI",
+      "artifact": "newvegas-66537-nvtf-ini",
+      "dependsOn": [
+        "install-newvegas-66537-nvtf"
+      ]
+    },
+    {
+      "id": "extract-newvegas-66537-nvtf-ini",
+      "type": "extract",
+      "name": "Extract NVTF - INI",
+      "artifact": "newvegas-66537-nvtf-ini",
+      "dependsOn": [
+        "acquire-newvegas-66537-nvtf-ini"
+      ]
+    },
+    {
+      "id": "install-newvegas-66537-nvtf-ini",
+      "type": "install_mod",
+      "name": "Install NVTF - INI",
+      "dependsOn": [
+        "extract-newvegas-66537-nvtf-ini"
+      ],
+      "parameters": {
+        "sourceAction": "extract-newvegas-66537-nvtf-ini",
+        "folder": "NVTF - INI"
+      }
+    },
+    {
+      "id": "acquire-newvegas-66347-stewie-tweaks",
+      "type": "acquire",
+      "name": "Download Stewie Tweaks",
+      "artifact": "newvegas-66347-stewie-tweaks",
+      "dependsOn": [
+        "install-newvegas-66537-nvtf-ini"
+      ]
+    },
+    {
+      "id": "extract-newvegas-66347-stewie-tweaks",
+      "type": "extract",
+      "name": "Extract Stewie Tweaks",
+      "artifact": "newvegas-66347-stewie-tweaks",
+      "dependsOn": [
+        "acquire-newvegas-66347-stewie-tweaks"
+      ]
+    },
+    {
+      "id": "install-newvegas-66347-stewie-tweaks",
+      "type": "install_mod",
+      "name": "Install Stewie Tweaks",
+      "dependsOn": [
+        "extract-newvegas-66347-stewie-tweaks"
+      ],
+      "parameters": {
+        "sourceAction": "extract-newvegas-66347-stewie-tweaks",
+        "folder": "Stewie Tweaks"
+      }
+    },
+    {
+      "id": "acquire-newvegas-80993-engine-optimizations",
+      "type": "acquire",
+      "name": "Download Engine Optimizations",
+      "artifact": "newvegas-80993-engine-optimizations",
+      "dependsOn": [
+        "install-newvegas-66347-stewie-tweaks"
+      ]
+    },
+    {
+      "id": "extract-newvegas-80993-engine-optimizations",
+      "type": "extract",
+      "name": "Extract Engine Optimizations",
+      "artifact": "newvegas-80993-engine-optimizations",
+      "dependsOn": [
+        "acquire-newvegas-80993-engine-optimizations"
+      ]
+    },
+    {
+      "id": "install-newvegas-80993-engine-optimizations",
+      "type": "install_mod",
+      "name": "Install Engine Optimizations",
+      "dependsOn": [
+        "extract-newvegas-80993-engine-optimizations"
+      ],
+      "parameters": {
+        "sourceAction": "extract-newvegas-80993-engine-optimizations",
+        "folder": "Engine Optimizations"
+      }
+    },
+    {
+      "id": "acquire-newvegas-71973-fast-weapon-lag-fix",
+      "type": "acquire",
+      "name": "Download Fast Weapon Lag Fix",
+      "artifact": "newvegas-71973-fast-weapon-lag-fix",
+      "dependsOn": [
+        "install-newvegas-80993-engine-optimizations"
+      ]
+    },
+    {
+      "id": "extract-newvegas-71973-fast-weapon-lag-fix",
+      "type": "extract",
+      "name": "Extract Fast Weapon Lag Fix",
+      "artifact": "newvegas-71973-fast-weapon-lag-fix",
+      "dependsOn": [
+        "acquire-newvegas-71973-fast-weapon-lag-fix"
+      ]
+    },
+    {
+      "id": "install-newvegas-71973-fast-weapon-lag-fix",
+      "type": "install_mod",
+      "name": "Install Fast Weapon Lag Fix",
+      "dependsOn": [
+        "extract-newvegas-71973-fast-weapon-lag-fix"
+      ],
+      "parameters": {
+        "sourceAction": "extract-newvegas-71973-fast-weapon-lag-fix",
+        "folder": "Fast Weapon Lag Fix"
+      }
+    },
+    {
+      "id": "acquire-newvegas-84823-vats-lag-fix",
+      "type": "acquire",
+      "name": "Download VATS Lag Fix",
+      "artifact": "newvegas-84823-vats-lag-fix",
+      "dependsOn": [
+        "install-newvegas-71973-fast-weapon-lag-fix"
+      ]
+    },
+    {
+      "id": "extract-newvegas-84823-vats-lag-fix",
+      "type": "extract",
+      "name": "Extract VATS Lag Fix",
+      "artifact": "newvegas-84823-vats-lag-fix",
+      "dependsOn": [
+        "acquire-newvegas-84823-vats-lag-fix"
+      ]
+    },
+    {
+      "id": "install-newvegas-84823-vats-lag-fix",
+      "type": "install_mod",
+      "name": "Install VATS Lag Fix",
+      "dependsOn": [
+        "extract-newvegas-84823-vats-lag-fix"
+      ],
+      "parameters": {
+        "sourceAction": "extract-newvegas-84823-vats-lag-fix",
+        "folder": "VATS Lag Fix"
+      }
+    },
+    {
+      "id": "acquire-newvegas-80666-actorcause-save-bloat-fix",
+      "type": "acquire",
+      "name": "Download ActorCause Save Bloat Fix",
+      "artifact": "newvegas-80666-actorcause-save-bloat-fix",
+      "dependsOn": [
+        "install-newvegas-84823-vats-lag-fix"
+      ]
+    },
+    {
+      "id": "extract-newvegas-80666-actorcause-save-bloat-fix",
+      "type": "extract",
+      "name": "Extract ActorCause Save Bloat Fix",
+      "artifact": "newvegas-80666-actorcause-save-bloat-fix",
+      "dependsOn": [
+        "acquire-newvegas-80666-actorcause-save-bloat-fix"
+      ]
+    },
+    {
+      "id": "install-newvegas-80666-actorcause-save-bloat-fix",
+      "type": "install_mod",
+      "name": "Install ActorCause Save Bloat Fix",
+      "dependsOn": [
+        "extract-newvegas-80666-actorcause-save-bloat-fix"
+      ],
+      "parameters": {
+        "sourceAction": "extract-newvegas-80666-actorcause-save-bloat-fix",
+        "folder": "ActorCause Save Bloat Fix"
+      }
+    },
+    {
+      "id": "acquire-newvegas-71336-knvse",
+      "type": "acquire",
+      "name": "Download kNVSE",
+      "artifact": "newvegas-71336-knvse",
+      "dependsOn": [
+        "install-newvegas-80666-actorcause-save-bloat-fix"
+      ]
+    },
+    {
+      "id": "extract-newvegas-71336-knvse",
+      "type": "extract",
+      "name": "Extract kNVSE",
+      "artifact": "newvegas-71336-knvse",
+      "dependsOn": [
+        "acquire-newvegas-71336-knvse"
+      ]
+    },
+    {
+      "id": "install-newvegas-71336-knvse",
+      "type": "install_mod",
+      "name": "Install kNVSE",
+      "dependsOn": [
+        "extract-newvegas-71336-knvse"
+      ],
+      "parameters": {
+        "sourceAction": "extract-newvegas-71336-knvse",
+        "folder": "kNVSE"
+      }
+    },
+    {
+      "id": "acquire-newvegas-57174-uio-user-interface-organizer",
+      "type": "acquire",
+      "name": "Download UIO - User Interface Organizer",
+      "artifact": "newvegas-57174-uio-user-interface-organizer",
+      "dependsOn": [
+        "install-newvegas-71336-knvse"
+      ]
+    },
+    {
+      "id": "extract-newvegas-57174-uio-user-interface-organizer",
+      "type": "extract",
+      "name": "Extract UIO - User Interface Organizer",
+      "artifact": "newvegas-57174-uio-user-interface-organizer",
+      "dependsOn": [
+        "acquire-newvegas-57174-uio-user-interface-organizer"
+      ]
+    },
+    {
+      "id": "install-newvegas-57174-uio-user-interface-organizer",
+      "type": "install_mod",
+      "name": "Install UIO - User Interface Organizer",
+      "dependsOn": [
+        "extract-newvegas-57174-uio-user-interface-organizer"
+      ],
+      "parameters": {
+        "sourceAction": "extract-newvegas-57174-uio-user-interface-organizer",
+        "folder": "UIO - User Interface Organizer"
+      }
+    },
+    {
+      "id": "acquire-newvegas-68714-mlf",
+      "type": "acquire",
+      "name": "Download MLF",
+      "artifact": "newvegas-68714-mlf",
+      "dependsOn": [
+        "install-newvegas-57174-uio-user-interface-organizer"
+      ]
+    },
+    {
+      "id": "extract-newvegas-68714-mlf",
+      "type": "extract",
+      "name": "Extract MLF",
+      "artifact": "newvegas-68714-mlf",
+      "dependsOn": [
+        "acquire-newvegas-68714-mlf"
+      ]
+    },
+    {
+      "id": "install-newvegas-68714-mlf",
+      "type": "install_mod",
+      "name": "Install MLF",
+      "dependsOn": [
+        "extract-newvegas-68714-mlf"
+      ],
+      "parameters": {
+        "sourceAction": "extract-newvegas-68714-mlf",
+        "folder": "MLF"
+      }
+    },
+    {
+      "id": "acquire-newvegas-82540-crash-logger",
+      "type": "acquire",
+      "name": "Download Crash Logger",
+      "artifact": "newvegas-82540-crash-logger",
+      "dependsOn": [
+        "install-newvegas-68714-mlf"
+      ]
+    },
+    {
+      "id": "extract-newvegas-82540-crash-logger",
+      "type": "extract",
+      "name": "Extract Crash Logger",
+      "artifact": "newvegas-82540-crash-logger",
+      "dependsOn": [
+        "acquire-newvegas-82540-crash-logger"
+      ]
+    },
+    {
+      "id": "install-newvegas-82540-crash-logger",
+      "type": "install_mod",
+      "name": "Install Crash Logger",
+      "dependsOn": [
+        "extract-newvegas-82540-crash-logger"
+      ],
+      "parameters": {
+        "sourceAction": "extract-newvegas-82540-crash-logger",
+        "folder": "Crash Logger"
+      }
+    },
+    {
+      "id": "acquire-newvegas-70801-improved-console",
+      "type": "acquire",
+      "name": "Download Improved Console",
+      "artifact": "newvegas-70801-improved-console",
+      "dependsOn": [
+        "install-newvegas-82540-crash-logger"
+      ]
+    },
+    {
+      "id": "extract-newvegas-70801-improved-console",
+      "type": "extract",
+      "name": "Extract Improved Console",
+      "artifact": "newvegas-70801-improved-console",
+      "dependsOn": [
+        "acquire-newvegas-70801-improved-console"
+      ]
+    },
+    {
+      "id": "install-newvegas-70801-improved-console",
+      "type": "install_mod",
+      "name": "Install Improved Console",
+      "dependsOn": [
+        "extract-newvegas-70801-improved-console"
+      ],
+      "parameters": {
+        "sourceAction": "extract-newvegas-70801-improved-console",
+        "folder": "Improved Console"
+      }
+    },
+    {
+      "id": "acquire-newvegas-65906-console-paste",
+      "type": "acquire",
+      "name": "Download Console Paste",
+      "artifact": "newvegas-65906-console-paste",
+      "dependsOn": [
+        "install-newvegas-70801-improved-console"
+      ]
+    },
+    {
+      "id": "extract-newvegas-65906-console-paste",
+      "type": "extract",
+      "name": "Extract Console Paste",
+      "artifact": "newvegas-65906-console-paste",
+      "dependsOn": [
+        "acquire-newvegas-65906-console-paste"
+      ]
+    },
+    {
+      "id": "install-newvegas-65906-console-paste",
+      "type": "install_mod",
+      "name": "Install Console Paste",
+      "dependsOn": [
+        "extract-newvegas-65906-console-paste"
+      ],
+      "parameters": {
+        "sourceAction": "extract-newvegas-65906-console-paste",
+        "folder": "Console Paste"
+      }
+    },
+    {
+      "id": "write-profile",
+      "type": "write_profile",
+      "name": "Write profile, INIs, separators, and load order",
+      "dependsOn": [
+        "install-newvegas-65906-console-paste"
+      ],
+      "parameters": {
+        "profileName": "Default"
+      }
+    },
+    {
+      "id": "validate-final",
+      "type": "validate_profile",
+      "name": "Validate and register instance",
+      "dependsOn": [
+        "write-profile"
+      ],
+      "parameters": {
+        "registerInstance": true
+      },
+      "validation": {
+        "requiredFiles": [
+          "ModOrganizer.ini",
+          "profiles/Default/modlist.txt",
+          "profiles/Default/FalloutCustom.ini"
+        ]
+      }
+    }
+  ],
+  "profile": {
+    "modlist": [
+      "# This file was automatically generated by Fluorine.",
+      "+Console Paste",
+      "+Improved Console",
+      "+Crash Logger",
+      "+MLF",
+      "+UIO - User Interface Organizer",
+      "+kNVSE",
+      "+ActorCause Save Bloat Fix",
+      "+VATS Lag Fix",
+      "+Fast Weapon Lag Fix",
+      "+Engine Optimizations",
+      "+Stewie Tweaks",
+      "+NVTF - INI",
+      "+NVTF",
+      "+ShowOff INI",
+      "+ShowOff NVSE",
+      "+JohnnyGuitar NVSE - All Tweaks Preset",
+      "+JohnnyGuitar NVSE",
+      "+JIP LN Settings INI",
+      "+JIP LN NVSE Plugin",
+      "+TTWNVSE",
+      "+Utilities_separator"
+    ],
+    "plugins": [
+      "*FalloutNV.esm",
+      "*DeadMoney.esm",
+      "*HonestHearts.esm",
+      "*OldWorldBlues.esm",
+      "*LonesomeRoad.esm",
+      "*GunRunnersArsenal.esm",
+      "*Fallout3.esm",
+      "*Anchorage.esm",
+      "*ThePitt.esm",
+      "*BrokenSteel.esm",
+      "*PointLookout.esm",
+      "*Zeta.esm",
+      "*CaravanPack.esm",
+      "*ClassicPack.esm",
+      "*MercenaryPack.esm",
+      "*TribalPack.esm",
+      "*TaleOfTwoWastelands.esm",
+      "*YUPTTW.esm"
+    ],
+    "loadorder": [
+      "FalloutNV.esm",
+      "DeadMoney.esm",
+      "HonestHearts.esm",
+      "OldWorldBlues.esm",
+      "LonesomeRoad.esm",
+      "GunRunnersArsenal.esm",
+      "Fallout3.esm",
+      "Anchorage.esm",
+      "ThePitt.esm",
+      "BrokenSteel.esm",
+      "PointLookout.esm",
+      "Zeta.esm",
+      "CaravanPack.esm",
+      "ClassicPack.esm",
+      "MercenaryPack.esm",
+      "TribalPack.esm",
+      "TaleOfTwoWastelands.esm",
+      "YUPTTW.esm"
+    ],
+    "falloutCustomIni": "; Value types (prefixes):\n; i = integer (whole number)\n; f = float (decimal number)\n; s = string (text)\n; b = boolean (0 = Off, 1 = On)\n\n[Audio]\n; Enables additional worker thread for minor performance improvement\nbMultiThreadAudio=1\n\n; Disables unnecessary copy operations performed on sound data\nbUseAudioDebugInformation=0\n\n; Increase audio file cache size to reduce loading stutter\niAudioCacheSize=16384\niMaxSizeForCachedSound=2048\n\n[BackgroundLoad]\n; Forces cell unload on fast travel to lessen memory usage\nbSelectivePurgeUnusedOnFastTravel=1\n\n; Reduces stutter when loading multiple NPCs\nbBackgroundLoadLipFiles=1\n\n[Controls]\n; Disables mouse acceleration in menus\n; Game does not have mouse acceleration for the camera\nfForegroundMouseAccelBase=0\nfForegroundMouseAccelTop=0\nfForegroundMouseBase=0\nfForegroundMouseMult=0\n\n[Display]\n; Enables Fullscreen mode for the best performance in D3D9\n; Refer to the Performance Guide for more info\nbFull Screen=1\n\n; Use this for V-Sync control (the Launcher setting doesn't work)\n; 0 = Off, 1 = On, Higher values toggle fractional V-Sync (not recommended, very laggy and disables Variable Refresh Rate)\niPresentInterval=1\n\n; Forces highest texture quality so textures won't break if you had it set to anything lower\niTexMipMapSkip=0\n\n; Disables actor shadows due to their low visual impact and high performance cost\nbDrawShadows=0\niActorShadowCountInt=0\niActorShadowCountExt=0\n\n; Camera FOV\nfDefaultWorldFOV=75.0000\n; Viewmodel FOV, values above 75 are not recommended\nfDefault1stPersonFOV=55.0000\n; Pip-Boy and terminal FOV\nfPipboy1stPersonFOV=47.0\n\n[General]\n; Forces faster cell unload to lessen memory usage\nbPreemptivelyUnloadCells=1\n\n; Spreads AI and game logic updates across 2 threads for better performance\n; Values above 3 don't change anything, and the setting has nothing to do with the number of CPU cores\niNumHWThreads=3\n\n; Tale of Two Wastelands specific\n; Sets TTW's starting quest\nSCharGenQuest=001FFFF8\n; Disables FNV intro movie\nSIntroMovie=\n\n[Grass]\n; Increases grass draw distance\nfGrassStartFadeDistance=11200\n\n; Ensures that 3.0 Vertex Shader is used.\n; Allows drawing more grass with better performance\nb30GrassVS=1\n\n[Water]\n; Disables full scene reflections for a massive performance boost\n; Water will use reflect LOD instead of drawing the entire world twice\nbForceHighDetailReflections=0\n\n[BlurShaderHDR]\n; Enables HDR rendering for proper lighting and shader support\nbDoHighDynamicRange=1\n\n[BlurShader]\n; Disables SDR bloom shader, to prevent conflicting with HDR\nbUseBlurShader=0\n\n[PipBoy]\n; Fixes flicker when opening Pip-Boy when its light is on\nfLightEffectFadeDuration=400\n"
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "audit_date": "2026-09-04",
+  "candidate_policy": {
+    "maintenance_window_months": 12,
+    "activity_cutoff": "2025-09-04",
+    "evidence": "public repository activity or a verifiable public modlist release",
+    "rule": "Exclude stale lists unless current maintenance is independently verified; record reviewed exceptions explicitly."
+  },
+  "gallery": {
+    "path": "/home/luke/.cache/clf3/modlists/modlists.json",
+    "entries": 219,
+    "github_backed_entries": 141,
+    "github_repositories": 125,
+    "bethesda_scoped_entries": 122,
+    "bethesda_scoped_repositories": 110,
+    "bethesda_fetch_ok": 121,
+    "bethesda_fetch_failures": 1
+  },
+  "fetch_failures": [
+    {
+      "title": "DyingBreath",
+      "machine_name": "dyingbreath",
+      "repository": "OddlyMistaken/Dying-Breath",
+      "source": "https://github.com/OddlyMistaken/Dying-Breath",
+      "attempted": "https://raw.githubusercontent.com/OddlyMistaken/Dying-Breath/main/README.md",
+      "error": "HTTP 404",
+      "head": "96555700d2cecf7bfa53ae967dd880c4aab1580a"
+    }
+  ],
+  "adapter_candidates": [
+    {"machine_name":"watersoflife","title":"Waters of Life","game":"fallout3","repository":"zpok3/Waters-of-Life","commit":"24ef7d4f7641c9c24238ef1a83f3628b72413643","last_activity":"2026-08-16","classification":"automatable_with_confirmation","signals":["root mods","Fallout Anniversary Patcher","BSA Decompressor","Linux-Guide.md"]},
+    {"machine_name":"TheSickNastySuite","title":"The SICKnasty Suite","game":"fallout4","repository":"KCisSICKnasty/SICKnasty-FO4","commit":"697ce1be27c770c13a941e2376002c77955a6f7f","last_activity":"2026-08-18","classification":"automatable_with_confirmation","signals":["XD3Patcher","vcdiff input","generated MO2 patch"]},
+    {"machine_name":"highanddry","title":"High & Dry","game":"falloutnewvegas","repository":"Jayer117-ball/HighandDry","commit":"fab9808d854645e0b43877a98ef622ef71c60b7a","last_activity":"2026-08-24","classification":"optional_bsa_recipe","signals":["FNV BSA Decompressor"]},
+    {"machine_name":"APaintedWorld","title":"A Painted World","game":"oblivion","repository":"sasquatch678/A-Painted-World","commit":"316c0bf608002776d959d0f7e4be28258acdae1f","last_activity":"2026-08-30","classification":"root_builder_recipe","signals":["Stock Game","Root Builder","Vulkan ReShade"]},
+    {"machine_name":"Deckborn","title":"Deckborn","game":"skyrimspecialedition","repository":"Pentonize/DeckBorn","commit":"861ad3edb9075af2e1ccdd036f54a850b4175d17","last_activity":"2024-12-13","classification":"linux_proton_recipe","signals":["Proton Experimental","Protontricks","SKSE root executable"]},
+    {"machine_name":"ASSOS","title":"Al and Styyx Setup of Skyrim - ASSOS","game":"skyrimspecialedition","repository":"The-Animonculory/ASSOS","commit":"38a3841539c361e6b4e741b13f0d3d88db0092ed","last_activity":"2026-08-15","classification":"linux_validation_candidate","signals":["developed on Linux","Jackify"]},
+    {"machine_name":"Tuxborn","title":"Tuxborn","game":"skyrimspecialedition","repository":"Omni-guides/Tuxborn","commit":"15d6590a0cc04b2104c7154d79ec3a17a3ab855f","last_activity":"2026-09-03","classification":"linux_proton_recipe","signals":["Jackify","afterinstall.md","MCM user step"]},
+    {"machine_name":"Ainulindale","title":"Ainulindale","game":"skyrimspecialedition","repository":"Fingolfin420/Ainulindale","commit":"93f3f812f82195ce1dbdb1a9ba526d3c4799245f","last_activity":"2025-11-21","classification":"patcher_recipe_with_user_settings","signals":["PGPatcher/ParallaxGen","MO2 output mod"]},
+    {"machine_name":"Alpyne","title":"Alpyne","game":"skyrimspecialedition","repository":"Ferroxius/Palette","commit":"3bba74840195e04da933d66e016cf89859ad1b2d","last_activity":"2026-06-09","classification":"linux_proton_recipe","signals":["Linux","Proton","Jackify"]}
+  ],
+  "maintenance_exceptions": [
+    {"machine_name":"Deckborn","verified_on":"2026-09-04","basis":"User confirmed the modlist remains valid despite an older documentation-repository commit."},
+    {"machine_name":"heartlandredux","verified_on":"2026-09-04","basis":"User confirmed the modlist remains valid despite an older documentation-repository commit."}
+  ],
+  "excluded_stale_candidates": [
+    {"machine_name":"fotw","title":"Fear of the Wanderer","repository":"StrawChannel95/Fear-of-the-Wanderer","commit":"140f47f58bf1427082d61a4a846318e38def9c90","last_activity":"2024-11-07","reason":"No verified activity within the maintenance window and confirmed abandoned."}
+  ],
+  "upstream_linux_tooling": {
+    "repository": "Omni-guides/Wabbajack-Modlist-Linux",
+    "commit": "7f61d9103fded6906d4d216b049f689ea4ff258e",
+    "files": [
+      "Legacy/binaries/omni-guides-fnvfix.sh",
+      "Legacy/binaries/omni-guides.sh",
+      "Legacy/binaries/WabbajackProton.sh",
+      "Legacy/binaries/WabbajackWine.sh"
+    ],
+    "recommended_use": "pin_and_review_as_declarative_operations; do_not_execute_arbitrary_readme_commands"
+  }
+}

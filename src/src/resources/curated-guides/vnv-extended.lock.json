@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "recipeId": "vnv-extended",
+  "recipeVersion": "0.1.0",
+  "sourceCommit": "fe8a40e7ad5dbd13c1c9074c582237ab88640a85",
+  "artifacts": {
+    "newvegas-67811-faster-main-menu": {
+      "domain": "newvegas",
+      "modId": 67811,
+      "fileId": 1000115498,
+      "name": "Faster Start Menu"
+    },
+    "newvegas-91028-goodies": {
+      "domain": "newvegas",
+      "modId": 91028,
+      "fileId": 1000174253,
+      "name": "Goodies"
+    },
+    "newvegas-91028-goodies-ini": {
+      "domain": "newvegas",
+      "modId": 91028,
+      "fileId": 1000169376,
+      "name": "Goodies INI"
+    }
+  }
+}

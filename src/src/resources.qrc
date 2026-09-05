@@ -114,4 +114,7 @@
     <qresource prefix="/qt/etc">
         <file>qt.conf</file>
     </qresource>
+    <qresource prefix="/fluorine/wabbajack-compatibility">
+        <file alias="catalog.json">resources/wabbajack-compatibility/catalog.json</file>
+    </qresource>
 </RCC>

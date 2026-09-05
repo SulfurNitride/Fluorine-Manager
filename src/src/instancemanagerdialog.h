@@ -116,9 +116,9 @@ private:
   //
   void openExistingPortable();
 
-  // opens the collection download wizard
+  // opens the CLF3-backed Wabbajack modlist wizard
   //
-  void downloadCollection();
+  void installWabbajack();
 
   // shows a confirmation to the user before switching
   //

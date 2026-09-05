@@ -35,6 +35,9 @@ struct Journal
   std::vector<JournalFile> files;
 };
 
+constexpr const char* UnjournaledReason =
+    "Fluorine found unjournaled files in VFS_staging. They were preserved and launch was blocked.";
+
 class Fd
 {
 public:
@@ -200,6 +203,26 @@ void writeJournal(const fs::path& staging, const Journal& journal)
   if (::fsync(fd.get()) != 0) fail("Unable to sync promotion journal", temp);
   if (::rename(temp.c_str(), final.c_str()) != 0) fail("Unable to publish promotion journal", final);
   fsyncDirectory(staging);
+}
+
+std::string readSmallFile(const fs::path& path)
+{
+  Fd fd(::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
+  if (fd.get() < 0) fail("Unable to open", path);
+  struct stat st {};
+  if (::fstat(fd.get(), &st) != 0 || !S_ISREG(st.st_mode) ||
+      st.st_size < 0 || st.st_size > 64 * 1024) {
+    throw std::runtime_error("Invalid recovery marker: " + path.string());
+  }
+  std::string value(static_cast<size_t>(st.st_size), '\0');
+  size_t offset = 0;
+  while (offset < value.size()) {
+    const ssize_t count = ::read(fd.get(), value.data() + offset,
+                                 value.size() - offset);
+    if (count <= 0) fail("Unable to read", path);
+    offset += static_cast<size_t>(count);
+  }
+  return value;
 }
 
 Journal readJournal(const fs::path& path)
@@ -422,20 +445,82 @@ bool parentContainedBy(const fs::path& path, const fs::path& root)
          (relative.empty() || *relative.begin() != "..");
 }
 
+std::optional<Journal> buildJournal(const fs::path& staging,
+                                    const fs::path& destination,
+                                    bool requireMissingOrIdenticalDestination,
+                                    std::string* conflictingPath = nullptr)
+{
+  std::error_code ec;
+  Journal journal;
+  journal.destination = canonicalDestination(destination);
+  const fs::path stagingRoot = fs::weakly_canonical(staging, ec);
+  if (ec) throw std::runtime_error("Unable to resolve staging directory: " + ec.message());
+  for (auto it = fs::recursive_directory_iterator(
+           staging, fs::directory_options::skip_permission_denied, ec);
+       !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+    if (it->is_directory(ec)) continue;
+    if (!it->is_regular_file(ec) || it->is_symlink(ec)) {
+      throw std::runtime_error("Refusing to promote non-regular staging entry: " +
+                               it->path().string());
+    }
+    const fs::path relative = fs::relative(it->path(), stagingRoot, ec);
+    if (ec || !safeRelative(relative)) {
+      throw std::runtime_error("Unsafe staging path: " + it->path().string());
+    }
+    struct stat st {};
+    JournalFile entry;
+    entry.file.relative_path = relative.generic_string();
+    entry.file.digest = hashStableFile(it->path(), &st);
+    entry.file.size = static_cast<uint64_t>(st.st_size);
+    entry.file.mode = static_cast<unsigned int>(st.st_mode) & 07777;
+    entry.previous = existingDigest(journal.destination / relative);
+    if (requireMissingOrIdenticalDestination && entry.previous &&
+        *entry.previous != entry.file.digest) {
+      if (conflictingPath != nullptr) *conflictingPath = entry.file.relative_path;
+      return std::nullopt;
+    }
+    journal.files.push_back(std::move(entry));
+  }
+  if (ec) throw std::runtime_error("Unable to enumerate staging directory: " + ec.message());
+  return journal;
+}
+
+void validateJournalDestination(Journal& journal,
+                                const fs::path& configuredDestination)
+{
+  std::error_code ec;
+  const fs::path configured = canonicalDestination(configuredDestination);
+  const fs::path recorded = fs::weakly_canonical(journal.destination, ec);
+  if (ec) {
+    throw std::runtime_error("Unable to resolve the recorded promotion destination");
+  }
+  if (configured != recorded) {
+    throw std::runtime_error("The promotion destination changed since the journal was written");
+  }
+  journal.destination = recorded;
+}
+
 StagingPromotionResult replay(const fs::path& staging, const Journal& journal,
-                              StagingPromotionStatus completedStatus)
+                              StagingPromotionStatus completedStatus,
+                              bool removeStaging = true,
+                              const fs::path& existingRecovery = {})
 {
   StagingPromotionResult result;
   result.status = completedStatus;
+  const auto block = [&](const std::string& reason) {
+    result.status = StagingPromotionStatus::Blocked;
+    result.message = reason;
+    result.recovery_path = existingRecovery.empty()
+        ? archiveConflict(staging, &journal, reason)
+        : existingRecovery;
+  };
   for (const JournalFile& entry : journal.files) {
     const fs::path source = staging / entry.file.relative_path;
     const fs::path destination = journal.destination / entry.file.relative_path;
     if (!parentContainedBy(source, staging) ||
         !parentContainedBy(destination, journal.destination)) {
       const std::string reason = "A journaled VFS path escaped its configured root. The data was preserved and launch was blocked.";
-      result.status = StagingPromotionStatus::Blocked;
-      result.message = reason;
-      result.recovery_path = archiveConflict(staging, &journal, reason);
+      block(reason);
       return result;
     }
     const auto destinationDigest = existingDigest(destination);
@@ -451,18 +536,79 @@ StagingPromotionResult replay(const fs::path& staging, const Journal& journal,
       const std::string reason = "Fluorine could not safely replay a staged write for " +
                                  entry.file.relative_path +
                                  ". Both versions were preserved; resolve them before launching.";
-      result.status = StagingPromotionStatus::Blocked;
-      result.message = reason;
-      result.recovery_path = archiveConflict(staging, &journal, reason);
+      block(reason);
       return result;
     }
     copyVerified(source, destination, journal.destination, entry);
     result.files.push_back(entry.file);
   }
+  if (removeStaging) {
+    std::error_code ec;
+    fs::remove_all(staging, ec);
+    if (ec) throw std::runtime_error("Unable to remove verified staging directory: " + ec.message());
+    fsyncDirectory(staging.parent_path());
+  }
+  return result;
+}
+
+std::optional<StagingPromotionResult> recoverUnjournaledArchive(
+    const fs::path& staging, const fs::path& recovery,
+    const fs::path& configuredDestination)
+{
+  const fs::path marker = recovery / ".fluorine-unresolved";
+  if (readSmallFile(marker) != std::string(UnjournaledReason) + "\n") {
+    return std::nullopt;
+  }
+
+  const fs::path archivedStaging = recovery / "staging";
   std::error_code ec;
-  fs::remove_all(staging, ec);
-  if (ec) throw std::runtime_error("Unable to remove verified staging directory: " + ec.message());
-  fsyncDirectory(staging.parent_path());
+  const bool archived = fs::exists(archivedStaging, ec);
+  const fs::path source = archived ? archivedStaging : staging;
+  if (!fs::exists(source, ec) || !hasPayload(source)) {
+    return std::nullopt;
+  }
+
+  Journal journal;
+  const fs::path journalPath = source / StagingPromotion::JournalName;
+  if (fs::is_regular_file(journalPath, ec)) {
+    journal = readJournal(journalPath);
+    validateJournalDestination(journal, configuredDestination);
+  } else {
+    std::string conflict;
+    const auto candidate = buildJournal(source, configuredDestination, true, &conflict);
+    if (!candidate) {
+      StagingPromotionResult result;
+      result.status = StagingPromotionStatus::Blocked;
+      result.recovery_path = recovery;
+      result.message = "Fluorine preserved an unjournaled staged write for " + conflict +
+                       " because its destination already contains different data. "
+                       "Choose which version to keep before launching.";
+      return result;
+    }
+    journal = *candidate;
+    if (journal.files.empty()) return std::nullopt;
+    writeJournal(source, journal);
+  }
+
+  auto result = replay(source, journal, StagingPromotionStatus::Recovered,
+                       false, recovery);
+  if (result.blocked()) return result;
+
+  // The destination is fully verified. Remove the block marker first so a
+  // crash during archive cleanup cannot turn an already completed recovery
+  // back into a permanent launch block.
+  if (!fs::remove(marker, ec) || ec) {
+    throw std::runtime_error("Unable to clear resolved VFS recovery marker: " +
+                             ec.message());
+  }
+  fsyncDirectory(recovery);
+  fs::remove_all(source, ec);
+  if (ec) throw std::runtime_error("Unable to remove recovered staging data: " + ec.message());
+  fs::remove(recovery / "README.txt", ec);
+  ec.clear();
+  fs::remove(recovery, ec);
+  ec.clear();
+  fs::remove(recovery.parent_path(), ec);
   return result;
 }
 
@@ -472,6 +618,10 @@ StagingPromotionResult StagingPromotion::recover(
     const fs::path& staging, const fs::path& configuredDestination)
 {
   if (const auto unresolved = unresolvedRecovery(staging)) {
+    if (const auto recovered = recoverUnjournaledArchive(
+            staging, *unresolved, configuredDestination)) {
+      return *recovered;
+    }
     StagingPromotionResult result;
     result.status = StagingPromotionStatus::Blocked;
     result.recovery_path = *unresolved;
@@ -487,9 +637,19 @@ StagingPromotionResult StagingPromotion::recover(
 
   const fs::path journalPath = staging / JournalName;
   if (!fs::is_regular_file(journalPath, ec)) {
+    std::string conflict;
+    const auto journal = buildJournal(staging, configuredDestination, true,
+                                      &conflict);
+    if (journal && !journal->files.empty()) {
+      writeJournal(staging, *journal);
+      return replay(staging, *journal, StagingPromotionStatus::Recovered);
+    }
     StagingPromotionResult result;
     result.status = StagingPromotionStatus::Blocked;
-    result.message = "Fluorine found unjournaled files in VFS_staging. They were preserved and launch was blocked.";
+    result.message = conflict.empty()
+        ? UnjournaledReason
+        : "Fluorine found an unjournaled staged write for " + conflict +
+          " whose destination contains different data. Both were preserved and launch was blocked.";
     result.recovery_path = archiveConflict(staging, nullptr, result.message);
     return result;
   }
@@ -497,15 +657,7 @@ StagingPromotionResult StagingPromotion::recover(
   Journal journal;
   try {
     journal = readJournal(journalPath);
-    const fs::path configured = canonicalDestination(configuredDestination);
-    const fs::path recorded = fs::weakly_canonical(journal.destination, ec);
-    if (ec) {
-      throw std::runtime_error("Unable to resolve the recorded promotion destination");
-    }
-    if (configured != recorded) {
-      throw std::runtime_error("The promotion destination changed since the journal was written");
-    }
-    journal.destination = recorded;
+    validateJournalDestination(journal, configuredDestination);
   } catch (const std::exception& error) {
     StagingPromotionResult result;
     result.status = StagingPromotionStatus::Blocked;
@@ -528,31 +680,7 @@ StagingPromotionResult StagingPromotion::promote(
     return recover(staging, destination);
   }
 
-  Journal journal;
-  journal.destination = canonicalDestination(destination);
-  const fs::path stagingRoot = fs::weakly_canonical(staging, ec);
-  if (ec) throw std::runtime_error("Unable to resolve staging directory: " + ec.message());
-  for (auto it = fs::recursive_directory_iterator(
-           staging, fs::directory_options::skip_permission_denied, ec);
-       !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
-    if (it->is_directory(ec)) continue;
-    if (!it->is_regular_file(ec) || it->is_symlink(ec)) {
-      throw std::runtime_error("Refusing to promote non-regular staging entry: " + it->path().string());
-    }
-    const fs::path relative = fs::relative(it->path(), stagingRoot, ec);
-    if (ec || !safeRelative(relative)) {
-      throw std::runtime_error("Unsafe staging path: " + it->path().string());
-    }
-    struct stat st {};
-    JournalFile entry;
-    entry.file.relative_path = relative.generic_string();
-    entry.file.digest = hashStableFile(it->path(), &st);
-    entry.file.size = static_cast<uint64_t>(st.st_size);
-    entry.file.mode = static_cast<unsigned int>(st.st_mode) & 07777;
-    entry.previous = existingDigest(journal.destination / relative);
-    journal.files.push_back(std::move(entry));
-  }
-  if (ec) throw std::runtime_error("Unable to enumerate staging directory: " + ec.message());
+  Journal journal = *buildJournal(staging, destination, false);
   if (journal.files.empty()) {
     fs::remove_all(staging, ec);
     return {};

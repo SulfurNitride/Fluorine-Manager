@@ -1019,6 +1019,26 @@ QNetworkReply* NXMAccessManager::makeOAuthGetRequest(const QUrl url)
   return nullptr;
 }
 
+QNetworkReply* NXMAccessManager::makeAuthenticatedGetRequest(const QUrl url)
+{
+  if (m_NexusOAuth && !m_NexusOAuth->token().isEmpty())
+    return makeOAuthGetRequest(url);
+
+  if (!m_Tokens
+      || (m_Tokens->accessToken.isEmpty() && m_Tokens->apiKey.isEmpty()))
+    return nullptr;
+
+  QNetworkRequest request(url);
+  if (!m_Tokens->accessToken.isEmpty()) {
+    request.setRawHeader("Authorization",
+                         "Bearer " + m_Tokens->accessToken.toUtf8());
+  } else {
+    request.setRawHeader("APIKEY", m_Tokens->apiKey.toUtf8());
+  }
+  addAPIHeaders(request);
+  return get(request);
+}
+
 QNetworkReply* NXMAccessManager::makeOAuthPostRequest(const QUrl url,
                                                       const QByteArray payload = {})
 {

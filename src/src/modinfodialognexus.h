@@ -3,30 +3,6 @@
 
 #include "modinfodialogtab.h"
 
-#ifdef MO2_WEBENGINE
-class NexusTabWebpage : public QWebEnginePage
-{
-  Q_OBJECT
-
-public:
-  NexusTabWebpage(QObject* parent = 0) : QWebEnginePage(parent) {}
-
-  bool acceptNavigationRequest(const QUrl& url, QWebEnginePage::NavigationType type,
-                               bool) override
-  {
-    if (type == QWebEnginePage::NavigationTypeLinkClicked) {
-      emit linkClicked(url);
-      return false;
-    }
-
-    return true;
-  }
-
-signals:
-  void linkClicked(const QUrl&);
-};
-#endif
-
 class NexusTab : public ModInfoDialogTab
 {
   Q_OBJECT;

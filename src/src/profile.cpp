@@ -480,6 +480,14 @@ void Profile::refreshModStatus()
     }
 
     if (modName.compare("overwrite", Qt::CaseInsensitive) == 0) {
+      // Older Fluorine curated recipes accidentally emitted the reserved
+      // pseudo-mod as "*Overwrite". Silently discard that exact legacy form
+      // and let the normal writer remove it from the profile. A real mod named
+      // overwrite still uses +/- and retains the existing warning.
+      if (line.at(0) == '*') {
+        modStatusModified = true;
+        continue;
+      }
       warnAboutOverwrite = true;
     }
 

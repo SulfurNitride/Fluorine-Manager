@@ -5,6 +5,7 @@
 #include <QString>
 #include <QStringList>
 #include <QVariant>
+#include <QVector>
 #include <memory>
 
 /// A VDF value — either a string or a nested object (QMap).
@@ -49,14 +50,25 @@ private:
 };
 
 /// Parsed appmanifest_*.acf file.
+struct AppManifestDepot {
+  QString depot_id;
+  QString manifest_id;
+  qint64 size = 0;
+  QString dlc_app_id;
+};
+
 struct AppManifest {
   QString app_id;
   QString name;
   QString install_dir;
+  QString build_id;
+  QString language;
   uint32_t state_flags = 0;
+  QVector<AppManifestDepot> installed_depots;
 
   bool isInstalled() const { return state_flags == 4; }
 
+  __attribute__((visibility("default")))
   static AppManifest fromVdf(const QString& content);
 };
 

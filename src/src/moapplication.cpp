@@ -18,6 +18,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include "moapplication.h"
+#include "curatedguidenxmbroker.h"
 #include "commandline.h"
 #include "instancemanager.h"
 #include "loglist.h"
@@ -356,6 +357,20 @@ int MOApplication::setup(MOMultiProcess& multiProcess, bool forceSelect)
   log::getDefault().setLevel(m_settings->diagnostics().logLevel());
   log::debug("using ini at '{}'", m_settings->filename());
 
+  // Recover before loading/validating the game plugin. A dead FUSE mount makes
+  // looksValid(gamePath) fail with ENOTCONN, so cleanup performed after
+  // setupInstanceLoop() can never be reached. Only the primary process owns
+  // startup recovery; a deliberately secondary --multiple process must not
+  // detach a healthy mount owned by the primary instance.
+  if (!multiProcess.secondary()) {
+    const auto configuredGameDir = m_settings->game().directory();
+    if (configuredGameDir && !configuredGameDir->trimmed().isEmpty()) {
+      log::info("checking for stale FUSE mounts before game validation using '{}'",
+                *configuredGameDir);
+      FuseConnector::tryCleanupStaleMount(*configuredGameDir);
+    }
+  }
+
   OrganizerCore::setGlobalCoreDumpType(m_settings->diagnostics().coreDumpType());
 
   tt.start("MOApplication::doOneRun() log and checks");
@@ -588,6 +603,11 @@ void MOApplication::externalMessage(const QString& message)
       }
     }
   } else if (isNxmLink(message)) {
+    if (CuratedGuideNxmBroker::instance().tryConsume(message)) {
+      MessageDialog::showMessage(tr("Download authorization accepted"),
+                                 qApp->activeWindow(), false);
+      return;
+    }
     if (!m_coreReady) {
       log::info("queueing external download link until instance setup completes");
       m_pendingExternalLinks.append(message);
@@ -635,6 +655,11 @@ void MOApplication::externalMessage(const QString& message)
   }
 }
 
+void MOApplication::routeNxmMessage(const QString& message)
+{
+  externalMessage(message);
+}
+
 void MOApplication::processPendingExternalLinks()
 {
   if (!m_coreReady || m_core == nullptr || m_pendingExternalLinks.isEmpty()) {
@@ -645,7 +670,9 @@ void MOApplication::processPendingExternalLinks()
   links.swap(m_pendingExternalLinks);
   log::info("processing {} download link(s) queued during startup", links.size());
   for (const QString& link : links) {
-    m_core->downloadRequestedNXM(link);
+    if (!CuratedGuideNxmBroker::instance().tryConsume(link)) {
+      m_core->downloadRequestedNXM(link);
+    }
   }
 }
 

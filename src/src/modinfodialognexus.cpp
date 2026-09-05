@@ -79,11 +79,7 @@ void NexusTab::clear()
   ui->sourceGame->clear();
   ui->version->clear();
   ui->category->clear();
-#ifdef MO2_WEBENGINE
-  ui->browser->setPage(new NexusTabWebpage(ui->browser));
-#else
   ui->browser->setHtml("");
-#endif
   ui->hasCustomURL->setChecked(false);
   ui->customURL->clear();
   setHasData(false);
@@ -118,16 +114,7 @@ void NexusTab::update()
 
   ui->category->setText(QString("%1").arg(mod().getNexusCategory()));
 
-#ifdef MO2_WEBENGINE
-  auto* page = new NexusTabWebpage(ui->browser);
-  ui->browser->setPage(page);
-
-  connect(page, &NexusTabWebpage::linkClicked, [&](const QUrl& url) {
-    shell::Open(url);
-  });
-#else
   ui->browser->setOpenExternalLinks(true);
-#endif
 
   ui->endorse->setEnabled((mod().endorsedState() == EndorsedState::ENDORSED_FALSE) ||
                           (mod().endorsedState() == EndorsedState::ENDORSED_NEVER));
@@ -321,11 +308,7 @@ void NexusTab::onModChanged()
     descriptionAsHTML = descriptionAsHTML.arg(BBCode::convertToHTML(nexusDescription));
   }
 
-#ifdef MO2_WEBENGINE
-  ui->browser->page()->setHtml(descriptionAsHTML);
-#else
   ui->browser->setHtml(descriptionAsHTML);
-#endif
   updateVersionColor();
   updateTracking();
 }
@@ -343,11 +326,7 @@ void NexusTab::onModIDChanged()
     mod().setNexusID(newID);
     mod().setLastNexusQuery(QDateTime::fromSecsSinceEpoch(0));
 
-#ifdef MO2_WEBENGINE
-    ui->browser->page()->setHtml("");
-#else
     ui->browser->setHtml("");
-#endif
 
     if (isValidModID(newID)) {
       refreshData(newID);

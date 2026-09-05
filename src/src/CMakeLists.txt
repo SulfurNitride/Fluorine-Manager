@@ -2,9 +2,9 @@ cmake_minimum_required(VERSION 3.16)
 
 find_package(Qt6 REQUIRED COMPONENTS
     Widgets WebSockets Network NetworkAuth Concurrent DBus)
-option(MO2_ENABLE_WEBENGINE "Build optional Qt WebEngine browser support" OFF)
+option(MO2_ENABLE_WEBENGINE "Build optional Qt WebEngine browser support" ON)
 if(MO2_ENABLE_WEBENGINE)
-    find_package(Qt6 QUIET COMPONENTS WebEngineWidgets)
+    find_package(Qt6 REQUIRED COMPONENTS WebEngineWidgets)
 endif()
 find_package(Boost CONFIG REQUIRED COMPONENTS
     program_options)
@@ -13,6 +13,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(FUSE3 REQUIRED IMPORTED_TARGET fuse3)
 find_package(Threads REQUIRED)
 find_package(SQLite3 REQUIRED)
+find_package(ZLIB REQUIRED)
 
 # Pinned official BLAKE3 C implementation. FetchContent keeps release builds
 # reproducible without requiring a distro-specific development package.
@@ -49,6 +50,15 @@ file(GLOB ORGANIZER_SOURCES
 
 # These files are compiled into libuibase.so (shared with plugins) — exclude from organizer.
 list(REMOVE_ITEM ORGANIZER_SOURCES
+    # Curated guide recipes are superseded by the CLF3-backed Wabbajack gallery.
+    # Keep the generic NXM broker, verified game copier, and instance bootstrap:
+    # Wabbajack post-install compatibility uses those shared facilities.
+    ${CMAKE_CURRENT_SOURCE_DIR}/curatedfomod.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/curatedguidedialog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/curatedguideinstaller.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/curatedguideinstallstate.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/curatedguiderecipe.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/curatedmodlayout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/gamedetection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/heroicjson.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/steamdetection.cpp
@@ -61,6 +71,13 @@ file(GLOB ORGANIZER_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/*.h
     ${CMAKE_CURRENT_SOURCE_DIR}/shared/*.h
     ${CMAKE_CURRENT_SOURCE_DIR}/vfs/*.h)
+list(REMOVE_ITEM ORGANIZER_HEADERS
+    ${CMAKE_CURRENT_SOURCE_DIR}/curatedfomod.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/curatedguidedialog.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/curatedguideinstaller.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/curatedguideinstallstate.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/curatedguiderecipe.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/curatedmodlayout.h)
 file(GLOB ORGANIZER_UI
     ${CMAKE_CURRENT_SOURCE_DIR}/*.ui)
 file(GLOB ORGANIZER_QRC
@@ -198,6 +215,7 @@ target_link_libraries(organizer PRIVATE
     SQLite::SQLite3
     BLAKE3::blake3
     utf8proc
+    ZLIB::ZLIB
     # Linux system libs
     dl)
 

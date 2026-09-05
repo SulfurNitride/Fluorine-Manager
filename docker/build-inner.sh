@@ -11,6 +11,7 @@ CMAKE_EXTRA_ARGS=()
 # source tree without contacting every remote on each incremental build; an
 # absent source is still downloaded during the initial population step.
 CMAKE_EXTRA_ARGS+=("-DFETCHCONTENT_UPDATES_DISCONNECTED=ON")
+CMAKE_EXTRA_ARGS+=("-DMO2_ENABLE_WEBENGINE=ON")
 # Always set the runtime directory explicitly. CMake caches this PATH, so
 # omitting it after an experimental build would silently repackage that prior
 # candidate during a normal reference restore.
@@ -52,6 +53,32 @@ cmake -S . -B build -G Ninja \
     -DFLUORINE_BUILD_TIMESTAMP="${FLUORINE_BUILD_TIMESTAMP}" \
     -DFLUORINE_BUILD_COMMIT="${FLUORINE_BUILD_COMMIT}" \
     "${CMAKE_EXTRA_ARGS[@]}"
+
+# Build the CLF3 engine from an explicitly mounted development checkout or
+# from the pinned repository revision used by release/CI builds.
+CLF3_SOURCE="/clf3-src"
+if [ ! -f "${CLF3_SOURCE}/Cargo.toml" ]; then
+    CLF3_SOURCE="/tmp/clf3-source"
+    CLF3_REPOSITORY="$(sed -n 's/^repository=//p' /src/docker/clf3.lock)"
+    CLF3_COMMIT="$(sed -n 's/^commit=//p' /src/docker/clf3.lock)"
+    rm -rf "${CLF3_SOURCE}"
+    git clone --filter=blob:none "${CLF3_REPOSITORY}" "${CLF3_SOURCE}"
+    git -C "${CLF3_SOURCE}" checkout --detach "${CLF3_COMMIT}"
+fi
+CLF3_PROTOCOL="$(sed -n 's/^protocol=//p' /src/docker/clf3.lock)"
+if [ "${CLF3_PROTOCOL}" != "1" ] \
+   || ! grep -q 'HOST_PROTOCOL_VERSION: u32 = 1' \
+        "${CLF3_SOURCE}/src/installer/host.rs" 2>/dev/null; then
+    echo "ERROR: CLF3 source does not implement Fluorine host protocol 1"
+    echo "Mount the matching checkout with CLF3_SOURCE_DIR or update docker/clf3.lock."
+    exit 1
+fi
+export CARGO_TARGET_DIR=/src/build/clf3-target
+if [ "${BUILD_MODE:-tarball}" = "test" ]; then
+    cargo test --manifest-path "${CLF3_SOURCE}/Cargo.toml" --locked installer::host
+else
+    cargo build --manifest-path "${CLF3_SOURCE}/Cargo.toml" --release --locked
+fi
 
 if [ "${BUILD_MODE:-tarball}" = "test" ]; then
     if [ -n "${BUILD_JOBS:-}" ]; then
@@ -110,6 +137,24 @@ fi
 
 # ── Main binary + helpers ──
 cp -f "${RUNDIR}/ModOrganizer" "${OUT_DIR}/ModOrganizer-core"
+if [ ! -x "${CARGO_TARGET_DIR}/release/clf3" ]; then
+    echo "ERROR: CLF3 release binary was not produced"
+    exit 1
+fi
+cp -f "${CARGO_TARGET_DIR}/release/clf3" "${OUT_DIR}/clf3"
+chmod +x "${OUT_DIR}/clf3"
+if [ -f "${CLF3_SOURCE}/LICENSE" ]; then
+    cp -f "${CLF3_SOURCE}/LICENSE" "${OUT_DIR}/licenses/clf3-MIT.txt"
+fi
+{
+    echo "protocol=1"
+    echo "commit=$(git -C "${CLF3_SOURCE}" rev-parse HEAD 2>/dev/null || echo unknown)"
+    if [ -n "$(git -C "${CLF3_SOURCE}" status --porcelain 2>/dev/null)" ]; then
+        echo "worktree=dirty"
+    else
+        echo "worktree=clean"
+    fi
+} > "${OUT_DIR}/clf3-engine-version.txt"
 [ -f "${RUNDIR}/README-PORTABLE.txt" ] && cp -f "${RUNDIR}/README-PORTABLE.txt" "${OUT_DIR}/"
 [ -f "/src/src/fluorine-manager" ] && cp -f "/src/src/fluorine-manager" "${OUT_DIR}/"
 
@@ -220,6 +265,15 @@ fi
 SO7="build/src/src/lib/7z.so"
 if [ -f "${SO7}" ]; then
     cp -f "${SO7}" "${OUT_DIR}/lib/7z.so"
+fi
+# Post-install compatibility tools arrive as ordinary Nexus archives. Bundle
+# the standalone 7-Zip CLI so extraction does not depend on the host distro.
+if [ -x /usr/lib/7zip/7za ]; then
+    cp -f /usr/lib/7zip/7za "${OUT_DIR}/7zz"
+    chmod 0755 "${OUT_DIR}/7zz"
+fi
+if [ -f /usr/share/doc/7zip/copyright ]; then
+    cp -f /usr/share/doc/7zip/copyright "${OUT_DIR}/licenses/7zip-copyright"
 fi
 
 # ── Project-specific shared libraries ──
@@ -356,13 +410,36 @@ else
     echo "WARNING: Could not find Qt6 plugin directory"
 fi
 
+# Qt WebEngine has a helper executable and data files outside the ordinary
+# plugin tree. Keep their relative layout stable and point Qt at it at launch.
+QT6_ROOT="${Qt6_DIR:-/opt/qt6/6.11.1/gcc_64}"
+if [ ! -x "${QT6_ROOT}/libexec/QtWebEngineProcess" ]; then
+    echo "ERROR: QtWebEngineProcess is missing from ${QT6_ROOT}"
+    exit 1
+fi
+mkdir -p "${OUT_DIR}/libexec" "${OUT_DIR}/resources" "${OUT_DIR}/translations"
+cp -f "${QT6_ROOT}/libexec/QtWebEngineProcess" "${OUT_DIR}/libexec/"
+cp -a "${QT6_ROOT}/resources/." "${OUT_DIR}/resources/"
+# DevTools are not exposed by Fluorine and their resource bundle is sizeable.
+rm -f "${OUT_DIR}/resources/qtwebengine_devtools_resources.pak"
+if [ -d "${QT6_ROOT}/translations/qtwebengine_locales" ]; then
+    mkdir -p "${OUT_DIR}/translations/qtwebengine_locales"
+    cp -f "${QT6_ROOT}/translations/qtwebengine_locales/en-US.pak" \
+        "${OUT_DIR}/translations/qtwebengine_locales/"
+fi
+collect_deps "${OUT_DIR}/libexec/QtWebEngineProcess" | while read -r dep; do
+    dep_name="$(basename "${dep}")"
+    echo "${dep_name}" | grep -qE "${SKIP_PATTERN}" && continue
+    [ -f "${OUT_DIR}/lib/${dep_name}" ] && continue
+    cp -Lf "${dep}" "${OUT_DIR}/lib/" 2>/dev/null || true
+done
+
 # ── Bundle PBS Python 3.12 runtime ──
 # Bundle the matching interpreter for isolated helpers plus lib/python3.12/.
 # Headers, static libraries, and source-only development files remain excluded.
 PBS_SRC="/opt/python-bundled"
 PYTHON_OUT="${OUT_DIR}/python"
 mkdir -p "${PYTHON_OUT}/bin" "${PYTHON_OUT}/lib"
-cp -Lf "${PBS_SRC}/bin/python3.12" "${PYTHON_OUT}/bin/python3.12"
 
 # Copy only the stdlib directory
 cp -a "${PBS_SRC}/lib/python3.12" "${PYTHON_OUT}/lib/"
@@ -425,6 +502,15 @@ find "${PYTHON_OUT}/lib/python3.12" -name "*.so" \
 cp -Lf "${PBS_SRC}/lib/libpython3.12.so.1.0" "${OUT_DIR}/lib/"
 strip --strip-unneeded "${OUT_DIR}/lib/libpython3.12.so.1.0" 2>/dev/null || true
 ln -sf libpython3.12.so.1.0 "${OUT_DIR}/lib/libpython3.12.so"
+# PBS's standalone interpreter statically embeds a second copy of libpython.
+# Link the conventional CPython main function to the shared copy that the
+# Python plugin already needs, avoiding roughly 30 MiB of duplicate code.
+gcc -Os -s \
+    -I"${PBS_SRC}/include/python3.12" \
+    -L"${PBS_SRC}/lib" \
+    -Wl,-rpath,'$ORIGIN/../../lib' \
+    -o "${PYTHON_OUT}/bin/python3.12" \
+    /src/docker/python-launcher.c -lpython3.12
 echo "Bundled PBS Python 3.12: $(du -sh "${PYTHON_OUT}" | cut -f1)"
 
 # ── Bundle PyQt6 (bindings only — reuse our bundled Qt, no duplicate Qt .so) ──
@@ -542,6 +628,8 @@ echo "Deduping lib/ via symlinks..."
 # ── Strip all MO2 binaries ──
 echo "Stripping MO2 binaries..."
 strip --strip-unneeded "${OUT_DIR}/ModOrganizer-core" 2>/dev/null || true
+strip --strip-unneeded "${OUT_DIR}/clf3" 2>/dev/null || true
+strip --strip-unneeded "${OUT_DIR}/libexec/QtWebEngineProcess" 2>/dev/null || true
 find "${OUT_DIR}/plugins" -name "*.so" -exec strip --strip-unneeded {} \; 2>/dev/null || true
 find "${OUT_DIR}/lib" -name "*.so" -exec strip --strip-unneeded {} \; 2>/dev/null || true
 
@@ -550,6 +638,7 @@ find "${OUT_DIR}/lib" -name "*.so" -exec strip --strip-unneeded {} \; 2>/dev/nul
 # library resolution regardless of LD_LIBRARY_PATH.
 echo "Patching RPATH..."
 patchelf --force-rpath --set-rpath '$ORIGIN/lib' "${OUT_DIR}/ModOrganizer-core"
+patchelf --force-rpath --set-rpath '$ORIGIN/../lib' "${OUT_DIR}/libexec/QtWebEngineProcess"
 find "${OUT_DIR}/plugins" -maxdepth 1 -name "*.so" -exec patchelf --force-rpath --set-rpath '$ORIGIN/../lib' {} \; 2>/dev/null || true
 find "${OUT_DIR}/plugins/libs" -name "*.so" -exec patchelf --force-rpath --set-rpath '$ORIGIN/../../lib' {} \; 2>/dev/null || true
 find "${OUT_DIR}/lib" \( -name "*.so" -o -name "*.so.*" \) -exec patchelf --force-rpath --set-rpath '$ORIGIN' {} \; 2>/dev/null || true
@@ -729,6 +818,9 @@ unset PYTHONPATH PYTHONNOUSERSITE PYTHONHOME MO2_PYTHON_DIR
 # plugin lookup and overrides system-wide qt.conf (e.g. Fedora's /etc/xdg/QtProject/).
 export QT_PLUGIN_PATH="${RUN}/qt6plugins"
 export QT_QPA_PLATFORM_PLUGIN_PATH="${RUN}/qt6plugins/platforms"
+export QTWEBENGINEPROCESS_PATH="${RUN}/libexec/QtWebEngineProcess"
+export QTWEBENGINE_RESOURCES_PATH="${RUN}/resources"
+export QTWEBENGINE_LOCALES_PATH="${RUN}/translations/qtwebengine_locales"
 
 # The portable bundle ships its own fontconfig library. If it reads the host's
 # newer /etc/fonts configuration, older bundled fontconfig can warn on syntax

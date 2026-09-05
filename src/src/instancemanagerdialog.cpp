@@ -1,6 +1,5 @@
 #include "instancemanagerdialog.h"
-#include "collectiondownloaddialog.h"
-#include "nexuscollections.h"
+#include "clf3installerdialog.h"
 #include "createinstancedialog.h"
 #include "filesystemutilities.h"
 #include "instancemanager.h"
@@ -17,6 +16,7 @@
 #include <QFutureWatcher>
 #include <QMessageBox>
 #include <QProgressDialog>
+#include <QSet>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QtConcurrent/QtConcurrent>
@@ -187,8 +187,8 @@ InstanceManagerDialog::InstanceManagerDialog(PluginContainer& pc, QWidget* paren
   connect(ui->openExisting, &QPushButton::clicked, [&] {
     openExistingPortable();
   });
-  connect(ui->downloadCollection, &QPushButton::clicked, [&] {
-    downloadCollection();
+  connect(ui->installWabbajack, &QPushButton::clicked, [&] {
+    installWabbajack();
   });
 
   connect(ui->list->selectionModel(), &QItemSelectionModel::selectionChanged, [&] {
@@ -284,9 +284,13 @@ void InstanceManagerDialog::updateInstances()
   auto& m = InstanceManager::singleton();
 
   m_instances.clear();
+  QSet<QString> knownPaths;
 
   for (auto&& d : m.globalInstancePaths()) {
     m_instances.push_back(std::make_unique<Instance>(d, false));
+    knownPaths.insert(QFileInfo(d).canonicalFilePath().isEmpty()
+                          ? QDir(d).absolutePath()
+                          : QFileInfo(d).canonicalFilePath());
   }
 
   // sort first, prepend portable after so it's always on top
@@ -305,6 +309,13 @@ void InstanceManagerDialog::updateInstances()
     if (!QFileInfo::exists(QDir(path).filePath("ModOrganizer.ini"))) {
       continue;
     }
+    const QString canonical = QFileInfo(path).canonicalFilePath().isEmpty()
+                                  ? QDir(path).absolutePath()
+                                  : QFileInfo(path).canonicalFilePath();
+    if (knownPaths.contains(canonical)) {
+      continue;
+    }
+    knownPaths.insert(canonical);
     m_instances.push_back(std::make_unique<Instance>(path, true));
   }
 
@@ -943,40 +954,22 @@ void InstanceManagerDialog::openExistingPortable()
   }
 }
 
-void InstanceManagerDialog::downloadCollection()
+void InstanceManagerDialog::installWabbajack()
 {
-  auto* dlg = new CollectionDownloadDialog(
-      &m_pc, this);
-
-  // Pre-select the game domain of the currently selected instance if any.
-  const Instance* sel = singleSelection();
-  if (sel) {
-    const QString domain = NexusCollections::domainForGameName(sel->gameName());
-    if (!domain.isEmpty())
-      dlg->setGameDomain(domain);
-  }
-
-  if (dlg->exec() == QDialog::Accepted) {
-    const QString instDir = dlg->createdInstanceDir();
-    if (!instDir.isEmpty()) {
-      updateInstances();
-      updateList();
-
-      // Select the newly installed instance.
-      const QString canonical = QDir(instDir).absolutePath();
-      for (std::size_t i = 0; i < m_instances.size(); ++i) {
-        if (QDir(m_instances[i]->directory()).absolutePath() == canonical) {
-          select(i);
-          break;
-        }
+  auto* dialog = new Clf3InstallerDialog(this);
+  if (dialog->exec() == QDialog::Accepted && !dialog->createdInstanceDir().isEmpty()) {
+    updateInstances();
+    updateList();
+    const QString canonical = QDir(dialog->createdInstanceDir()).absolutePath();
+    for (std::size_t i = 0; i < m_instances.size(); ++i) {
+      if (QDir(m_instances[i]->directory()).absolutePath() == canonical) {
+        select(i);
+        break;
       }
-
-      if (dlg->shouldSwitchToInstance())
-        openSelectedInstance();
     }
+    if (dialog->shouldSwitchToInstance()) openSelectedInstance();
   }
-
-  dlg->deleteLater();
+  dialog->deleteLater();
 }
 
 void InstanceManagerDialog::downloadSLRIfNeeded()

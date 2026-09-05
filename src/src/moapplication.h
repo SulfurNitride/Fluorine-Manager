@@ -67,6 +67,10 @@ public:
   //
   OrganizerCore& core();
 
+  // Routes an NXM link through active authorization consumers before falling
+  // back to the normal download manager. Used by every platform ingress path.
+  void routeNxmMessage(const QString& message);
+
   // wraps QApplication::notify() in a catch, reports errors and ignores them
   //
   bool notify(QObject* receiver, QEvent* event) override;

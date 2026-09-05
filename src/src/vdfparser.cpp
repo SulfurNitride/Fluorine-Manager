@@ -125,7 +125,21 @@ AppManifest AppManifest::fromVdf(const QString& content)
   m.app_id     = appState->getString(QStringLiteral("appid"));
   m.name       = appState->getString(QStringLiteral("name"));
   m.install_dir = appState->getString(QStringLiteral("installdir"));
+  m.build_id   = appState->getString(QStringLiteral("buildid"));
   m.state_flags = appState->getString(QStringLiteral("StateFlags")).toUInt();
+  if (const auto* userConfig = appState->get(QStringLiteral("UserConfig")))
+    m.language = userConfig->getString(QStringLiteral("language"));
+  if (const auto* depots = appState->get(QStringLiteral("InstalledDepots"));
+      depots && depots->isObject()) {
+    for (auto it = depots->asObject().constBegin();
+         it != depots->asObject().constEnd(); ++it) {
+      if (!it.value().isObject()) continue;
+      m.installed_depots.push_back({it.key(),
+                                    it.value().getString(QStringLiteral("manifest")),
+                                    it.value().getString(QStringLiteral("size")).toLongLong(),
+                                    it.value().getString(QStringLiteral("dlcappid"))});
+    }
+  }
   return m;
 }
 

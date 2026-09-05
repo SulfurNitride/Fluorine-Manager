@@ -1,0 +1,11 @@
+<RCC>
+  <qresource prefix="/fluorine/curated-guides">
+    <file alias="catalog.json">../src/resources/curated-guides/catalog.json</file>
+    <file alias="vnv-base.json">../src/resources/curated-guides/vnv-base.json</file>
+    <file alias="vnv-base.lock.json">../src/resources/curated-guides/vnv-base.lock.json</file>
+    <file alias="vnv-extended.json">../src/resources/curated-guides/vnv-extended.json</file>
+    <file alias="vnv-extended.lock.json">../src/resources/curated-guides/vnv-extended.lock.json</file>
+    <file alias="tbot-essentials.json">../src/resources/curated-guides/tbot-essentials.json</file>
+    <file alias="tbot-essentials.lock.json">../src/resources/curated-guides/tbot-essentials.lock.json</file>
+  </qresource>
+</RCC>

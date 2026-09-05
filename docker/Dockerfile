@@ -28,6 +28,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     kde-style-breeze \
     libgl-dev libopengl-dev libvulkan-dev libxkbcommon-dev libfontconfig1-dev \
     libfreetype-dev libx11-dev libxext-dev libxfixes-dev \
+    libnss3-dev libasound2-dev libxcomposite-dev libxdamage-dev \
+    libxrandr-dev libxkbfile-dev \
     libxi-dev libxrender-dev libxcb1-dev libxcb-cursor-dev \
     libxcb-glx0-dev libxcb-keysyms1-dev libxcb-image0-dev \
     libxcb-shm0-dev libxcb-icccm4-dev libxcb-sync-dev \
@@ -107,7 +109,7 @@ ENV PATH="/opt/python-bundled/bin:${PATH}"
 
 # ── Qt 6.11 via aqtinstall (one-off via uv tool run) ──
 RUN uv tool run --from aqtinstall aqt install-qt linux desktop 6.11.1 linux_gcc_64 \
-      -m qtwebsockets qtwaylandcompositor qtnetworkauth qttasktree qtimageformats \
+      -m qtwebsockets qtwebchannel qtpositioning qtwaylandcompositor qtnetworkauth qttasktree qtimageformats qtwebengine \
       --outputdir /opt/qt6 && \
     ls /opt/qt6/6.11.1/gcc_64/bin/qmake
 ENV Qt6_DIR=/opt/qt6/6.11.1/gcc_64

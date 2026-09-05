@@ -761,9 +761,33 @@ static QString escapeRegKey(const QString& key)
 
 static QString unescapeRegValue(const QString& val)
 {
-  // Wine .reg files escape backslashes in string values
-  QString unescaped = val;
-  unescaped.replace("\\\\", "\\");
+  // Wine .reg files escape path separators as "\\\\" and non-ASCII UTF-16
+  // code units as "\\xNNNN". Decode both forms in one pass so a literal path
+  // component beginning with x is not mistaken for a Unicode escape after
+  // collapsing doubled separators.
+  QString unescaped;
+  unescaped.reserve(val.size());
+  for (qsizetype i = 0; i < val.size(); ++i) {
+    if (val.at(i) != '\\' || i + 1 >= val.size()) {
+      unescaped += val.at(i);
+      continue;
+    }
+    if (val.at(i + 1) == '\\') {
+      unescaped += '\\';
+      ++i;
+      continue;
+    }
+    if (val.at(i + 1).toLower() == 'x' && i + 5 < val.size()) {
+      bool ok = false;
+      const ushort codeUnit = val.mid(i + 2, 4).toUShort(&ok, 16);
+      if (ok) {
+        unescaped += QChar(codeUnit);
+        i += 5;
+        continue;
+      }
+    }
+    unescaped += val.at(i);
+  }
   return unescaped;
 }
 

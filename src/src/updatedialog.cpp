@@ -1,10 +1,6 @@
 #include "updatedialog.h"
 #include "ui_updatedialog.h"
 
-#ifdef MO2_WEBENGINE
-#include <QWebChannel>
-#endif
-
 using namespace MOBase;
 
 UpdateDialog::UpdateDialog(QWidget* parent)
@@ -26,30 +22,6 @@ UpdateDialog::UpdateDialog(QWidget* parent)
   ui->iconLabel->setPixmap(pixmap);
   ui->iconLabel->setScaledContents(true);
 
-#ifdef MO2_WEBENGINE
-  // Setting up the Markdown stuff (WebEngine renderer)
-  auto* page = new MarkdownPage(this);
-  ui->detailsWebView->setPage(page);
-
-  auto* channel = new QWebChannel(this);
-  channel->registerObject("content", &m_changeLogs);
-  page->setWebChannel(channel);
-
-  const QString path = QApplication::applicationDirPath() + "/resources/markdown.html";
-  QFile f(path);
-
-  if (f.open(QFile::ReadOnly)) {
-    const QString html = f.readAll();
-    if (!html.isEmpty()) {
-      ui->detailsWebView->setHtml(html);
-    } else {
-      log::error("failed to read '{}', {}", path, f.errorString());
-    }
-  } else {
-    log::error("can't open '{}', {}", path, f.errorString());
-  }
-#endif
-
   // Setting up the expander
   m_expander.set(ui->detailsButton, ui->detailsWidget);
   connect(&m_expander, &ExpanderWidget::toggled, this, [&] {
@@ -65,10 +37,9 @@ UpdateDialog::~UpdateDialog() = default;
 void UpdateDialog::setChangeLogs(const QString& text)
 {
   m_changeLogs.setText(text);
-#ifndef MO2_WEBENGINE
-  // Without WebEngine, display directly in the QTextBrowser fallback.
+  // The generated UI uses QTextBrowser. The dedicated Nexus authorization
+  // window owns the WebEngine surface; update notes remain lightweight.
   ui->detailsWebView->setHtml(text);
-#endif
 }
 
 void UpdateDialog::setVersions(const QString& oldVersion, const QString& newVersion)

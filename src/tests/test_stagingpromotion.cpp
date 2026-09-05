@@ -142,7 +142,7 @@ TEST(StagingPromotion, FinishesCleanupWhenDestinationWasAlreadyInstalled)
   EXPECT_FALSE(fs::exists(staging));
 }
 
-TEST(StagingPromotion, PreservesAndBlocksOrphanedStaging)
+TEST(StagingPromotion, RecoversUnjournaledStagingWhenDestinationIsAbsent)
 {
   TempRoot temp;
   const fs::path staging = temp.path() / "VFS_staging";
@@ -150,13 +150,64 @@ TEST(StagingPromotion, PreservesAndBlocksOrphanedStaging)
   writeFile(staging / "config/orphan.ini", "keep me");
 
   const auto result = StagingPromotion::recover(staging, destination);
+  EXPECT_EQ(result.status, StagingPromotionStatus::Recovered);
+  EXPECT_EQ(readFile(destination / "config/orphan.ini"), "keep me");
+  EXPECT_FALSE(fs::exists(staging));
+}
+
+TEST(StagingPromotion, RecoversArchivedUnjournaledStagingFromOlderVersion)
+{
+  TempRoot temp;
+  const fs::path staging = temp.path() / "VFS_staging";
+  const fs::path destination = temp.path() / "overwrite";
+  const fs::path recovery = temp.path() / "VFS_recovery/promotion-old";
+  writeFile(recovery / "staging/www/save/game.rpgsave", "saved game");
+  writeFile(recovery / ".fluorine-unresolved",
+            "Fluorine found unjournaled files in VFS_staging. They were preserved and launch was blocked.\n");
+  writeFile(recovery / "README.txt", "recovery note\n");
+
+  const auto result = StagingPromotion::recover(staging, destination);
+  EXPECT_EQ(result.status, StagingPromotionStatus::Recovered);
+  EXPECT_EQ(readFile(destination / "www/save/game.rpgsave"), "saved game");
+  EXPECT_FALSE(fs::exists(recovery));
+}
+
+TEST(StagingPromotion, KeepsArchivedUnjournaledStagingWhenDestinationDiffers)
+{
+  TempRoot temp;
+  const fs::path staging = temp.path() / "VFS_staging";
+  const fs::path destination = temp.path() / "overwrite";
+  const fs::path recovery = temp.path() / "VFS_recovery/promotion-old";
+  writeFile(recovery / "staging/config/settings.ini", "staged version");
+  writeFile(recovery / ".fluorine-unresolved",
+            "Fluorine found unjournaled files in VFS_staging. They were preserved and launch was blocked.\n");
+  writeFile(destination / "config/settings.ini", "different destination");
+
+  const auto result = StagingPromotion::recover(staging, destination);
   EXPECT_EQ(result.status, StagingPromotionStatus::Blocked);
-  EXPECT_FALSE(result.recovery_path.empty());
-  EXPECT_EQ(readFile(result.recovery_path / "staging/config/orphan.ini"), "keep me");
+  EXPECT_EQ(result.recovery_path, recovery);
+  EXPECT_EQ(readFile(recovery / "staging/config/settings.ini"), "staged version");
+  EXPECT_EQ(readFile(destination / "config/settings.ini"),
+            "different destination");
+  EXPECT_TRUE(fs::exists(recovery / ".fluorine-unresolved"));
+}
+
+TEST(StagingPromotion, BlocksUnjournaledStagingWhenDestinationDiffers)
+{
+  TempRoot temp;
+  const fs::path staging = temp.path() / "VFS_staging";
+  const fs::path destination = temp.path() / "overwrite";
+  writeFile(staging / "config/orphan.ini", "staged version");
+  writeFile(destination / "config/orphan.ini", "newer destination");
+
+  const auto result = StagingPromotion::recover(staging, destination);
+  EXPECT_EQ(result.status, StagingPromotionStatus::Blocked);
+  EXPECT_EQ(readFile(result.recovery_path / "staging/config/orphan.ini"),
+            "staged version");
+  EXPECT_EQ(readFile(destination / "config/orphan.ini"), "newer destination");
   EXPECT_FALSE(fs::exists(staging));
   const auto nextLaunch = StagingPromotion::recover(staging, destination);
   EXPECT_EQ(nextLaunch.status, StagingPromotionStatus::Blocked);
-  EXPECT_EQ(nextLaunch.recovery_path, result.recovery_path);
 }
 
 TEST(StagingPromotion, PreservesBothSidesOnReplayConflict)

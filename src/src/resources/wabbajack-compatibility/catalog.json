@@ -1,0 +1,129 @@
+{
+  "schemaVersion": 2,
+  "policy": "reviewed-declarative-actions-only",
+  "tools": [
+    {
+      "id": "fnv-4gb-patcher-linux",
+      "name": "FNV 4GB Patcher for Linux/Proton",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 62552,
+      "fileNameContains": "proton",
+      "latestCompatible": true,
+      "extract": true,
+      "successFile": "FalloutNV_backup.exe"
+    },
+    {
+      "id": "oblivion-4gb-patcher-linux",
+      "name": "Oblivion 4GB Patcher Linux",
+      "source": "nexus",
+      "domain": "oblivion",
+      "modId": 56555,
+      "fileNameContains": "Linux 4GB Patch",
+      "minimumVersion": "1",
+      "latestCompatible": true,
+      "extract": true,
+      "executable": "4gb-patch",
+      "successFiles": [
+        "Oblivion.exe.Backup",
+        "OblivionLauncher.exe.Backup"
+      ]
+    },
+    {
+      "id": "native-mpi-installer",
+      "name": "TTW Linux Installer",
+      "source": "nexus",
+      "domain": "site",
+      "modId": 1657,
+      "latestCompatible": true,
+      "minimumVersion": "0.2.0",
+      "purpose": ["ttw-mpi", "fnv-bsa-decompressor-mpi", "oblivion-bsa-decompressor-mpi"]
+    },
+    {
+      "id": "fnv-bsa-decompressor-mpi",
+      "name": "FNV BSA Decompressor",
+      "source": "nexus",
+      "domain": "newvegas",
+      "modId": 65854,
+      "latestCompatible": true
+    }
+  ],
+  "profiles": [
+    {
+      "machineName": "VivaNewVegas",
+      "game": "falloutnewvegas",
+      "executable": "FalloutNV.exe",
+      "gameRoot": "original",
+      "manualRootFolders": [
+        "__Files Requiring Manual Install",
+        "Files Requiring Manual Install"
+      ],
+      "manualRootRequired": false,
+      "patcher": "fnv-nexus-linux",
+      "documentation": "https://vivanewvegas.moddinglinked.com/wabbajack.html",
+      "implemented": true,
+      "actions": [
+        "deploy-files-requiring-manual-install",
+        "patch-falloutnv-with-nexus-linux-patcher",
+        "preserve-authored-game-paths"
+      ],
+      "optionalActions": [
+        {
+          "id": "decompress-vanilla-bsas",
+          "runner": "native-mpi-installer",
+          "artifact": "fnv-bsa-decompressor-mpi",
+          "state": "review-before-enabling"
+        }
+      ]
+    },
+    {
+      "machineName": "watersoflife",
+      "game": "fallout3",
+      "executable": "Fallout3.exe",
+      "gameRoot": "original",
+      "manualRootFolders": ["__Files Requiring Manual Install"],
+      "manualRootRequired": true,
+      "patcher": "fallout3-anniversary-manual",
+      "documentation": "https://github.com/zpok3/Waters-of-Life/blob/main/README.md#post-installation",
+      "implemented": true,
+      "actions": [
+        "deploy-files-requiring-manual-install",
+        "preserve-authored-game-paths"
+      ],
+      "pendingActions": [
+        "run-fallout-anniversary-patcher-noninteractively",
+        "optional-decompress-vanilla-bsas"
+      ]
+    },
+    {
+      "machineName": "heartlandredux",
+      "game": "oblivion",
+      "executable": "Oblivion.exe",
+      "gameRoot": "original",
+      "manualRootFolders": ["Game Folder Files"],
+      "manualRootRequired": true,
+      "patcher": "oblivion-nexus-linux",
+      "documentation": "https://github.com/DrazDarkModdingHub/heartlandredux/blob/master/README.md#game-folder-files",
+      "implemented": true,
+      "actions": [
+        "deploy-game-folder-files",
+        "patch-oblivion-with-nexus-linux-patcher",
+        "preserve-authored-game-paths"
+      ],
+      "optionalActions": [
+        {
+          "id": "decompress-vanilla-bsas",
+          "runner": "native-mpi-installer",
+          "state": "review-before-enabling"
+        }
+      ]
+    },
+    {
+      "machineName": "Morrowind75",
+      "game": "morrowind",
+      "documentation": "https://github.com/StormAtronach/Morrowind75",
+      "implemented": false,
+      "blockedBy": "The upstream first-run wizard downloads MWSE and requires interactive Morrowind Code Patch, TES3Merge, and MGE XE choices."
+    }
+  ]
+}
