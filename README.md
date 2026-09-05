@@ -15,18 +15,6 @@ NOTE: This is primarily for my personal use but I will see about fixing issues i
 - Linux-native game plugins (`libgame_*.so`) are supported.
 - Portable instances are supported via local `ModOrganizer.ini` detection.
 
-## FUSE Permissions
-
-FUSE mounts are accessible only to the mounting user by default; no change to
-`/etc/fuse.conf` is needed. To share an instance's mounts with other users
-(including root), enable **Settings > Wine/Proton > VFS > Allow other users to
-access FUSE mounts (allow_other)**. This takes effect on the next FUSE mount,
-enforces file permissions, and does not affect USVFS launches.
-
-For this optional setting, an administrator must uncomment `user_allow_other`
-in the host's `/etc/fuse.conf` (or add that line if missing). Fluorine does not
-modify the host configuration.
-
 ## Running Tools Without Steam
 
 In **Edit Executables**, uncheck **Use Steam** for tools such as xEdit that do
@@ -47,6 +35,10 @@ their own VFS are unchanged. See the
 Download the latest zip from the [releases](https://github.com/SulfurNitride/Fluorine-Manager/releases) and after you download it.
 
 You are able to run it with this command: `./fluorine-manager` or by double-clicking it.
+
+Before running Windows games or tools, open **Settings > Wine/Proton**, select
+a Proton version, and click **Set Up Fluorine**. This creates the Wine prefix
+and installs the required Windows components.
 
 More information can be found in the [FAQ](https://github.com/SulfurNitride/Fluorine-Manager/blob/main/docs/FAQ.md).
 

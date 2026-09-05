@@ -1811,7 +1811,7 @@ If you disable this feature, MO will only display official DLCs this way. Please
        <item>
         <widget class="QGroupBox" name="groupBox_62">
          <property name="title">
-          <string>Prefix Management</string>
+          <string>Fluorine Setup</string>
          </property>
          <layout class="QGridLayout" name="gridLayout_37">
           <item row="0" column="0">
@@ -1844,7 +1844,7 @@ If you disable this feature, MO will only display official DLCs this way. Please
           <item row="2" column="0">
            <widget class="QPushButton" name="createPrefixButton">
             <property name="text">
-             <string>Create Prefix</string>
+             <string>Set Up Fluorine</string>
             </property>
            </widget>
           </item>

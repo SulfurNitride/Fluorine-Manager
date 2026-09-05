@@ -49,7 +49,7 @@ PrefixSetupDialog::PrefixSetupDialog(const QString& prefixPath,
     , m_protonPath(protonPath)
     , m_appId(appId)
 {
-  setWindowTitle(tr("Wine Prefix Setup"));
+  setWindowTitle(tr("Fluorine Setup"));
   setMinimumSize(700, 500);
   resize(800, 600);
   setModal(true);

@@ -693,8 +693,8 @@ pid_t startBinary(QWidget* parent, const SpawnParameters& sp)
                       "Proton.\n\n"
                       "To create one, go to:\n"
                       "  Settings → Wine/Proton\n\n"
-                      "Set the prefix location, then click \"Create Prefix\" "
-                      "to generate a new prefix."));
+                      "Set the prefix location, then click \"Set Up Fluorine\" "
+                      "to create the prefix and install Windows dependencies."));
     } else {
       dialogs::spawnFailed(parent, sp, e);
     }

@@ -9,9 +9,22 @@ Not by default. It removes the profile from the menu, and gives you the option t
 ## Do I Need to Install 9 Million Different Dependencies?
 No, the dependencies are handled by NaK! If there is something missing I will gladly add it to the list. This also includes WINEDLLOVERWRITES as well!
 
-## Make Sure to Select a Proton in the Settings Before Playing!
-You will need to create a prefix before being able to play, I have added a Wine/Proton tab in the settings. Just let it install all the dependencies and then you are good to play.
-<img width="2818" height="1688" alt="Screenshot_20260211_021905" src="https://github.com/user-attachments/assets/3437628f-7e75-4a07-b643-62b1cc130bbf" />
+## How Do I Set Up Fluorine Before Playing?
+Open **Settings > Wine/Proton**, select a Proton version, choose the prefix
+location (or keep the default), and click **Set Up Fluorine**. Wait for setup
+to finish installing the Windows components before launching a game or tool.
+
+## Do I Need to Configure FUSE Permissions?
+
+FUSE mounts are accessible only to the mounting user by default; no change to
+`/etc/fuse.conf` is needed. To share an instance's mounts with other users
+(including root), enable **Settings > Wine/Proton > VFS > Allow other users to
+access FUSE mounts (allow_other)**. This takes effect on the next FUSE mount,
+enforces file permissions, and does not affect USVFS launches.
+
+For this optional setting, an administrator must uncomment `user_allow_other`
+in the host's `/etc/fuse.conf` (or add that line if missing). Fluorine does not
+modify the host configuration.
 
 ## Does It Work with Existing Modlists?
 Yes, it can phrase wine paths and read them out as Linux paths in the GUI. It will also save the paths as wine paths in case you move to MO2 via proton/wine.

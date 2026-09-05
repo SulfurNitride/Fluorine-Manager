@@ -2206,7 +2206,9 @@ bool PrefixSetupRunner::stepNuGetSignaturePolicy()
   QMap<QString, QString> env = baseWineEnv();
   env["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
   env["DOTNET_NOLOGO"] = "1";
-  env["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1";
+  // The SDK first run otherwise creates an ASP.NET development certificate,
+  // whose private-key export can crash Wine before our root importer runs.
+  env["DOTNET_GENERATE_ASPNET_CERTIFICATE"] = "false";
   env["NUGET_XMLDOC_MODE"] = "skip";
   env["NUGET_CERT_REVOCATION_MODE"] = "offline";
   env["NUGET_EXPERIMENTAL_CHAIN_BUILD_RETRY_POLICY"] = "10,1000";
