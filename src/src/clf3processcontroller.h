@@ -1,5 +1,7 @@
 #pragma once
 
+#include "clf3enginemanager.h"
+
 #include <QJsonObject>
 #include <QObject>
 #include <QProcess>
@@ -54,6 +56,10 @@ signals:
   void cancelled();
 
 private:
+  Clf3EngineManager m_engineManager;
+  bool m_preparing{false};
+  QString m_managedEnginePath;
+  QStringList m_arguments;
   QProcess m_process;
   QTimer m_cancelTimer;
   QTimer m_killTimer;

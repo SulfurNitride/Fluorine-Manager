@@ -203,14 +203,6 @@ else
 fi
 IMAGE_NAME="fluorine-builder"
 CONTAINER_NAME="fluorine-build-$$"
-CLF3_SOURCE_DIR="${CLF3_SOURCE_DIR:-$(dirname "${SCRIPT_DIR}")/CLF3}"
-CLF3_VOLUME_ARGS=()
-if [ -f "${CLF3_SOURCE_DIR}/Cargo.toml" ]; then
-    CLF3_VOLUME_ARGS=(-v "${CLF3_SOURCE_DIR}:/clf3-src:ro${VOLUME_SUFFIX}")
-    echo "=== Using CLF3 source: ${CLF3_SOURCE_DIR} ==="
-else
-    echo "=== CLF3 source not mounted; build will use docker/clf3.lock ==="
-fi
 
 cd "${SCRIPT_DIR}"
 
@@ -254,7 +246,6 @@ if [ "${BUILD_MODE}" = "shell" ]; then
     echo "=== Dropping into build container shell ==="
     exec ${DOCKER} run --rm -it \
         -v "${SCRIPT_DIR}:/src:rw${VOLUME_SUFFIX}" \
-        "${CLF3_VOLUME_ARGS[@]}" \
         -v "${CCACHE_DIR}:/ccache:rw${VOLUME_SUFFIX}" \
         -e CCACHE_DIR=/ccache \
         -w /src \
@@ -270,7 +261,6 @@ echo "=== Starting build (mode: ${BUILD_MODE}) ==="
 BUILD_JOBS="${BUILD_JOBS:-$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)}"
 ${DOCKER} run --rm \
     -v "${SCRIPT_DIR}:/src:rw${VOLUME_SUFFIX}" \
-    "${CLF3_VOLUME_ARGS[@]}" \
     -v "${CCACHE_DIR}:/ccache:rw${VOLUME_SUFFIX}" \
     -e CCACHE_DIR=/ccache \
     -e BUILD_MODE="${BUILD_MODE}" \

@@ -58,35 +58,7 @@ cmake -S . -B build -G Ninja \
     -DFLUORINE_BUILD_COMMIT="${FLUORINE_BUILD_COMMIT}" \
     "${CMAKE_EXTRA_ARGS[@]}"
 
-# Build the CLF3 engine from an explicitly mounted development checkout or
-# from the pinned repository revision used by release/CI builds.
-CLF3_SOURCE="/clf3-src"
-if [ ! -f "${CLF3_SOURCE}/Cargo.toml" ]; then
-    CLF3_SOURCE="/tmp/clf3-source"
-    CLF3_REPOSITORY="$(sed -n 's/^repository=//p' /src/docker/clf3.lock)"
-    CLF3_COMMIT="$(sed -n 's/^commit=//p' /src/docker/clf3.lock)"
-    rm -rf "${CLF3_SOURCE}"
-    git clone --filter=blob:none "${CLF3_REPOSITORY}" "${CLF3_SOURCE}"
-    git -C "${CLF3_SOURCE}" checkout --detach "${CLF3_COMMIT}"
-fi
-CLF3_PROTOCOL="$(sed -n 's/^protocol=//p' /src/docker/clf3.lock)"
-if [ "${CLF3_PROTOCOL}" != "1" ] \
-   || ! grep -q 'HOST_PROTOCOL_VERSION: u32 = 1' \
-        "${CLF3_SOURCE}/src/installer/host.rs" 2>/dev/null; then
-    echo "ERROR: CLF3 source does not implement Fluorine host protocol 1"
-    echo "Mount the matching checkout with CLF3_SOURCE_DIR or update docker/clf3.lock."
-    exit 1
-fi
-# Keep CLF3's artifacts separate without exporting Cargo settings to the
-# CMake build. Fluorine's Rust helpers have their own target directories.
-CLF3_TARGET_DIR=/src/build/clf3-target
-if [ "${BUILD_MODE:-tarball}" = "test" ]; then
-    cargo test --manifest-path "${CLF3_SOURCE}/Cargo.toml" \
-        --target-dir "${CLF3_TARGET_DIR}" --locked installer::host
-else
-    cargo build --manifest-path "${CLF3_SOURCE}/Cargo.toml" \
-        --target-dir "${CLF3_TARGET_DIR}" --release --locked
-fi
+# CLF3 is downloaded and updated by Fluorine at installation time.
 
 if [ "${BUILD_MODE:-tarball}" = "test" ]; then
     if [ -n "${BUILD_JOBS:-}" ]; then
@@ -145,24 +117,6 @@ fi
 
 # ── Main binary + helpers ──
 cp -f "${RUNDIR}/ModOrganizer" "${OUT_DIR}/ModOrganizer-core"
-if [ ! -x "${CLF3_TARGET_DIR}/release/clf3" ]; then
-    echo "ERROR: CLF3 release binary was not produced"
-    exit 1
-fi
-cp -f "${CLF3_TARGET_DIR}/release/clf3" "${OUT_DIR}/clf3"
-chmod +x "${OUT_DIR}/clf3"
-if [ -f "${CLF3_SOURCE}/LICENSE" ]; then
-    cp -f "${CLF3_SOURCE}/LICENSE" "${OUT_DIR}/licenses/clf3-MIT.txt"
-fi
-{
-    echo "protocol=1"
-    echo "commit=$(git -C "${CLF3_SOURCE}" rev-parse HEAD 2>/dev/null || echo unknown)"
-    if [ -n "$(git -C "${CLF3_SOURCE}" status --porcelain 2>/dev/null)" ]; then
-        echo "worktree=dirty"
-    else
-        echo "worktree=clean"
-    fi
-} > "${OUT_DIR}/clf3-engine-version.txt"
 [ -f "${RUNDIR}/README-PORTABLE.txt" ] && cp -f "${RUNDIR}/README-PORTABLE.txt" "${OUT_DIR}/"
 [ -f "/src/src/fluorine-manager" ] && cp -f "/src/src/fluorine-manager" "${OUT_DIR}/"
 
@@ -636,7 +590,6 @@ echo "Deduping lib/ via symlinks..."
 # ── Strip all MO2 binaries ──
 echo "Stripping MO2 binaries..."
 strip --strip-unneeded "${OUT_DIR}/ModOrganizer-core" 2>/dev/null || true
-strip --strip-unneeded "${OUT_DIR}/clf3" 2>/dev/null || true
 strip --strip-unneeded "${OUT_DIR}/libexec/QtWebEngineProcess" 2>/dev/null || true
 find "${OUT_DIR}/plugins" -name "*.so" -exec strip --strip-unneeded {} \; 2>/dev/null || true
 find "${OUT_DIR}/lib" -name "*.so" -exec strip --strip-unneeded {} \; 2>/dev/null || true

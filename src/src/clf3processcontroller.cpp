@@ -1,7 +1,5 @@
 #include "clf3processcontroller.h"
 
-#include <QCoreApplication>
-#include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -10,6 +8,23 @@
 Clf3ProcessController::Clf3ProcessController(QObject* parent)
     : QObject(parent)
 {
+  connect(&m_engineManager, &Clf3EngineManager::ready, this, [this](const QString& path) {
+    m_preparing = false;
+    m_managedEnginePath = path;
+    m_process.start(path, m_arguments, QIODevice::ReadWrite);
+  });
+  connect(&m_engineManager, &Clf3EngineManager::statusChanged, this, [this](const QString& status) {
+    emit statusChanged(status);
+    emit logLine(status);
+  });
+  connect(&m_engineManager, &Clf3EngineManager::failed, this, [this](const QString& reason) {
+    m_preparing = false;
+    emit failed(reason);
+  });
+  connect(&m_engineManager, &Clf3EngineManager::cancelled, this, [this] {
+    m_preparing = false;
+    emit cancelled();
+  });
   m_process.setProcessChannelMode(QProcess::SeparateChannels);
   connect(&m_process, &QProcess::readyReadStandardOutput, this,
           &Clf3ProcessController::consumeStdout);
@@ -75,23 +90,14 @@ Clf3ProcessController::Clf3ProcessController(QObject* parent)
 QString Clf3ProcessController::enginePath() const
 {
   const QString override = qEnvironmentVariable("FLUORINE_CLF3_PATH");
-  const QString appDir   = QCoreApplication::applicationDirPath();
-  const QStringList candidates{
-      override,
-      QDir(appDir).filePath("clf3"),
-      QDir(appDir).filePath("bin/clf3"),
-      QDir(appDir).filePath("../bin/clf3"),
-  };
-  for (const auto& path : candidates) {
-    if (!path.isEmpty() && QFileInfo(path).isExecutable())
-      return QFileInfo(path).absoluteFilePath();
-  }
-  return QStringLiteral("clf3");
+  if (!override.isEmpty()) return QFileInfo(override).absoluteFilePath();
+  if (!m_managedEnginePath.isEmpty()) return m_managedEnginePath;
+  return m_engineManager.cachedEnginePath();
 }
 
 bool Clf3ProcessController::isRunning() const
 {
-  return m_process.state() != QProcess::NotRunning;
+  return m_preparing || m_process.state() != QProcess::NotRunning;
 }
 
 void Clf3ProcessController::startInstall(const QString& source,
@@ -116,7 +122,13 @@ void Clf3ProcessController::startInstall(const QString& source,
   arguments << QStringLiteral("--jackify") << QStringLiteral("--hosted");
   if (!machineName.isEmpty())
     arguments << QStringLiteral("--machine-name") << machineName;
-  m_process.start(enginePath(), arguments, QIODevice::ReadWrite);
+  m_arguments = arguments;
+  if (!qEnvironmentVariableIsEmpty("FLUORINE_CLF3_PATH")) {
+    m_process.start(enginePath(), arguments, QIODevice::ReadWrite);
+  } else {
+    m_preparing = true;
+    m_engineManager.prepare();
+  }
 }
 
 void Clf3ProcessController::sendNexusUrls(const QString& requestId,
@@ -149,6 +161,10 @@ void Clf3ProcessController::cancel()
 {
   if (!isRunning() || m_cancelRequested) return;
   m_cancelRequested = true;
+  if (m_preparing) {
+    m_engineManager.cancel();
+    return;
+  }
   m_handshakeTimer.stop();
   send({{"type", "cancel"}});
   m_cancelTimer.start(5000);

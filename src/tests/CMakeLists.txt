@@ -611,6 +611,8 @@ set_tests_properties(test_python_module_switch PROPERTIES
 find_package(Qt6 REQUIRED COMPONENTS Test)
 add_executable(test_clf3_install EXCLUDE_FROM_ALL
     test_clf3_install.cpp
+    test_clf3_engine.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/clf3enginemanager.cpp
     ${CMAKE_SOURCE_DIR}/src/src/clf3processcontroller.cpp
     ${CMAKE_SOURCE_DIR}/src/src/clf3installutils.cpp
 )
@@ -619,7 +621,7 @@ set_target_properties(test_clf3_install PROPERTIES
     CXX_STANDARD 23
     CXX_STANDARD_REQUIRED ON
 )
-target_link_libraries(test_clf3_install PRIVATE Qt6::Core Qt6::Test GTest::gtest)
+target_link_libraries(test_clf3_install PRIVATE Qt6::Core Qt6::Network Qt6::Test GTest::gtest)
 add_test(NAME test_clf3_install COMMAND test_clf3_install)
 set_tests_properties(test_clf3_install PROPERTIES TIMEOUT 90)
 
