@@ -1,9 +1,12 @@
 #include "usvfsrequest.h"
 #include "vfsbackend.h"
 #include "fusemountoptions.h"
+#include "fusepermissions.h"
 
 #include <algorithm>
 #include <QFile>
+#include <QProcess>
+#include <QStandardPaths>
 #include <QTemporaryDir>
 #include <gtest/gtest.h>
 
@@ -54,6 +57,85 @@ TEST(FuseMountOptions, SharingEnforcesPermissionsAndPreservesReadLimit)
     EXPECT_TRUE(contains("max_read=1048576"));
     EXPECT_TRUE(contains("fsname=mo2linux"));
   }
+}
+
+TEST(FusePermissions, AppendsWithoutReplacingExistingConfiguration)
+{
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const QString path = temporary.filePath("fuse.conf");
+  const QByteArray original("mount_max = 1000\n# user_allow_other");
+  QFile file(path);
+  ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+  ASSERT_EQ(file.write(original), original.size());
+  file.close();
+  const auto permissions = file.permissions();
+  int authorizations = 0;
+  const auto append = [&](const QByteArray& bytes) {
+    ++authorizations;
+    QProcess tee;
+    tee.start(QStandardPaths::findExecutable("tee"), {"-a", "--", path});
+    if (!tee.waitForStarted()) {
+      return FusePermissionResult{FusePermissionStatus::Failed, tee.errorString()};
+    }
+    tee.write(bytes);
+    tee.closeWriteChannel();
+    const bool ok = tee.waitForFinished() &&
+                    tee.exitStatus() == QProcess::NormalExit && tee.exitCode() == 0;
+    return FusePermissionResult{ok ? FusePermissionStatus::Enabled
+                                   : FusePermissionStatus::Failed, {}};
+  };
+  EXPECT_EQ(FusePermissionStatus::Enabled,
+            ensureFuseUserAllowOther(path, append).status);
+  EXPECT_EQ(FusePermissionStatus::Enabled,
+            ensureFuseUserAllowOther(path, append).status);
+  EXPECT_EQ(1, authorizations);
+  EXPECT_EQ(permissions, file.permissions());
+  ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+  EXPECT_EQ(original + "\nuser_allow_other\n", file.readAll());
+}
+
+TEST(FusePermissions, CancellationAndFailureLeaveConfigurationUntouched)
+{
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const QString path = temporary.filePath("fuse.conf");
+  QFile file(path);
+  ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+  const QByteArray original("# user_allow_other\n");
+  ASSERT_EQ(file.write(original), original.size());
+  file.close();
+  for (const auto status : {FusePermissionStatus::Cancelled,
+                            FusePermissionStatus::Failed}) {
+    const auto result = ensureFuseUserAllowOther(path, [status](const QByteArray&) {
+      return FusePermissionResult{status, "authentication declined"};
+    });
+    EXPECT_EQ(status, result.status);
+    ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+    EXPECT_EQ(original, file.readAll());
+    file.close();
+  }
+}
+
+TEST(FusePermissions, VerifiesFileAfterReportedSuccess)
+{
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const QString path = temporary.filePath("fuse.conf");
+  EXPECT_EQ(FusePermissionStatus::Failed,
+            ensureFuseUserAllowOther(path, [](const QByteArray&) {
+              return FusePermissionResult{FusePermissionStatus::Enabled, {}};
+            }).status);
+  EXPECT_EQ(FusePermissionStatus::Enabled,
+            ensureFuseUserAllowOther(path, [&](const QByteArray& bytes) {
+              QFile file(path);
+              if (!file.open(QIODevice::WriteOnly | QIODevice::Append) ||
+                  file.write(bytes) != bytes.size()) {
+                return FusePermissionResult{FusePermissionStatus::Failed,
+                                            file.errorString()};
+              }
+              return FusePermissionResult{FusePermissionStatus::Enabled, {}};
+            }).status);
 }
 
 TEST(VfsBackend, ParsesKnownAndSafeDefaultValues)

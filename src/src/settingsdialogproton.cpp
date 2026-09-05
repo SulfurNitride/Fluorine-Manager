@@ -3,6 +3,7 @@
 #include "fluorineconfig.h"
 #include "fluorinepaths.h"
 #include "fusemountoptions.h"
+#include "fusepermissions.h"
 #include "prefixsetupdialog.h"
 #include "ui_settingsdialog.h"
 #include "vfsbackend.h"
@@ -19,6 +20,7 @@
 #include <QDateTime>
 #include <QDialog>
 #include <QDir>
+#include <QEventLoop>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
@@ -33,7 +35,9 @@
 #include <QProgressDialog>
 #include <QSettings>
 #include <QScopeGuard>
+#include <QSignalBlocker>
 #include <QStandardPaths>
+#include <QTimer>
 #include <QVBoxLayout>
 
 namespace
@@ -62,6 +66,8 @@ ProtonSettingsTab::ProtonSettingsTab(Settings& s, SettingsDialog& d)
   const QSettings instanceSettings(settings().filename(), QSettings::IniFormat);
   ui->fuseAllowOtherCheckBox->setChecked(
       instanceSettings.value(kFuseAllowOtherSetting, false).toBool());
+  QObject::connect(ui->fuseAllowOtherCheckBox, &QCheckBox::clicked, this,
+                   &ProtonSettingsTab::onFuseAllowOtherClicked);
   const QString configuredBackend =
       instanceSettings.value(kVfsBackendSetting, QStringLiteral("fuse"))
           .toString();
@@ -153,6 +159,118 @@ void ProtonSettingsTab::update()
                             ui->usvfsExactQueryExhaustionCheckBox->isChecked());
   instanceSettings.setValue(kUsvfsSharedContextSetting,
                             ui->usvfsSharedContextCheckBox->isChecked());
+}
+
+void ProtonSettingsTab::onFuseAllowOtherClicked(bool checked)
+{
+  if (!checked) {
+    return;
+  }
+
+  const auto result = ensureFuseUserAllowOther(
+      QStringLiteral("/etc/fuse.conf"), [this](const QByteArray& directive) {
+        const auto answer = QMessageBox::question(
+            parentWidget(), tr("Enable FUSE Access for Other Users"),
+            tr("Fluorine needs to add user_allow_other to /etc/fuse.conf.\n\n"
+               "This system-wide permission lets local users choose to share "
+               "their FUSE mounts. Fluorine will share this instance's mounts "
+               "only while this option is enabled, subject to file permissions.\n\n"
+               "The system change remains if you later cancel Settings or turn "
+               "this option off. Your desktop will request administrator "
+               "authentication to make the change.\n\nContinue?"),
+            QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
+        if (answer != QMessageBox::Yes) {
+          return FusePermissionResult{FusePermissionStatus::Cancelled, {}};
+        }
+
+        // Resolve host tools only, never an executable from the app bundle or
+        // an arbitrary user PATH entry. NixOS exposes these through /run.
+        const QStringList systemPaths{QStringLiteral("/usr/bin"),
+                                      QStringLiteral("/bin"),
+                                      QStringLiteral("/run/wrappers/bin"),
+                                      QStringLiteral("/run/current-system/sw/bin")};
+        const QString pkexec = QStandardPaths::findExecutable("pkexec", systemPaths);
+        const QString tee = QStandardPaths::findExecutable("tee", systemPaths);
+        if (pkexec.isEmpty() || tee.isEmpty()) {
+          return FusePermissionResult{
+              FusePermissionStatus::Failed,
+              tr("Administrator authentication tools are unavailable. Install "
+                 "polkit and a desktop authentication agent, or ask an "
+                 "administrator to enable user_allow_other in /etc/fuse.conf.")};
+        }
+
+        QProcess process;
+        QEventLoop loop;
+        QProgressDialog progress(tr("Waiting for administrator authentication…"),
+                                 tr("Cancel"), 0, 0, parentWidget());
+        progress.setWindowTitle(tr("Configure FUSE Permissions"));
+        progress.setWindowModality(Qt::WindowModal);
+        progress.setMinimumDuration(0);
+        bool cancelled = false;
+        bool timedOut = false;
+        QTimer timeout;
+        timeout.setSingleShot(true);
+        QObject::connect(&timeout, &QTimer::timeout, &process, [&] {
+          timedOut = true;
+          process.kill();
+        });
+        QObject::connect(&progress, &QProgressDialog::canceled, &process, [&] {
+          cancelled = true;
+          process.kill();
+        });
+        QObject::connect(&process, &QProcess::started, &process, [&] {
+          process.write(directive);
+          process.closeWriteChannel();
+        });
+        QObject::connect(&process, &QProcess::finished, &loop, &QEventLoop::quit,
+                         Qt::QueuedConnection);
+        QObject::connect(&process, &QProcess::errorOccurred, &loop,
+                         [&](QProcess::ProcessError error) {
+                           if (error == QProcess::FailedToStart) {
+                             loop.quit();
+                           }
+                         }, Qt::QueuedConnection);
+
+        // No shell, scripts, or user-controlled arguments run as root. polkit
+        // owns the password dialog; tee only appends this one fixed directive.
+        process.start(pkexec, {QStringLiteral("--disable-internal-agent"), tee,
+                              QStringLiteral("-a"), QStringLiteral("--"),
+                              QStringLiteral("/etc/fuse.conf")});
+        timeout.start(120000);
+        loop.exec();
+        progress.reset();
+        if (timedOut) {
+          return FusePermissionResult{FusePermissionStatus::Failed,
+                                      tr("Administrator authentication timed out.")};
+        }
+        if (cancelled || (process.exitStatus() == QProcess::NormalExit &&
+                          process.exitCode() == 126)) {
+          return FusePermissionResult{FusePermissionStatus::Cancelled, {}};
+        }
+        if (process.error() == QProcess::FailedToStart ||
+            process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+          const QString details = QString::fromLocal8Bit(process.readAllStandardError())
+                                      .trimmed();
+          return FusePermissionResult{FusePermissionStatus::Failed,
+                                      details.isEmpty() ? process.errorString()
+                                                        : details};
+        }
+        return FusePermissionResult{FusePermissionStatus::Enabled, {}};
+      });
+
+  if (result.status != FusePermissionStatus::Enabled) {
+    const QSignalBlocker blocker(ui->fuseAllowOtherCheckBox);
+    ui->fuseAllowOtherCheckBox->setChecked(false);
+    if (result.status == FusePermissionStatus::Failed) {
+      QMessageBox::warning(
+          parentWidget(), tr("FUSE Permissions Not Enabled"),
+          tr("Fluorine could not verify user_allow_other in /etc/fuse.conf. "
+             "Access for other users has been left off.\n\n%1\n\n"
+             "An administrator can enable user_allow_other in the host's "
+             "/etc/fuse.conf, then you can try this option again.")
+              .arg(result.error));
+    }
+  }
 }
 
 void ProtonSettingsTab::populateProtons()

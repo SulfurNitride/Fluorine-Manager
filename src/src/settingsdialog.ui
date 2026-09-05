@@ -2028,7 +2028,7 @@ If you disable this feature, MO will only display official DLCs this way. Please
              <string>Allow other users to access FUSE mounts (allow_other)</string>
             </property>
             <property name="toolTip">
-             <string>Allow other users, including root, to access this instance's FUSE mounts, subject to file permissions. Applies to the next mount and requires user_allow_other in /etc/fuse.conf on the host. Disabled by default. Does not affect USVFS launches.</string>
+             <string>Allow other users, including root, to access this instance's FUSE mounts, subject to file permissions. Applies to the next mount. If needed, enabling this option offers to configure /etc/fuse.conf using administrator authentication. Disabled by default. Does not affect USVFS launches.</string>
             </property>
            </widget>
           </item>

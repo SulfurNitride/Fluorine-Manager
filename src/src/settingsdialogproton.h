@@ -33,6 +33,7 @@ private:
   void onWinetricks();
   void onBrowsePrefixLocation();
   void onDownloadSLR();
+  void onFuseAllowOtherClicked(bool checked);
 
   static QString ensureWinetricks();
   static QString findProtonWine(const QString& protonPath);

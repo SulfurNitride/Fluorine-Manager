@@ -22,9 +22,17 @@ FUSE mounts are accessible only to the mounting user by default; no change to
 access FUSE mounts (allow_other)**. This takes effect on the next FUSE mount,
 enforces file permissions, and does not affect USVFS launches.
 
-For this optional setting, an administrator must uncomment `user_allow_other`
-in the host's `/etc/fuse.conf` (or add that line if missing). Fluorine does not
-modify the host configuration.
+If `user_allow_other` is missing, enabling the checkbox offers to add it to
+`/etc/fuse.conf` through your desktop's administrator authentication dialog.
+Fluorine never receives your password. Existing configuration is preserved,
+and the checkbox stays off if authentication is cancelled or the change fails.
+No authentication is needed if the directive is already enabled.
+
+The host permission remains enabled if you later turn the checkbox off or
+cancel Settings; each instance still controls whether its mounts use
+`allow_other`. If polkit or a desktop authentication agent is unavailable,
+or the system configuration is read-only, an administrator can enable
+`user_allow_other` manually in the host's `/etc/fuse.conf`.
 
 ## Does It Work with Existing Modlists?
 Yes, it can phrase wine paths and read them out as Linux paths in the GUI. It will also save the paths as wine paths in case you move to MO2 via proton/wine.
