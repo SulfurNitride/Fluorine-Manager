@@ -77,11 +77,15 @@ if [ "${CLF3_PROTOCOL}" != "1" ] \
     echo "Mount the matching checkout with CLF3_SOURCE_DIR or update docker/clf3.lock."
     exit 1
 fi
-export CARGO_TARGET_DIR=/src/build/clf3-target
+# Keep CLF3's artifacts separate without exporting Cargo settings to the
+# CMake build. Fluorine's Rust helpers have their own target directories.
+CLF3_TARGET_DIR=/src/build/clf3-target
 if [ "${BUILD_MODE:-tarball}" = "test" ]; then
-    cargo test --manifest-path "${CLF3_SOURCE}/Cargo.toml" --locked installer::host
+    cargo test --manifest-path "${CLF3_SOURCE}/Cargo.toml" \
+        --target-dir "${CLF3_TARGET_DIR}" --locked installer::host
 else
-    cargo build --manifest-path "${CLF3_SOURCE}/Cargo.toml" --release --locked
+    cargo build --manifest-path "${CLF3_SOURCE}/Cargo.toml" \
+        --target-dir "${CLF3_TARGET_DIR}" --release --locked
 fi
 
 if [ "${BUILD_MODE:-tarball}" = "test" ]; then
@@ -141,11 +145,11 @@ fi
 
 # ── Main binary + helpers ──
 cp -f "${RUNDIR}/ModOrganizer" "${OUT_DIR}/ModOrganizer-core"
-if [ ! -x "${CARGO_TARGET_DIR}/release/clf3" ]; then
+if [ ! -x "${CLF3_TARGET_DIR}/release/clf3" ]; then
     echo "ERROR: CLF3 release binary was not produced"
     exit 1
 fi
-cp -f "${CARGO_TARGET_DIR}/release/clf3" "${OUT_DIR}/clf3"
+cp -f "${CLF3_TARGET_DIR}/release/clf3" "${OUT_DIR}/clf3"
 chmod +x "${OUT_DIR}/clf3"
 if [ -f "${CLF3_SOURCE}/LICENSE" ]; then
     cp -f "${CLF3_SOURCE}/LICENSE" "${OUT_DIR}/licenses/clf3-MIT.txt"
