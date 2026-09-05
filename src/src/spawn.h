@@ -54,6 +54,7 @@ struct SpawnParameters
   bool hooked = false;
   bool useProton = true;
   bool useTerminal = false;
+  bool useSteam = true;
   int stdOut       = -1;
   int stdErr       = -1;
   // When both are set and unprivileged user namespaces are available,

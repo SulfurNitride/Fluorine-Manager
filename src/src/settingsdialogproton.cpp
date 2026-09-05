@@ -2,6 +2,7 @@
 
 #include "fluorineconfig.h"
 #include "fluorinepaths.h"
+#include "fusemountoptions.h"
 #include "prefixsetupdialog.h"
 #include "ui_settingsdialog.h"
 #include "vfsbackend.h"
@@ -59,6 +60,8 @@ ProtonSettingsTab::ProtonSettingsTab(Settings& s, SettingsDialog& d)
       tr("USVFS for Wine/Proton (experimental)"),
       vfsBackendSettingValue(VfsBackend::Usvfs));
   const QSettings instanceSettings(settings().filename(), QSettings::IniFormat);
+  ui->fuseAllowOtherCheckBox->setChecked(
+      instanceSettings.value(kFuseAllowOtherSetting, false).toBool());
   const QString configuredBackend =
       instanceSettings.value(kVfsBackendSetting, QStringLiteral("fuse"))
           .toString();
@@ -142,6 +145,8 @@ void ProtonSettingsTab::update()
   QSettings().setValue("fluorine/disable_vfs_cache",
                        ui->disableVfsCacheCheckBox->isChecked());
   QSettings instanceSettings(settings().filename(), QSettings::IniFormat);
+  instanceSettings.setValue(kFuseAllowOtherSetting,
+                            ui->fuseAllowOtherCheckBox->isChecked());
   instanceSettings.setValue(kVfsBackendSetting,
                             ui->vfsBackendComboBox->currentData().toString());
   instanceSettings.setValue(kUsvfsExactQueryExhaustionSetting,

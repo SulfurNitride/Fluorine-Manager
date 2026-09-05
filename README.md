@@ -17,12 +17,23 @@ NOTE: This is primarily for my personal use but I will see about fixing issues i
 
 ## FUSE Permissions
 
-- Users only need to change `/etc/fuse.conf` when MO2 mounts with `allow_other` (or `allow_root`).
-- If `allow_other` is used, uncomment `user_allow_other` in `/etc/fuse.conf` once (system-wide).
+FUSE mounts are accessible only to the mounting user by default; no change to
+`/etc/fuse.conf` is needed. To share an instance's mounts with other users
+(including root), enable **Settings > Wine/Proton > VFS > Allow other users to
+access FUSE mounts (allow_other)**. This takes effect on the next FUSE mount,
+enforces file permissions, and does not affect USVFS launches.
 
-## Example
+For this optional setting, an administrator must uncomment `user_allow_other`
+in the host's `/etc/fuse.conf` (or add that line if missing). Fluorine does not
+modify the host configuration.
 
-`#user_allow_other` to `user_allow_other` if its missing please add it.
+## Running Tools Without Steam
+
+In **Edit Executables**, uncheck **Use Steam** for tools such as xEdit that do
+not require Steam. This disables Fluorine's Steam startup prompt and automatic
+Steam startup for that executable, including Proton's Steam integration.
+The option defaults to enabled for existing and new executables; the instance's
+Steam DRM setting still applies.
 
 ## Virtual Filesystem Backends
 

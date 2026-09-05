@@ -2023,6 +2023,16 @@ If you disable this feature, MO will only display official DLCs this way. Please
            </widget>
           </item>
           <item>
+           <widget class="QCheckBox" name="fuseAllowOtherCheckBox">
+            <property name="text">
+             <string>Allow other users to access FUSE mounts (allow_other)</string>
+            </property>
+            <property name="toolTip">
+             <string>Allow other users, including root, to access this instance's FUSE mounts, subject to file permissions. Applies to the next mount and requires user_allow_other in /etc/fuse.conf on the host. Disabled by default. Does not affect USVFS launches.</string>
+            </property>
+           </widget>
+          </item>
+          <item>
            <widget class="QCheckBox" name="disableVfsCacheCheckBox">
             <property name="text">
              <string>Disable VFS cache (diagnostic)</string>

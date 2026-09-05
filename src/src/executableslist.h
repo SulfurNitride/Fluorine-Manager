@@ -83,6 +83,12 @@ public:
   bool hide() const override;
   bool useProton() const;
   bool useTerminal() const;
+  bool useSteam() const { return m_useSteam; }
+  Executable& useSteam(bool enabled)
+  {
+    m_useSteam = enabled;
+    return *this;
+  }
 
   void mergeFrom(const Executable& other);
 
@@ -93,6 +99,7 @@ private:
   QString m_steamAppID;
   QString m_workingDirectory;
   Flags m_flags = UseProton;
+  bool m_useSteam = true;
 };
 
 /*!

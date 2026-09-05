@@ -478,6 +478,19 @@ Right now the only case I know of where this needs to be overwritten is for the 
               </widget>
              </item>
              <item>
+              <widget class="QCheckBox" name="useSteam">
+               <property name="toolTip">
+                <string>Allow Fluorine to start Steam and use Steam integration for this executable. Disable for tools that do not require Steam, such as xEdit. The instance Steam DRM setting still applies.</string>
+               </property>
+               <property name="text">
+                <string>Use Steam</string>
+               </property>
+               <property name="checked">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+             <item>
               <widget class="QCheckBox" name="useTerminal">
                <property name="toolTip">
                 <string>Open a terminal window showing the executable's output. Useful for debugging.</string>

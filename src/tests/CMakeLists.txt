@@ -626,8 +626,33 @@ add_test(NAME test_clf3_install COMMAND test_clf3_install)
 set_tests_properties(test_clf3_install PROPERTIES TIMEOUT 90)
 
 # Register a "fluorine-tests" umbrella target that builds every test exe.
+add_executable(test_executable_options EXCLUDE_FROM_ALL
+    test_executable_options.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/executableslist.cpp
+)
+set_target_properties(test_executable_options PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_executable_options PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+# Exercise the executable model without linking the organizer UI and settings
+# machinery used by the other methods in executableslist.cpp.
+target_compile_options(test_executable_options PRIVATE
+    -ffunction-sections -fdata-sections
+    "-idirafter" "${CMAKE_SOURCE_DIR}/libs/uibase/include/uibase"
+)
+target_precompile_headers(test_executable_options PRIVATE <QtWidgets> <QSettings>)
+target_link_options(test_executable_options PRIVATE -Wl,--gc-sections)
+target_link_libraries(test_executable_options PRIVATE
+    Qt6::Core mo2::uibase GTest::gtest GTest::gtest_main
+)
+add_test(NAME test_executable_options COMMAND test_executable_options)
+
 add_custom_target(fluorine-tests
-    DEPENDS test_esptk_tes3 test_bsatk_extraction
+    DEPENDS test_esptk_tes3 test_bsatk_extraction test_executable_options
             test_plugincompatibility test_pefileutils test_curatedguide
             test_metainiutils test_fomoddependency
             test_vfs_backend

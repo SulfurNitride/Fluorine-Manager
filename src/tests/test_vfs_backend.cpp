@@ -1,6 +1,8 @@
 #include "usvfsrequest.h"
 #include "vfsbackend.h"
+#include "fusemountoptions.h"
 
+#include <algorithm>
 #include <QFile>
 #include <QTemporaryDir>
 #include <gtest/gtest.h>
@@ -27,6 +29,31 @@ QString readString(const QByteArray& bytes, qsizetype& offset)
   offset += static_cast<qsizetype>(length);
   return value;
 }
+}
+
+TEST(FuseMountOptions, OnlyAcceptsAnActiveUserAllowOtherDirective)
+{
+  EXPECT_FALSE(fuseUserAllowOtherEnabled({}));
+  EXPECT_FALSE(fuseUserAllowOtherEnabled("#user_allow_other\nmount_max = 1000\n"));
+  EXPECT_FALSE(fuseUserAllowOtherEnabled("# enable user_allow_other here\n"));
+  EXPECT_FALSE(fuseUserAllowOtherEnabled("user_allow_other_invalid\n"));
+  EXPECT_FALSE(fuseUserAllowOtherEnabled("user_allow_other = false\n"));
+  EXPECT_TRUE(fuseUserAllowOtherEnabled("mount_max = 1000\nuser_allow_other\n"));
+  EXPECT_TRUE(fuseUserAllowOtherEnabled(" \tuser_allow_other \t# enabled\r\n"));
+}
+
+TEST(FuseMountOptions, SharingEnforcesPermissionsAndPreservesReadLimit)
+{
+  for (const bool allowOther : {false, true}) {
+    const auto args = fuseMountArguments(allowOther);
+    const auto contains = [&args](const char* option) {
+      return std::find(args.begin(), args.end(), option) != args.end();
+    };
+    EXPECT_EQ(allowOther, contains("allow_other"));
+    EXPECT_EQ(allowOther, contains("default_permissions"));
+    EXPECT_TRUE(contains("max_read=1048576"));
+    EXPECT_TRUE(contains("fsname=mo2linux"));
+  }
 }
 
 TEST(VfsBackend, ParsesKnownAndSafeDefaultValues)

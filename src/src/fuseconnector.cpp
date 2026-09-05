@@ -1,4 +1,5 @@
 #include "fuseconnector.h"
+#include "fusemountoptions.h"
 
 #include "memorydiagnostics.h"
 #include "mountpathutils.h"
@@ -16,6 +17,7 @@
 #include <QProcess>
 #include <QProgressDialog>
 #include <QSaveFile>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -476,6 +478,22 @@ bool FuseConnector::mount(
     const std::vector<std::pair<std::string, std::string>>& mods)
 {
   MemoryDiagnostics::snapshot("vfs.mount.begin");
+  const QSettings instanceSettings(Settings::instance().filename(),
+                                   QSettings::IniFormat);
+  const bool allowOther = instanceSettings.value(kFuseAllowOtherSetting, false).toBool();
+  if (allowOther && geteuid() != 0) {
+    QFile config(QStringLiteral("/etc/fuse.conf"));
+    // If the host configuration is not readable (for example in a sandbox),
+    // let fusermount decide and include the configuration hint on failure.
+    if (config.open(QIODevice::ReadOnly) &&
+        !fuseUserAllowOtherEnabled(config.readAll())) {
+      throw FuseConnectorException(QObject::tr(
+          "FUSE access for other users requires user_allow_other in "
+          "/etc/fuse.conf on the host. Enable that setting, or turn off "
+          "\"Allow other users to access FUSE mounts (allow_other)\" in "
+          "Settings > Wine/Proton > VFS."));
+    }
+  }
   if (m_mounted) {
     unmount();
   }
@@ -790,9 +808,7 @@ bool FuseConnector::mount(
   // "fuse: reading device: Invalid argument" on some kernels where
   // libfuse's receive buffer is sized off max_write + header and the
   // kernel reads don't fit.  1MB is the safe ceiling.
-  std::vector<std::string> argvStorage = {
-      "mo2fuse", "-o", "fsname=mo2linux", "-o", "noatime",
-      "-o", "max_read=1048576"};
+  std::vector<std::string> argvStorage = fuseMountArguments(allowOther);
   std::fprintf(stderr, "[VFS] libfuse=%s headers=%d.%d\n",
                fuse_pkgversion(), FUSE_MAJOR_VERSION, FUSE_MINOR_VERSION);
 
@@ -820,9 +836,16 @@ bool FuseConnector::mount(
     m_session = nullptr;
     close(m_backingFd);
     m_backingFd = -1;
-    throw FuseConnectorException(
-        QObject::tr("Failed to mount FUSE at %1")
-            .arg(QString::fromStdString(m_mountPoint)));
+    QString error = QObject::tr("Failed to mount FUSE at %1")
+                        .arg(QString::fromStdString(m_mountPoint));
+    if (allowOther) {
+      error += QObject::tr(
+          "\nAccess for other users was requested. Check that user_allow_other "
+          "is enabled in /etc/fuse.conf on the host, or turn off "
+          "\"Allow other users to access FUSE mounts (allow_other)\" in "
+          "Settings > Wine/Proton > VFS.");
+    }
+    throw FuseConnectorException(error);
   }
 
   // Reverse inode invalidation may wait for a kernel folio currently owned by

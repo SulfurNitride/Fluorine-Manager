@@ -24,6 +24,7 @@
 #include <QSaveFile>
 #include <QStandardPaths>
 #include <QStorageInfo>
+#include <QTemporaryDir>
 #include <QTemporaryFile>
 #include <QThread>
 #include <QTimer>
@@ -33,6 +34,7 @@
 
 #include <algorithm>
 #include <csignal>
+#include <memory>
 #include <sys/types.h>
 
 namespace
@@ -1524,11 +1526,41 @@ bool PrefixSetupRunner::stepVisualCppRuntimes()
   env["WINEDLLOVERRIDES"] = makeDllOverrideEnv("mshtml=d", {}, VCRUN_DLLS);
   env["PROTON_USE_XALIA"] = "0";
 
-  auto runLegacyInstaller = [this, &env](const QString& path,
-                                         const QString& displayName) {
+  auto runLegacyInstaller = [this, &env, &tmpDir, &cabextractBin](
+                                const QString& path,
+                                const QString& displayName, bool useMsi) {
     emit logMessage(QStringLiteral("Installing %1...").arg(displayName));
+    QStringList arguments{path, QStringLiteral("/q")};
+    QString installerLogPath;
+    std::unique_ptr<QTemporaryDir> extracted;
+    if (useMsi) {
+      // VC++ 2005's EXE bootstrapper briefly activates a window even with /q.
+      // Install its verified MSI payload directly so setup can stay in the
+      // background. Keep the adjacent cabinet alive until msiexec finishes.
+      extracted = std::make_unique<QTemporaryDir>(tmpDir + "/vc2005-XXXXXX");
+      if (!extracted->isValid()) {
+        currentStep().errorMessage =
+            QStringLiteral("Could not create an extraction directory for %1")
+                .arg(displayName);
+        return false;
+      }
+      const QString msiPath = extracted->filePath(QStringLiteral("vcredist.msi"));
+      const QString cabPath = extracted->filePath(QStringLiteral("vcredis1.cab"));
+      if (runHostProcess(cabextractBin, {"-q", "-d", extracted->path(), path}) != 0 ||
+          !QFileInfo(msiPath).isFile() || !QFileInfo(cabPath).isFile()) {
+        currentStep().errorMessage =
+            QStringLiteral("Could not extract the MSI and cabinet for %1")
+                .arg(displayName);
+        return false;
+      }
+      installerLogPath = extracted->filePath(QStringLiteral("install.log"));
+      arguments = {QStringLiteral("msiexec"), QStringLiteral("/i"),
+                   linuxPathToWineZPath(msiPath), QStringLiteral("/qn"),
+                   QStringLiteral("/norestart"), QStringLiteral("/l*v"),
+                   linuxPathToWineZPath(installerLogPath)};
+    }
     QByteArray output;
-    const int rc = runProcess(m_wineBin, {path, "/q"}, env, -1, &output);
+    const int rc = runProcess(m_wineBin, arguments, env, -1, &output);
     if (isMicrosoftInstallerSuccess(rc)) {
       if (rc != 0) {
         emit logMessage(QStringLiteral("%1 returned nonfatal exit code %2")
@@ -1539,7 +1571,7 @@ bool PrefixSetupRunner::stepVisualCppRuntimes()
     }
 
     const QString diagnosticsPath =
-        reportInstallerFailure(displayName, path, rc, output, {});
+        reportInstallerFailure(displayName, path, rc, output, installerLogPath);
     currentStep().errorMessage =
         QStringLiteral("%1 failed (%2, SHA256 %3)")
             .arg(displayName, describeInstallerExitCode(rc), fileSha256(path));
@@ -1581,8 +1613,9 @@ bool PrefixSetupRunner::stepVisualCppRuntimes()
       }
     }
 
-    if (!runLegacyInstaller(path32, displayBase + " x86") ||
-        !runLegacyInstaller(path64, displayBase + " x64")) {
+    const bool useMsi = version == QStringLiteral("2005");
+    if (!runLegacyInstaller(path32, displayBase + " x86", useMsi) ||
+        !runLegacyInstaller(path64, displayBase + " x64", useMsi)) {
       return false;
     }
   }

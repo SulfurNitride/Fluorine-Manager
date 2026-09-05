@@ -1003,6 +1003,7 @@ ProcessRunner& ProcessRunner::setFromExecutable(const Executable& exe)
   setArguments(exe.arguments());
   setCurrentDirectory(currentDirectory);
   setSteamID(exe.steamAppID());
+  m_sp.useSteam = exe.useSteam();
   setCustomOverwrite(customOverwrite);
   setForcedLibraries(forcedLibraries);
 
@@ -1075,6 +1076,7 @@ ProcessRunner& ProcessRunner::setFromFileOrExecutable(
       const Executable& exe = m_core.executablesList()->getByBinary(m_sp.binary);
 
       setSteamID(exe.steamAppID());
+      m_sp.useSteam = exe.useSteam();
       setCustomOverwrite(profile->setting("custom_overwrites", exe.title()).toString());
 
       if (profile->forcedLibrariesEnabled(exe.title())) {
@@ -1088,6 +1090,7 @@ ProcessRunner& ProcessRunner::setFromFileOrExecutable(
       const Executable& exe = m_core.executablesList()->get(executable);
 
       setSteamID(exe.steamAppID());
+      m_sp.useSteam = exe.useSteam();
       setCustomOverwrite(profile->setting("custom_overwrites", exe.title()).toString());
 
       if (profile->forcedLibrariesEnabled(exe.title())) {

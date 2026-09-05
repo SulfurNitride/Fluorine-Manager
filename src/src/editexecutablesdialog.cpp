@@ -126,6 +126,9 @@ EditExecutablesDialog::EditExecutablesDialog(OrganizerCore& oc, int sel,
   connect(ui->useProton, &QCheckBox::toggled, [&] {
     save();
   });
+  connect(ui->useSteam, &QCheckBox::toggled, [&] {
+    save();
+  });
   connect(ui->useTerminal, &QCheckBox::toggled, [&] {
     save();
   });
@@ -396,6 +399,8 @@ void EditExecutablesDialog::clearEdits()
   ui->hide->setChecked(false);
   ui->useProton->setEnabled(false);
   ui->useProton->setChecked(true);
+  ui->useSteam->setEnabled(false);
+  ui->useSteam->setChecked(true);
   ui->useTerminal->setEnabled(false);
   ui->useTerminal->setChecked(false);
 
@@ -416,6 +421,7 @@ void EditExecutablesDialog::setEdits(const Executable& e)
   ui->hide->setChecked(e.hide());
   ui->useProton->setChecked(e.useProton());
   ui->useTerminal->setChecked(e.useTerminal());
+  ui->useSteam->setChecked(e.useSteam());
 
   m_lastGoodTitle = e.title();
 
@@ -464,6 +470,7 @@ void EditExecutablesDialog::setEdits(const Executable& e)
   ui->hide->setEnabled(true);
   ui->useProton->setEnabled(true);
   ui->useTerminal->setEnabled(true);
+  ui->useSteam->setEnabled(true);
 }
 
 void EditExecutablesDialog::save()
@@ -510,6 +517,7 @@ void EditExecutablesDialog::save()
   e->binaryInfo(QFileInfo(ui->binary->text()));
   e->workingDirectory(ui->workingDirectory->text());
   e->arguments(ui->arguments->text());
+  e->useSteam(ui->useSteam->isChecked());
 
   if (ui->overwriteSteamAppID->isChecked()) {
     e->steamAppID(ui->steamAppID->text());

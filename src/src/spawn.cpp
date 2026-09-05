@@ -426,7 +426,7 @@ int spawn(const SpawnParameters& sp, pid_t& processId)
       storeVariant    = instanceIni.value("game_edition").toString().trimmed();
     }
 
-    launcher.setSteamDrm(useSteamDrm)
+    launcher.setSteamDrm(useSteamDrm && sp.useSteam)
         .setStoreVariant(storeVariant)
         .setUseSLR(true);
 
@@ -596,6 +596,11 @@ bool startSteam(QWidget* parent)
 bool checkSteam(QWidget* parent, const SpawnParameters& sp, const QDir& gameDirectory,
                 const QString& steamAppID, const Settings& settings)
 {
+  if (!sp.useSteam) {
+    log::debug("Steam disabled for this executable");
+    return true;
+  }
+
   static const std::vector<QString> steamFiles = {"libsteam_api.so"};
 
   log::debug("checking steam");
