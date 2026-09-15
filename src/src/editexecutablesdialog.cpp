@@ -108,6 +108,9 @@ EditExecutablesDialog::EditExecutablesDialog(OrganizerCore& oc, int sel,
   connect(ui->arguments, &QLineEdit::textChanged, [&] {
     save();
   });
+  connect(ui->customEnvVars, &QLineEdit::textChanged, [&] {
+    save();
+  });
   connect(ui->steamAppID, &QLineEdit::textChanged, [&] {
     save();
   });
@@ -380,6 +383,8 @@ void EditExecutablesDialog::clearEdits()
   ui->browseWorkingDirectory->setEnabled(false);
   ui->arguments->clear();
   ui->arguments->setEnabled(false);
+  ui->customEnvVars->clear();
+  ui->customEnvVars->setEnabled(false);
   ui->overwriteSteamAppID->setEnabled(false);
   ui->overwriteSteamAppID->setChecked(false);
   ui->steamAppID->setEnabled(false);
@@ -413,6 +418,7 @@ void EditExecutablesDialog::setEdits(const Executable& e)
   ui->binary->setText(QDir::toNativeSeparators(e.binaryInfo().filePath()));
   ui->workingDirectory->setText(QDir::toNativeSeparators(e.workingDirectory()));
   ui->arguments->setText(e.arguments());
+  ui->customEnvVars->setText(e.customEnvVars());
   ui->overwriteSteamAppID->setChecked(!e.steamAppID().isEmpty());
   ui->steamAppID->setEnabled(!e.steamAppID().isEmpty());
   ui->steamAppID->setText(e.steamAppID());
@@ -462,6 +468,7 @@ void EditExecutablesDialog::setEdits(const Executable& e)
   ui->workingDirectory->setEnabled(true);
   ui->browseWorkingDirectory->setEnabled(true);
   ui->arguments->setEnabled(true);
+  ui->customEnvVars->setEnabled(true);
   ui->overwriteSteamAppID->setEnabled(true);
   ui->useApplicationIcon->setEnabled(true);
   ui->createFilesInMod->setEnabled(true);
@@ -517,6 +524,7 @@ void EditExecutablesDialog::save()
   e->binaryInfo(QFileInfo(ui->binary->text()));
   e->workingDirectory(ui->workingDirectory->text());
   e->arguments(ui->arguments->text());
+  e->customEnvVars(ui->customEnvVars->text());
   e->useSteam(ui->useSteam->isChecked());
 
   if (ui->overwriteSteamAppID->isChecked()) {

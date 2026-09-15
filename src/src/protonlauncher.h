@@ -25,6 +25,10 @@ public:
   ProtonLauncher& setUseSLR(bool useSLR);
   ProtonLauncher& setStoreVariant(const QString& variant);
   ProtonLauncher& addEnvVar(const QString& key, const QString& value);
+  // Per-executable custom environment variables. Applied LAST in both
+  // launch paths, after m_wrapperEnvVars/m_envVars and all computed env,
+  // so custom entries win over built-ins. Values are never logged.
+  ProtonLauncher& setCustomEnvVars(const QMap<QString, QString>& vars);
   ProtonLauncher& setUseTerminal(bool useTerminal);
 
   // Bind-mount `source` over `target` inside a per-launch user+mount
@@ -61,6 +65,7 @@ private:
   QString m_storeVariant; // "GOG", "Epic", or empty for Steam
   QMap<QString, QString> m_envVars;
   QMap<QString, QString> m_wrapperEnvVars;
+  QMap<QString, QString> m_customEnvVars;
   bool m_useTerminal = false;
   QString m_bindMountSource;
   QString m_bindMountTarget;

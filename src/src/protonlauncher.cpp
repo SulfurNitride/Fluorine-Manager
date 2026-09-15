@@ -679,6 +679,35 @@ ProtonLauncher& ProtonLauncher::addEnvVar(const QString& key, const QString& val
   return *this;
 }
 
+ProtonLauncher& ProtonLauncher::setCustomEnvVars(
+    const QMap<QString, QString>& vars)
+{
+  m_customEnvVars = vars;
+  return *this;
+}
+
+namespace
+{
+
+// Applies per-executable custom vars last so they win over built-ins.
+// Logs key names only, never values (values may hold secrets).
+void applyCustomEnvVars(QProcessEnvironment& env,
+                        const QMap<QString, QString>& customEnvVars)
+{
+  for (auto it = customEnvVars.cbegin(); it != customEnvVars.cend(); ++it) {
+    if (env.contains(it.key())) {
+      MOBase::log::info(
+          "custom environment variable '{}' overrides built-in value",
+          it.key());
+    } else {
+      MOBase::log::info("custom environment variable '{}' set", it.key());
+    }
+    env.insert(it.key(), it.value());
+  }
+}
+
+}  // namespace
+
 ProtonLauncher& ProtonLauncher::setUseTerminal(bool useTerminal)
 {
   m_useTerminal = useTerminal;
@@ -1064,6 +1093,9 @@ bool ProtonLauncher::launchWithProton(qint64& pid) const
     wrapInTerminal(program, arguments);
   }
 
+  // Per-executable custom vars go last so they can override any built-in.
+  applyCustomEnvVars(env, m_customEnvVars);
+
   return startWithEnv(program, arguments, m_workingDir, env, pid);
 }
 
@@ -1109,6 +1141,10 @@ bool ProtonLauncher::launchDirect(qint64& pid) const
   if (m_useTerminal) {
     wrapInTerminal(program, arguments);
   }
+
+  // Per-executable custom vars go last so they can override any built-in,
+  // including the LD_LIBRARY_PATH computed above.
+  applyCustomEnvVars(env, m_customEnvVars);
 
   // Native direct launch: forward both channels so a launcher-spawned engine
   // (openmw-launcher -> openmw) can't be SIGPIPE'd when the launcher exits and

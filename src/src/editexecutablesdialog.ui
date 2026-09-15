@@ -334,6 +334,26 @@
                  </property>
                 </widget>
                </item>
+               <item row="4" column="0">
+                <widget class="QLabel" name="label_7">
+                 <property name="text">
+                  <string>Environment</string>
+                 </property>
+                </widget>
+               </item>
+               <item row="4" column="1">
+                <widget class="QLineEdit" name="customEnvVars">
+                 <property name="toolTip">
+                  <string>Space-separated KEY=value entries applied to this executable's environment at launch (e.g. FOO=bar BAZ='lorem ipsum'). Use quotes to group values with spaces. FOO= sets an empty value. Custom entries override built-in variables. An invalid entry blocks the launch with an error.</string>
+                 </property>
+                 <property name="whatsThis">
+                  <string>Space-separated KEY=value entries applied to this executable's environment at launch (e.g. FOO=bar BAZ='lorem ipsum'). Use quotes to group values with spaces. FOO= sets an empty value. Custom entries override built-in variables. An invalid entry blocks the launch with an error.</string>
+                 </property>
+                 <property name="placeholderText">
+                  <string>example: FOO=bar BAZ='lorem ipsum'</string>
+                 </property>
+                </widget>
+               </item>
               </layout>
              </item>
              <item>
@@ -555,6 +575,7 @@ Right now the only case I know of where this needs to be overwritten is for the 
   <tabstop>workingDirectory</tabstop>
   <tabstop>browseWorkingDirectory</tabstop>
   <tabstop>arguments</tabstop>
+  <tabstop>customEnvVars</tabstop>
   <tabstop>overwriteSteamAppID</tabstop>
   <tabstop>steamAppID</tabstop>
   <tabstop>createFilesInMod</tabstop>

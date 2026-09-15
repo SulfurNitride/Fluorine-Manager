@@ -655,7 +655,27 @@ target_link_options(test_executable_options PRIVATE -Wl,--gc-sections)
 target_link_libraries(test_executable_options PRIVATE
     Qt6::Core mo2::uibase GTest::gtest GTest::gtest_main
 )
-add_test(NAME test_executable_options COMMAND test_executable_options)
+# ---------------------------------------------------------------------------
+# Custom per-executable env var string parser tests (plan Step 1)
+# ---------------------------------------------------------------------------
+add_executable(test_custom_env_vars EXCLUDE_FROM_ALL
+    test_custom_env_vars.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/envvars.cpp
+)
+set_target_properties(test_custom_env_vars PROPERTIES
+    AUTOMOC OFF
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(test_custom_env_vars PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src
+)
+target_link_libraries(test_custom_env_vars PRIVATE
+    Qt6::Core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_custom_env_vars COMMAND test_custom_env_vars)
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets WebSockets Network)
 add_executable(test_steam_cloud EXCLUDE_FROM_ALL
@@ -669,7 +689,7 @@ add_test(NAME test_steam_cloud COMMAND test_steam_cloud)
 set_tests_properties(test_steam_cloud PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_custom_target(fluorine-tests
-    DEPENDS test_esptk_tes3 test_bsatk_extraction test_executable_options test_steam_cloud
+    DEPENDS test_esptk_tes3 test_bsatk_extraction test_executable_options test_custom_env_vars test_steam_cloud
             test_plugincompatibility test_pefileutils test_curatedguide
             test_metainiutils test_fomoddependency
             test_vfs_backend

@@ -21,6 +21,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "env.h"
 #include "envmodule.h"
+#include "envvars.h"
 #include "fluorineconfig.h"
 #include "protonlauncher.h"
 #include "settings.h"
@@ -458,6 +459,22 @@ int spawn(const SpawnParameters& sp, pid_t& processId)
   }
 
   launcher.setUseTerminal(sp.useTerminal);
+
+  if (!sp.customEnvVars.trimmed().isEmpty()) {
+    QMap<QString, QString> customEnv;
+    QString errorToken;
+    if (!CustomEnvVars::parseCustomEnvVars(sp.customEnvVars, customEnv, errorToken)) {
+      // Backstop: ProcessRunner::runBinary() validates before any side
+      // effects and shows the user-facing dialog, so reaching here means
+      // a caller bypassed it. Just fail without launching.
+      MOBase::log::error("invalid custom environment variable '{}', aborting launch",
+                         errorToken);
+      return EINVAL;
+    }
+    // Stored separately from addEnvVar() entries so ProtonLauncher can
+    // apply them last (custom wins over built-ins).
+    launcher.setCustomEnvVars(customEnv);
+  }
 
   const auto [ok, pid] = launcher.launch();
   if (!ok) {

@@ -1,6 +1,7 @@
 #include "processrunner.h"
 #include "env.h"
 #include "envmodule.h"
+#include "envvars.h"
 #include "instancemanager.h"
 #include "iuserinterface.h"
 #include "organizercore.h"
@@ -1011,6 +1012,7 @@ ProcessRunner& ProcessRunner::setFromExecutable(const Executable& exe)
 
   m_sp.useProton    = exe.useProton();
   m_sp.useTerminal  = exe.useTerminal();
+  m_sp.customEnvVars = exe.customEnvVars();
 
   return *this;
 }
@@ -1079,6 +1081,7 @@ ProcessRunner& ProcessRunner::setFromFileOrExecutable(
 
       setSteamID(exe.steamAppID());
       m_sp.useSteam = exe.useSteam();
+      m_sp.customEnvVars = exe.customEnvVars();
       setCustomOverwrite(profile->setting("custom_overwrites", exe.title()).toString());
 
       if (profile->forcedLibrariesEnabled(exe.title())) {
@@ -1093,6 +1096,7 @@ ProcessRunner& ProcessRunner::setFromFileOrExecutable(
 
       setSteamID(exe.steamAppID());
       m_sp.useSteam = exe.useSteam();
+      m_sp.customEnvVars = exe.customEnvVars();
       setCustomOverwrite(profile->setting("custom_overwrites", exe.title()).toString());
 
       if (profile->forcedLibrariesEnabled(exe.title())) {
@@ -1201,6 +1205,35 @@ std::optional<ProcessRunner::Results> ProcessRunner::runBinary()
   auto& settings   = m_core.settings();
 
   QWidget* parent = (m_ui ? m_ui->mainWindow() : nullptr);
+
+  // Validate custom env vars before any side effects (cloud sync prepare,
+  // VFS setup, plugin beforeRun hooks). spawn() re-validates as a backstop.
+  {
+    QMap<QString, QString> customEnv;
+    QString envErrorToken;
+    if (!CustomEnvVars::parseCustomEnvVars(m_sp.customEnvVars, customEnv,
+                                           envErrorToken)) {
+      log::error("invalid custom environment variable '{}', aborting launch",
+                 envErrorToken);
+      QMessageBox::critical(
+          parent, QObject::tr("Invalid environment variable"),
+          QObject::tr("\"%1\" is not a valid KEY=value assignment. The "
+                      "executable's Environment field must contain "
+                      "space-separated KEY=value entries (e.g. FOO=bar "
+                      "BAZ='lorem ipsum'). Launch aborted.")
+              .arg(envErrorToken));
+      return Error;
+    }
+  }
+
+  const auto abortPreparedLaunch = [this]() {
+    if (!m_sp.usvfsRequestPath.isEmpty()) {
+      QFile::remove(m_sp.usvfsRequestPath);
+      m_sp.usvfsRequestPath.clear();
+    }
+    m_core.unmountVFS();
+  };
+
   const QString appId = m_sp.steamAppID.trimmed().isEmpty()
                             ? game->steamAPPId() : m_sp.steamAppID;
   if (m_sp.useProton && m_sp.useSteam
@@ -1244,14 +1277,6 @@ std::optional<ProcessRunner::Results> ProcessRunner::runBinary()
                         &m_sp.saveBindMountSource, &m_sp.saveBindMountTarget)) {
     return Error;
   }
-
-  const auto abortPreparedLaunch = [this]() {
-    if (!m_sp.usvfsRequestPath.isEmpty()) {
-      QFile::remove(m_sp.usvfsRequestPath);
-      m_sp.usvfsRequestPath.clear();
-    }
-    m_core.unmountVFS();
-  };
 
   m_sp.gameDirectory = game->gameDirectory();
 

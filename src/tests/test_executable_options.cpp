@@ -29,3 +29,31 @@ TEST(ExecutableOptions, SteamChoiceSurvivesCloningMergingAndFlagChanges)
   EXPECT_TRUE(edited.useSteam());
   EXPECT_FALSE(tool.useSteam());
 }
+
+TEST(ExecutableOptions, CustomEnvVarsDefaultEmpty)
+{
+  EXPECT_TRUE(Executable().customEnvVars().isEmpty());
+  const MOBase::ExecutableInfo info(QStringLiteral("Game"), QFileInfo("game.exe"));
+  EXPECT_TRUE(Executable(info, Executable::UseProton).customEnvVars().isEmpty());
+}
+
+TEST(ExecutableOptions, CustomEnvVarsSurvivesCloningAndMerging)
+{
+  Executable tool(QStringLiteral("xEdit"));
+  tool.customEnvVars(QStringLiteral("FOO=bar BAZ='lorem ipsum'"));
+  const Executable clone = tool;
+  EXPECT_EQ(QStringLiteral("FOO=bar BAZ='lorem ipsum'"), clone.customEnvVars());
+
+  Executable edited;
+  edited.mergeFrom(clone);
+  EXPECT_EQ(QStringLiteral("FOO=bar BAZ='lorem ipsum'"), edited.customEnvVars());
+
+  edited.customEnvVars(QStringLiteral("OTHER=1"));
+  EXPECT_EQ(QStringLiteral("OTHER=1"), edited.customEnvVars());
+  EXPECT_EQ(QStringLiteral("FOO=bar BAZ='lorem ipsum'"), tool.customEnvVars());
+
+  // mergeFrom overwrites with the source value, including clearing to empty
+  Executable cleared;
+  edited.mergeFrom(cleared);
+  EXPECT_TRUE(edited.customEnvVars().isEmpty());
+}

@@ -67,6 +67,7 @@ public:
   const QString& arguments() const override;
   const QString& steamAppID() const override;
   const QString& workingDirectory() const override;
+  const QString& customEnvVars() const;
   Flags flags() const;
 
   Executable& title(const QString& s);
@@ -74,6 +75,7 @@ public:
   Executable& arguments(const QString& s);
   Executable& steamAppID(const QString& s);
   Executable& workingDirectory(const QString& s);
+  Executable& customEnvVars(const QString& s);
   Executable& flags(Flags f);
 
   bool isShownOnToolbar() const override;
@@ -98,6 +100,7 @@ private:
   QString m_arguments;
   QString m_steamAppID;
   QString m_workingDirectory;
+  QString m_customEnvVars;
   Flags m_flags = UseProton;
   bool m_useSteam = true;
 };
