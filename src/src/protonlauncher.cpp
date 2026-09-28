@@ -707,6 +707,12 @@ ProtonLauncher& ProtonLauncher::setUsvfsRequest(const QString& requestPath)
   return *this;
 }
 
+ProtonLauncher& ProtonLauncher::setUsvfsLog(const QString& logPath)
+{
+  m_usvfsLogPath = logPath;
+  return *this;
+}
+
 bool ProtonLauncher::unprivilegedBindMountSupported()
 {
   // Need both an `unshare` binary and a kernel that lets unprivileged users
@@ -801,8 +807,17 @@ bool ProtonLauncher::launchWithProton(env::NativeProcess& process) const
     }
     launchBinary = helper;
     launchArguments = {toWinePath(m_usvfsRequestPath)};
+    if (!m_usvfsLogPath.isEmpty()) {
+      // Out-of-band log path: the helper opens this before parsing the
+      // request, so request-read failures land in the same file as the rest
+      // of the launch diagnostics.
+      launchArguments << toWinePath(m_usvfsLogPath);
+    }
     MOBase::log::info("USVFS launch bridge: '{}' request='{}' target='{}'",
                       helper, m_usvfsRequestPath, m_binary);
+    if (!m_usvfsLogPath.isEmpty()) {
+      MOBase::log::info("USVFS launch bridge log: '{}'", m_usvfsLogPath);
+    }
   }
 
   // Use "waitforexitandrun" instead of "run": this tells Proton to wait for
@@ -830,8 +845,8 @@ bool ProtonLauncher::launchWithProton(env::NativeProcess& process) const
 
   QStringList pressureVesselImportantPaths;
   pressureVesselImportantPaths << m_binary << launchBinary << m_usvfsRequestPath
-                               << usvfsBundlePath << m_workingDir << m_gameDirectory
-                               << m_prefixPath << m_bindMountSource
+                               << m_usvfsLogPath << usvfsBundlePath << m_workingDir
+                               << m_gameDirectory << m_prefixPath << m_bindMountSource
                                << m_bindMountTarget;
 
   // If SLR is enabled, wrap the whole proton invocation inside the
@@ -863,6 +878,10 @@ bool ProtonLauncher::launchWithProton(env::NativeProcess& process) const
       if (!m_usvfsRequestPath.isEmpty()) {
         slrArgs << QStringLiteral("--filesystem=%1")
                        .arg(QFileInfo(m_usvfsRequestPath).absolutePath());
+      }
+      if (!m_usvfsLogPath.isEmpty()) {
+        slrArgs << QStringLiteral("--filesystem=%1")
+                       .arg(QFileInfo(m_usvfsLogPath).absolutePath());
       }
       // Expose the Proton installation directory — needed for
       // system-installed Protons (e.g. /usr/share/steam/compatibilitytools.d/)

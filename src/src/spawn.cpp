@@ -404,6 +404,9 @@ int spawn(const SpawnParameters& sp, env::NativeProcess& process)
     }
     if (!sp.usvfsRequestPath.isEmpty()) {
       launcher.setUsvfsRequest(sp.usvfsRequestPath);
+      if (!sp.usvfsLogPath.isEmpty()) {
+        launcher.setUsvfsLog(sp.usvfsLogPath);
+      }
 
       bool exactQueryExhaustion = false;
       bool sharedContext        = false;

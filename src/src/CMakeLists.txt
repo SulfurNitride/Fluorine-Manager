@@ -222,6 +222,7 @@ if(FLUORINE_MINGW_CXX AND FLUORINE_USVFS_RUNTIME_AVAILABLE)
         COMMAND ${CMAKE_COMMAND} -E make_directory "${FLUORINE_USVFS_OUTPUT_DIR}"
         COMMAND "${FLUORINE_MINGW_CXX}"
                 -std=c++20 -O2 -static -static-libgcc -static-libstdc++ -municode
+                -mwindows
                 "${CMAKE_SOURCE_DIR}/tools/usvfs-launcher/main.cpp"
                 -o "${FLUORINE_USVFS_HELPER}"
         DEPENDS "${CMAKE_SOURCE_DIR}/tools/usvfs-launcher/main.cpp"
