@@ -71,6 +71,10 @@ struct SpawnParameters
   // Versioned request consumed by the Wine-side USVFS controller. Empty means
   // launch the target normally (the FUSE path).
   QString usvfsRequestPath;
+  // Per-launch USVFS diagnostic log. The helper is handed this path directly
+  // (out-of-band) so it can open the file before parsing the request and
+  // record request-read failures there too.
+  QString usvfsLogPath;
 };
 
 bool checkSteam(QWidget* parent, const SpawnParameters& sp, const QDir& gameDirectory,
