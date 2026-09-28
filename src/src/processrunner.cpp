@@ -546,7 +546,8 @@ std::optional<ProcessRunner::Results> ProcessRunner::runBinary()
   if (!m_core.beforeRun(m_sp.binary, m_sp.currentDirectory, m_sp.arguments,
                         m_profileName, m_customOverwrite, m_forcedLibraries,
                         m_sp.useProton, &m_sp.usvfsRequestPath,
-                        &m_sp.saveBindMountSource, &m_sp.saveBindMountTarget)) {
+                        &m_sp.saveBindMountSource, &m_sp.saveBindMountTarget,
+                        &m_sp.usvfsLogPath)) {
     return Error;
   }
 
