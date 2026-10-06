@@ -38,6 +38,8 @@ private:
   QString m_DefaultStyle;
   QFont m_DefaultFont;
   QString m_ActiveStyleFile;
+  QString m_ActiveBaseStyle;
+  bool m_StyleInstalled{false};
 };
 
 }  // namespace ApplicationAppearance
