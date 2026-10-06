@@ -11,11 +11,14 @@
 #include <QStyleFactory>
 #include <QStyleOption>
 #include <QTreeView>
+#include <QWidget>
 
 #include <uibase/log.h>
 
 #include <memory>
+#include <optional>
 #include <utility>
+#include <vector>
 
 namespace ApplicationAppearance
 {
@@ -125,6 +128,36 @@ std::unique_ptr<QStyle> makeStyle(const QString& name)
   }
   return {};
 }
+
+// Widgets wrap the application style in a QStyleSheetStyle; setStyle() deletes
+// that style, so strip sheets across the swap and restore them afterwards.
+class ScopedWidgetStyleSheets
+{
+public:
+  ScopedWidgetStyleSheets()
+  {
+    for (QWidget* widget : QApplication::allWidgets()) {
+      const QString sheet = widget->styleSheet();
+      if (!sheet.isEmpty()) {
+        widget->setStyleSheet(QString());
+        m_sheets.emplace_back(widget, sheet);
+      }
+    }
+  }
+
+  ~ScopedWidgetStyleSheets()
+  {
+    for (const auto& [widget, sheet] : m_sheets) {
+      widget->setStyleSheet(sheet);
+    }
+  }
+
+  ScopedWidgetStyleSheets(const ScopedWidgetStyleSheets&)            = delete;
+  ScopedWidgetStyleSheets& operator=(const ScopedWidgetStyleSheets&) = delete;
+
+private:
+  std::vector<std::pair<QWidget*, QString>> m_sheets;
+};
 }  // namespace
 
 Controller::Controller(QApplication& application, QString applicationDirectory,
@@ -168,15 +201,6 @@ bool Controller::apply(const Spec& spec, QString* error)
     }
   }
 
-  std::unique_ptr<QStyle> style = makeStyle(base);
-  if (!style) {
-    if (error != nullptr) {
-      *error = QStringLiteral("Qt style '%1' is unavailable").arg(base);
-    }
-    reset();
-    return false;
-  }
-
   QFont font = m_DefaultFont;
   if (!spec.fontFamily.isEmpty()) {
     font.setFamily(spec.fontFamily);
@@ -185,7 +209,26 @@ bool Controller::apply(const Spec& spec, QString* error)
     font.setPixelSize(spec.fontSize);
   }
 
-  m_Application.setStyle(style.release());
+  // Installing a style replaces (and deletes) the application style object,
+  // so only swap it when the factory base actually changed: font-only edits
+  // come through here too and must not churn the style.
+  std::optional<ScopedWidgetStyleSheets> widgetStyleSheets;
+  if (!m_StyleInstalled || base != m_ActiveBaseStyle) {
+    std::unique_ptr<QStyle> style = makeStyle(base);
+    if (!style) {
+      if (error != nullptr) {
+        *error = QStringLiteral("Qt style '%1' is unavailable").arg(base);
+      }
+      reset();
+      return false;
+    }
+
+    widgetStyleSheets.emplace();
+    m_Application.setStyle(style.release());
+    m_ActiveBaseStyle = base;
+    m_StyleInstalled  = true;
+  }
+
   m_Application.setStyleSheet(styleSheet);
   m_Application.setFont(font);
   m_ActiveStyleFile = styleFile;
@@ -194,8 +237,14 @@ bool Controller::apply(const Spec& spec, QString* error)
 
 void Controller::reset()
 {
+  std::optional<ScopedWidgetStyleSheets> widgetStyleSheets;
   if (std::unique_ptr<QStyle> style = makeStyle(m_DefaultStyle)) {
+    widgetStyleSheets.emplace();
     m_Application.setStyle(style.release());
+    m_ActiveBaseStyle = m_DefaultStyle;
+    m_StyleInstalled  = true;
+  } else {
+    m_StyleInstalled = false;
   }
   m_Application.setStyleSheet(QString());
   m_Application.setFont(m_DefaultFont);
