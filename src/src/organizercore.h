@@ -319,7 +319,8 @@ public:
                  bool useProton,
                  QString* usvfsRequestPath = nullptr,
                  QString* saveBindMountSource = nullptr,
-                 QString* saveBindMountTarget = nullptr);
+                 QString* saveBindMountTarget = nullptr,
+                 QString* usvfsLogPath = nullptr);
 
   bool checkGameRegistryKey();
 

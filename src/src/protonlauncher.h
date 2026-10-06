@@ -41,6 +41,9 @@ public:
   // automatically when the game process tree exits.
   ProtonLauncher& setSavesBindMount(const QString& source, const QString& target);
   ProtonLauncher& setUsvfsRequest(const QString& requestPath);
+  // Diagnostics log for the USVFS helper; passed to it as a second argument
+  // so the helper can open the file before parsing the request.
+  ProtonLauncher& setUsvfsLog(const QString& logPath);
 
   // True iff the running kernel supports unprivileged user namespaces with
   // CAP_SYS_ADMIN so that `setSavesBindMount` will actually take effect.
@@ -74,6 +77,7 @@ private:
   QString m_bindMountSource;
   QString m_bindMountTarget;
   QString m_usvfsRequestPath;
+  QString m_usvfsLogPath;
 };
 
 #endif  // PROTONLAUNCHER_H
