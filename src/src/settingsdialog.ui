@@ -1789,6 +1789,19 @@
                </widget>
               </item>
               <item row="3" column="0" colspan="4">
+               <widget class="QCheckBox" name="linkSteamSaveDataCheckBox">
+                <property name="text">
+                 <string>Link save data from existing Steam prefixes</string>
+                </property>
+                <property name="toolTip">
+                 <string>When creating the prefix, symlink game save folders from your Steam prefixes into Fluorine's prefix instead of leaving it empty. Turn off to move saves by hand.</string>
+                </property>
+                <property name="checked">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+              <item row="4" column="0" colspan="4">
                <widget class="QPushButton" name="createPrefixButton">
                 <property name="text">
                  <string>Set up now</string>
@@ -1798,7 +1811,7 @@
                 </property>
                </widget>
               </item>
-              <item row="4" column="0" colspan="4">
+              <item row="5" column="0" colspan="4">
                <widget class="QLabel" name="runtimeSetupNote">
                 <property name="wordWrap">
                  <bool>true</bool>

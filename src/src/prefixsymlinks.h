@@ -16,6 +16,9 @@ __attribute__((visibility("default"))) bool
 ensureSkyrimSpecialEditionAppDataPrivate(const QString& prefixPath);
 
 /// Detect all games and create symlinks from the given prefix to game prefixes.
-__attribute__((visibility("default"))) void createGameSymlinksAuto(const QString& prefixPath);
+/// With `linkSaveData` false no game folders are linked; stale links to shared
+/// folders are still cleaned up.
+__attribute__((visibility("default"))) void
+createGameSymlinksAuto(const QString& prefixPath, bool linkSaveData = true);
 
 #endif // PREFIXSYMLINKS_H

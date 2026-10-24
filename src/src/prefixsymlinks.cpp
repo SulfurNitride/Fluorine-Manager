@@ -36,6 +36,7 @@ static const char* SHARED_APPDATA_DIRS[] = {
     "Programs", "Packages", "Steam", "Ubisoft Game Launcher", "Battle.net",
     "Google", "Mozilla", "Temp", "cache", "Cache", "mesa_shader_cache",
     "AMD", "Intel", "Unity", "UnityLogs", "Overwolf", "discord",
+    "mod.io", "IO Interactive",
 };
 
 bool shouldSkip(const QString& name)
@@ -389,9 +390,13 @@ bool ensureSkyrimSpecialEditionAppDataPrivate(const QString& prefixPath)
   return true;
 }
 
-void createGameSymlinksAuto(const QString& prefixPath)
+void createGameSymlinksAuto(const QString& prefixPath, bool linkSaveData)
 {
-  GameScanResult result = detectAllGames();
+  GameScanResult result;
+  if (linkSaveData)
+    result = detectAllGames();
+  else
+    MOBase::log::info("Skipping save data links to Steam prefixes (disabled)");
 
   const QString usersDir = prefixPath + "/drive_c/users";
   const QString username = findPrefixUsername(usersDir);

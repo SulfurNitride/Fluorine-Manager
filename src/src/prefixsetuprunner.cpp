@@ -23,6 +23,7 @@
 #include <QRegularExpression>
 #include <QCryptographicHash>
 #include <QSaveFile>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QStorageInfo>
 #include <QTemporaryDir>
@@ -2561,8 +2562,9 @@ bool PrefixSetupRunner::stepPostSetup()
     return false;
   }
 
-  // Create game symlinks.
-  createGameSymlinksAuto(m_prefixPath);
+  // Create game symlinks unless the user opted out.
+  createGameSymlinksAuto(
+      m_prefixPath, QSettings().value("fluorine/link_steam_save_data", true).toBool());
 
   emit logMessage("Post-setup complete");
   return true;

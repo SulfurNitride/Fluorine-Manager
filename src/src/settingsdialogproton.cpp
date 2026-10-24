@@ -47,6 +47,7 @@ namespace
 std::atomic<ProtonSettingsTab*> g_activeInstallTab = nullptr;
 
 constexpr auto kAllowUnsupportedProtonSetting = "fluorine/allow_unsupported_proton";
+constexpr auto kLinkSteamSaveDataSetting      = "fluorine/link_steam_save_data";
 
 QString defaultPrefixLocation()
 {
@@ -106,6 +107,8 @@ ProtonSettingsTab::ProtonSettingsTab(Settings& s, SettingsDialog& d)
   ui->usvfsSharedContextCheckBox->setChecked(
       instanceSettings.value(kUsvfsSharedContextSetting, false).toBool());
 
+  ui->linkSteamSaveDataCheckBox->setChecked(
+      QSettings().value(kLinkSteamSaveDataSetting, true).toBool());
   ui->allowUnsupportedProtonCheckBox->setChecked(
       QSettings().value(kAllowUnsupportedProtonSetting, false).toBool());
   QObject::connect(ui->allowUnsupportedProtonCheckBox, &QCheckBox::clicked, this,
@@ -163,6 +166,8 @@ void ProtonSettingsTab::update()
                               "Check that its configuration folder is writable."));
     }
   }
+  QSettings().setValue(kLinkSteamSaveDataSetting,
+                       ui->linkSteamSaveDataCheckBox->isChecked());
   QSettings().setValue(kAllowUnsupportedProtonSetting,
                        ui->allowUnsupportedProtonCheckBox->isChecked());
   QSettings().setValue("fluorine/launch_wrapper", ui->launchWrapperEdit->text());

@@ -344,3 +344,31 @@ TEST_F(PrefixSymlinks, AcceptsSymlinkedAncestorInsidePrefix)
   EXPECT_TRUE(ensureSkyrimSpecialEditionAppDataPrivate(prefix));
   EXPECT_TRUE(QFileInfo(QDir(internal).filePath(QStringLiteral("Skyrim Special Edition"))).isDir());
 }
+
+TEST_F(PrefixSymlinks, SkippingSaveDataLinksCreatesNoGameLinksAndDropsSharedOnes)
+{
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const QString prefix = prefixPath(temporary);
+  makePrefix(prefix);
+
+  const QString local =
+      QDir(prefix).filePath(QStringLiteral("drive_c/users/steamuser/AppData/Local"));
+  const QString staleTarget = QDir(temporary.path())
+      .filePath(QStringLiteral("compatdata/123/pfx/drive_c/users/steamuser/AppData/"
+                               "Local/dxvk"));
+  ASSERT_TRUE(QDir().mkpath(staleTarget));
+  ASSERT_TRUE(QFile::link(staleTarget, QDir(local).filePath(QStringLiteral("dxvk"))));
+
+  createGameSymlinksAuto(prefix, false);
+
+  EXPECT_FALSE(QFileInfo(QDir(local).filePath(QStringLiteral("dxvk"))).isSymLink());
+  EXPECT_TRUE(QDir(staleTarget).exists());
+  for (const char* dir : {"AppData/Local", "AppData/Roaming", "Documents/My Games"}) {
+    const QDir d(QDir(prefix).filePath(QStringLiteral("drive_c/users/steamuser/") +
+                                       QLatin1String(dir)));
+    for (const QFileInfo& entry :
+         d.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::System))
+      EXPECT_FALSE(entry.isSymLink()) << entry.absoluteFilePath().toStdString();
+  }
+}
