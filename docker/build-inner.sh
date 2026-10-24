@@ -276,6 +276,11 @@ SO7="build/src/src/lib/7z.so"
 if [ -f "${SO7}" ]; then
     cp -f "${SO7}" "${OUT_DIR}/lib/7z.so"
 fi
+# Optional FUSE passthrough helper. Installed by the user (once, root-owned,
+# with CAP_SYS_ADMIN) from Settings; see docker/fluorine-fuse-helper.c.
+gcc -O2 -Wall -Wextra -s -o "${OUT_DIR}/fluorine-fuse-helper" \
+    /src/docker/fluorine-fuse-helper.c
+chmod 0755 "${OUT_DIR}/fluorine-fuse-helper"
 # Post-install compatibility tools arrive as ordinary Nexus archives. Bundle
 # the standalone 7-Zip CLI so extraction does not depend on the host distro.
 if [ -x /usr/lib/7zip/7za ]; then

@@ -4,6 +4,7 @@
 #include "fluorinepaths.h"
 #include "fusemountoptions.h"
 #include "fusepermissions.h"
+#include "vfs/fusepassthrough.h"
 #include "prefixsetupdialog.h"
 #include "ui_settingsdialog.h"
 #include "vfsbackend.h"
@@ -17,6 +18,7 @@
 #include <atomic>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QDialog>
 #include <QDir>
@@ -87,6 +89,10 @@ ProtonSettingsTab::ProtonSettingsTab(Settings& s, SettingsDialog& d)
       instanceSettings.value(kFuseIoUringSetting, false).toBool());
   QObject::connect(ui->fuseIoUringCheckBox, &QCheckBox::clicked, this,
                    &ProtonSettingsTab::onFuseIoUringClicked);
+  ui->fusePassthroughCheckBox->setChecked(
+      instanceSettings.value(kFusePassthroughSetting, false).toBool());
+  QObject::connect(ui->fusePassthroughCheckBox, &QCheckBox::clicked, this,
+                   &ProtonSettingsTab::onFusePassthroughClicked);
   const QString configuredBackend =
       instanceSettings.value(kVfsBackendSetting, QStringLiteral("fuse"))
           .toString();
@@ -160,6 +166,8 @@ void ProtonSettingsTab::update()
                             ui->fuseCaseInsensitiveHintCheckBox->isChecked());
   instanceSettings.setValue(kFuseIoUringSetting,
                             ui->fuseIoUringCheckBox->isChecked());
+  instanceSettings.setValue(kFusePassthroughSetting,
+                            ui->fusePassthroughCheckBox->isChecked());
   instanceSettings.setValue(kVfsBackendSetting,
                             ui->vfsBackendComboBox->currentData().toString());
   instanceSettings.setValue(kUsvfsExactQueryExhaustionSetting,
@@ -365,6 +373,116 @@ void ProtonSettingsTab::onFuseIoUringClicked(bool checked)
         parentWidget(), tr("io_uring Not Enabled"),
         tr("Fluorine could not enable fuse.enable_uring. The option has been "
            "left off.\n\n%1")
+            .arg(failure));
+  }
+}
+
+void ProtonSettingsTab::onFusePassthroughClicked(bool checked)
+{
+  if (!checked) {
+    return;
+  }
+
+  const auto uncheck = [this] {
+    const QSignalBlocker blocker(ui->fusePassthroughCheckBox);
+    ui->fusePassthroughCheckBox->setChecked(false);
+  };
+
+  const QString installed = QString::fromLatin1(fusepassthrough::kInstalledHelperPath);
+  const QString bundled =
+      QCoreApplication::applicationDirPath() + QStringLiteral("/fluorine-fuse-helper");
+  if (!QFileInfo::exists(bundled)) {
+    QMessageBox::warning(parentWidget(), tr("Passthrough Not Available"),
+                         tr("This Fluorine build does not include the passthrough "
+                            "helper (%1 is missing).")
+                             .arg(bundled));
+    uncheck();
+    return;
+  }
+  if (fusepassthrough::helperStatus(installed.toStdString(),
+                                    bundled.toStdString()) ==
+      fusepassthrough::HelperStatus::Ready) {
+    return;
+  }
+
+  QFile helperFile(bundled);
+  if (!helperFile.open(QIODevice::ReadOnly)) {
+    QMessageBox::warning(parentWidget(), tr("Passthrough Not Enabled"),
+                         tr("Fluorine could not read %1.").arg(bundled));
+    uncheck();
+    return;
+  }
+  const QString digest = QString::fromLatin1(
+      QCryptographicHash::hash(helperFile.readAll(), QCryptographicHash::Sha256)
+          .toHex());
+  helperFile.close();
+
+  const auto answer = QMessageBox::question(
+      parentWidget(), tr("Install Passthrough Helper"),
+      tr("Kernel passthrough needs a small helper program with the "
+         "CAP_SYS_ADMIN permission. Fluorine itself never gets it.\n\n"
+         "Your desktop will ask for administrator authentication to copy the "
+         "helper to %1 (owned by root, so other programs cannot alter it) and "
+         "grant it that permission. The copy is checked against this SHA-256 "
+         "before it is enabled:\n%2\n\n"
+         "Updating Fluorine with a new helper asks for this once more. "
+         "Continue?")
+          .arg(installed, digest),
+      QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
+  if (answer != QMessageBox::Yes) {
+    uncheck();
+    return;
+  }
+
+  // Host tools only, never an executable from the app bundle or user PATH.
+  const QStringList systemPaths{QStringLiteral("/usr/bin"), QStringLiteral("/bin"),
+                                QStringLiteral("/run/wrappers/bin"),
+                                QStringLiteral("/run/current-system/sw/bin")};
+  const QString pkexec = QStandardPaths::findExecutable("pkexec", systemPaths);
+  const QString sh     = QStandardPaths::findExecutable("sh", systemPaths);
+  QString failure;
+  if (pkexec.isEmpty() || sh.isEmpty() ||
+      QStandardPaths::findExecutable("setcap", systemPaths).isEmpty() ||
+      QStandardPaths::findExecutable("sha256sum", systemPaths).isEmpty()) {
+    failure = tr("Administrator authentication tools are unavailable. Install "
+                 "polkit, libcap (setcap) and coreutils, then try again.");
+  } else {
+    // Fixed script; the paths and digest arrive as positional parameters, never
+    // interpolated. The copy is verified after it is root-owned, so the bundled
+    // file cannot be swapped between the prompt and the install.
+    static const char kScript[] =
+        "set -e; dst=\"$2\"; trap 'rm -f \"$dst.new\"' EXIT; "
+        "install -D -m 0755 -o root -g root \"$1\" \"$dst.new\"; "
+        "echo \"$3  $dst.new\" | sha256sum -c --status; "
+        "setcap cap_sys_admin+ep \"$dst.new\"; mv -f \"$dst.new\" \"$dst\"";
+    QProcess process;
+    process.start(pkexec, {QStringLiteral("--disable-internal-agent"), sh,
+                           QStringLiteral("-c"), QString::fromLatin1(kScript),
+                           QStringLiteral("fluorine-fuse-helper-setup"), bundled,
+                           installed, digest});
+    if (!process.waitForStarted() || !process.waitForFinished(120000)) {
+      process.kill();
+      process.waitForFinished(2000);
+      failure = tr("Administrator authentication timed out.");
+    } else if (process.exitStatus() == QProcess::NormalExit &&
+               process.exitCode() == 126) {
+      uncheck();  // authentication dismissed
+      return;
+    } else if (fusepassthrough::helperStatus(installed.toStdString(),
+                                             bundled.toStdString()) !=
+               fusepassthrough::HelperStatus::Ready) {
+      const QString details =
+          QString::fromLocal8Bit(process.readAllStandardError()).trimmed();
+      failure = details.isEmpty() ? process.errorString() : details;
+    }
+  }
+
+  if (!failure.isEmpty()) {
+    uncheck();
+    QMessageBox::warning(
+        parentWidget(), tr("Passthrough Not Enabled"),
+        tr("Fluorine could not install the helper. The option has been left "
+           "off.\n\n%1")
             .arg(failure));
   }
 }

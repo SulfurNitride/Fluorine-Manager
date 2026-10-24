@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <climits>
 #include <cstdint>
@@ -285,6 +286,12 @@ void maybeLogCounters(Mo2FsContext* ctx)
                    ctx->opendir_count.load(std::memory_order_relaxed)),
                static_cast<unsigned long long>(
                    ctx->releasedir_count.load(std::memory_order_relaxed)));
+  std::fprintf(stderr, "[VFS] passthrough active=%d opens=%llu fallbacks=%llu\n",
+               ctx->passthrough_active.load(std::memory_order_relaxed) ? 1 : 0,
+               static_cast<unsigned long long>(
+                   ctx->passthrough_opens.load(std::memory_order_relaxed)),
+               static_cast<unsigned long long>(
+                   ctx->passthrough_fallbacks.load(std::memory_order_relaxed)));
   std::fprintf(stderr,
                "[VFS] io bytes_read=%llu bytes_written=%llu cow_writes=%llu\n",
                static_cast<unsigned long long>(
@@ -1857,6 +1864,22 @@ void mo2_init(void* userdata, struct fuse_conn_info* conn)
   }
 
   // Splice: reduce kernel↔userspace data copies for reads and writes.
+  if (ctx != nullptr && ctx->passthrough != nullptr) {
+    // Passthrough needs both the kernel capability and a running helper; either
+    // missing leaves every read on the normal userspace path.
+    const bool capable = fuseHasFeature(conn, FUSE_CAP_PASSTHROUGH);
+    if (capable && ctx->session != nullptr &&
+        ctx->passthrough->start(ctx->passthrough_helper_path,
+                                fuse_session_fd(ctx->session))) {
+      fuseRequestFeature(conn, FUSE_CAP_PASSTHROUGH);
+      ctx->passthrough_active.store(true, std::memory_order_release);
+    } else {
+      std::fprintf(stderr,
+                   "[VFS] passthrough unavailable (kernel_capable=%d); using "
+                   "normal reads\n",
+                   capable ? 1 : 0);
+    }
+  }
   if (fuseHasFeature(conn, FUSE_CAP_SPLICE_WRITE)) {
     fuseRequestFeature(conn, FUSE_CAP_SPLICE_WRITE);
   }
@@ -2362,6 +2385,64 @@ void mo2_readdirplus(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
   fuse_reply_buf(req, buf.data(), used);
 }
 
+// Plugins never use passthrough. Measured on a 1660-plugin Skyrim SE list with
+// kernel passthrough on, BSA archives, DDS textures and other loose assets all
+// ran fine, but with plugins (.esm/.esp/.esl) enabled Skyrim crashed about a
+// minute in, reproducibly, with no failing system call. The cause is not
+// understood. They are ~50 files read once at startup, so the speed gain is
+// negligible either way. FLUORINE_VFS_PASSTHROUGH_EXTS overrides this list for
+// diagnosis.
+static bool passthroughExtensionAllowed(const Mo2FsContext* ctx,
+                                        const std::string& path)
+{
+  const auto dot = path.find_last_of('.');
+  std::string ext =
+      dot == std::string::npos ? std::string() : path.substr(dot + 1);
+  for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+  if (ctx->passthrough_extensions.empty()) {
+    return ext != "esm" && ext != "esp" && ext != "esl";
+  }
+  for (const auto& allowed : ctx->passthrough_extensions) {
+    if (allowed == ext) return true;
+  }
+  return false;
+}
+
+// Registers the real file behind a read-only open with the kernel through the
+// privileged helper. Returns the backing id, or 0 to use the normal read path
+// (nothing is wrong in that case; passthrough is only an optimization).
+static int openPassthroughBacking(Mo2FsContext* ctx, const std::string& realPath,
+                           bool isBacking, uint64_t expectedSize)
+{
+  const int fd = (isBacking && ctx->backing_dir_fd >= 0)
+                     ? openat(ctx->backing_dir_fd, realPath.c_str(),
+                              O_RDONLY | O_CLOEXEC)
+                     : open(realPath.c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd < 0) {
+    return 0;
+  }
+
+  // The kernel will serve sizes and data from this file, so it must be the
+  // plain regular file the index describes.
+  struct stat st;
+  int id = 0;
+  if (fstat(fd, &st) == 0 && S_ISREG(st.st_mode) &&
+      static_cast<uint64_t>(st.st_size) == expectedSize) {
+    const int result = ctx->passthrough->open(fd);
+    if (result > 0) {
+      id = result;
+      ctx->passthrough_opens.fetch_add(1, std::memory_order_relaxed);
+    } else {
+      ctx->passthrough_fallbacks.fetch_add(1, std::memory_order_relaxed);
+    }
+  } else {
+    ctx->passthrough_fallbacks.fetch_add(1, std::memory_order_relaxed);
+  }
+  close(fd);
+  return id;
+}
+
 void mo2_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi)
 {
   Mo2FsContext* ctx = getContext(req);
@@ -2426,6 +2507,7 @@ void mo2_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi)
   // first read and retain a bounded LRU set. Wine probes many files it never
   // reads, while streamed files still get splice-friendly retained fds.
   int fd = -1;
+  int backingId = 0;
 
   if (writable) {
     if (tracePath) {
@@ -2550,6 +2632,19 @@ void mo2_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi)
     // files only to probe metadata, and retaining those fds can exhaust the
     // process limit on large modlists.
     fd = -1;
+
+    // Large archives and videos are streamed; let the kernel read the real
+    // file directly instead of bouncing every read through this process.
+    if (ctx->passthrough_active.load(std::memory_order_acquire) &&
+        !ctx->cache_disabled && snap.size >= ctx->passthrough_min_size &&
+        passthroughExtensionAllowed(ctx, path)) {
+      backingId = openPassthroughBacking(ctx, realPath, isBacking, snap.size);
+      if (ctx->passthrough_trace) {
+        std::fprintf(stderr, "[VFS] passthrough open path='%s' size=%llu id=%d\n",
+                     path.c_str(), static_cast<unsigned long long>(snap.size),
+                     backingId);
+      }
+    }
   }
 
   const uint64_t fh = ctx->next_fh.fetch_add(1, std::memory_order_relaxed);
@@ -2566,6 +2661,7 @@ void mo2_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi)
     of.content_dirty = truncateOnOpen && fd >= 0;
     of.virtual_size  = openSize;
     of.virtual_mtime = openMtime;
+    of.backing_id    = backingId;
     ctx->open_files[fh] = std::move(of);
   }
 
@@ -2575,6 +2671,12 @@ void mo2_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi)
   // dirty metadata to push (release still runs), so skip those round-trips.
   // Writable handles keep flush: it publishes size/mtime for still-open files.
   fi->noflush = (!writable && !ctx->cache_disabled) ? 1 : 0;
+  if (backingId > 0) {
+    // The kernel serves this handle's page cache from the backing file; it
+    // rejects a passthrough open that also asks to keep FUSE-side pages.
+    fi->backing_id = backingId;
+    fi->keep_cache = 0;
+  }
 
   fuse_reply_open(req, fi);
 }
@@ -3592,6 +3694,9 @@ void mo2_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi)
     if (it != ctx->open_files.end()) {
       if (it->second.fd >= 0) {
         close(it->second.fd);
+      }
+      if (it->second.backing_id > 0 && ctx->passthrough != nullptr) {
+        ctx->passthrough->close(it->second.backing_id);
       }
       ctx->open_files.erase(it);
     }

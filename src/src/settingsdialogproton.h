@@ -36,6 +36,7 @@ private:
   void onDownloadSLR();
   void onFuseAllowOtherClicked(bool checked);
   void onFuseIoUringClicked(bool checked);
+  void onFusePassthroughClicked(bool checked);
 
   static QString ensureWinetricks();
   static QString findProtonWine(const QString& protonPath);

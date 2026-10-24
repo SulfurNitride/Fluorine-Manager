@@ -13,6 +13,10 @@ inline constexpr auto kFuseAllowOtherSetting = "fluorine/fuse_allow_other";
 inline constexpr auto kFuseCaseInsensitiveHintSetting = "fluorine/fuse_case_insensitive_hint";
 // Per-instance. Off by default: needs the fuse.enable_uring kernel parameter.
 inline constexpr auto kFuseIoUringSetting = "fluorine/fuse_io_uring";
+// Per-instance. Off by default: needs the privileged helper installed once
+// (Settings > Proton/Wine). Large read-only files are then read by the kernel
+// straight from the real file instead of through this process.
+inline constexpr auto kFusePassthroughSetting = "fluorine/fuse_passthrough";
 inline constexpr auto kFuseIoUringKernelParameter =
     "/sys/module/fuse/parameters/enable_uring";
 

@@ -1941,6 +1941,16 @@
                   </widget>
                  </item>
                  <item>
+                  <widget class="QCheckBox" name="fusePassthroughCheckBox">
+                   <property name="text">
+                    <string>Kernel passthrough for large files (needs one-time admin setup)</string>
+                   </property>
+                   <property name="toolTip">
+                    <string>Large read-only files such as BA2 archives are read by the kernel straight from the real file instead of through Fluorine, which roughly triples streaming speed in tests. The kernel only allows this for a process with administrator rights, so enabling it offers a one-time authenticated install of a small helper program. Only that helper holds the extra permission; Fluorine does not. Files that cannot use it fall back to normal reads. Applies to the next mount. Does not affect USVFS launches.</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
                   <widget class="QLabel" name="cacheScopeNote">
                    <property name="wordWrap">
                     <bool>true</bool>

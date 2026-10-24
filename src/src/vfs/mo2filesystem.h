@@ -4,6 +4,7 @@
 #include <fuse3/fuse_lowlevel.h>
 
 #include "archiveindex.h"
+#include "fusepassthrough.h"
 #include "inodetable.h"
 #include "overwritemanager.h"
 #include "runtimeindex.h"
@@ -96,6 +97,9 @@ struct Mo2FsContext
     bool content_dirty = false;
     uint64_t virtual_size = 0;
     std::chrono::system_clock::time_point virtual_mtime;
+    // FUSE passthrough backing id (0 = none). Reads of this handle never reach
+    // userspace; the id is returned to the helper on release.
+    int backing_id = 0;
   };
 
   std::unordered_map<uint64_t, OpenFile> open_files;
@@ -278,6 +282,21 @@ struct Mo2FsContext
   // Not meant to stay on by default — see the June 2026 shader-cache/INI-
   // clobber fix for why keep_cache=1 exists normally.
   bool cache_disabled = false;
+
+  // Kernel passthrough for large read-only files. `passthrough` is set before
+  // mounting when the user enabled it and the privileged helper is ready; it
+  // stays null otherwise. `passthrough_active` is true once init negotiated
+  // the capability and the helper started.
+  std::shared_ptr<fusepassthrough::Helper> passthrough;
+  std::string passthrough_helper_path;
+  uint64_t passthrough_min_size = fusepassthrough::kDefaultMinFileSize;
+  // Diagnostics (FLUORINE_VFS_PASSTHROUGH_EXTS=bsa,esm limits passthrough to
+  // those extensions; FLUORINE_VFS_TRACE_PASSTHROUGH logs each registered file).
+  std::vector<std::string> passthrough_extensions;
+  bool passthrough_trace = false;
+  std::atomic<bool> passthrough_active{false};
+  std::atomic<uint64_t> passthrough_opens{0};
+  std::atomic<uint64_t> passthrough_fallbacks{0};
   bool no_opendir_supported = false;
   bool disable_no_opendir = false;
   bool readdirplus_enabled = false;

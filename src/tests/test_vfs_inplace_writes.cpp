@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <linux/fs.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -19,6 +20,7 @@
 #include <iterator>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -102,6 +104,10 @@ public:
   const fs::path& mountPoint() const { return m_mount; }
   // Applied by mount(); set before calling it.
   bool advertiseCaseInsensitive = false;
+  // Path of a fluorine-fuse-helper to enable kernel passthrough with; files of
+  // at least passthroughMinSize use it.
+  std::string passthroughHelper;
+  uint64_t passthroughMinSize = 1;
   Mo2FsContext* context() const { return m_ctx.get(); }
   bool valid() const { return !m_root.empty(); }
 
@@ -144,6 +150,11 @@ public:
     m_ctx->uid = ::getuid();
     m_ctx->gid = ::getgid();
     m_ctx->advertise_case_insensitive = advertiseCaseInsensitive;
+    if (!passthroughHelper.empty()) {
+      m_ctx->passthrough = std::make_shared<fusepassthrough::Helper>();
+      m_ctx->passthrough_helper_path = passthroughHelper;
+      m_ctx->passthrough_min_size    = passthroughMinSize;
+    }
     mo2PrewarmLookupIndex(m_ctx.get());
 
     fuse_lowlevel_ops ops {};
@@ -477,4 +488,164 @@ TEST(VfsNoFlush, ReadOnlyHandlesSkipFlushButWritableHandlesKeepIt)
   EXPECT_GE(flushes(), 1u);
   vfs.unmount();
   EXPECT_EQ(readText(vfs.modA() / "a.ini"), "Zbc");
+}
+
+// ---------------------------------------------------------------------------
+// Kernel passthrough
+// ---------------------------------------------------------------------------
+
+TEST(FusePassthroughHelper, StatusReflectsInstallState)
+{
+  char tmpl[] = "/tmp/fluorine-passthrough-status-XXXXXX";
+  ASSERT_NE(mkdtemp(tmpl), nullptr);
+  const fs::path dir = tmpl;
+  const std::string missing = (dir / "missing").string();
+  const std::string installed = (dir / "installed").string();
+  const std::string bundled   = (dir / "bundled").string();
+
+  using fusepassthrough::HelperStatus;
+  EXPECT_EQ(fusepassthrough::helperStatus(missing, ""), HelperStatus::NotInstalled);
+
+  writeText(installed, "helper v1");
+  // A plain file never carries the capability xattr.
+  EXPECT_EQ(fusepassthrough::helperStatus(installed, ""),
+            HelperStatus::MissingCapability);
+
+  writeText(bundled, "helper v2");
+  EXPECT_EQ(fusepassthrough::helperStatus(installed, bundled),
+            HelperStatus::Outdated);
+
+  std::error_code ec;
+  fs::remove_all(dir, ec);
+}
+
+TEST(FusePassthroughHelper, ClientSpeaksTheHelperProtocol)
+{
+  int pair[2];
+  ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair), 0);
+
+  struct Seen
+  {
+    uint32_t op = 0;
+    uint32_t backingId = 0;
+    int fdCount = 0;
+  };
+  std::vector<Seen> seen;
+  std::thread fake([&, sock = pair[1]] {
+    int nextId = 7;
+    for (;;) {
+      uint32_t request[2] = {};
+      struct iovec iov{request, sizeof(request)};
+      char control[CMSG_SPACE(sizeof(int) * 2)];
+      struct msghdr msg{};
+      msg.msg_iov        = &iov;
+      msg.msg_iovlen     = 1;
+      msg.msg_control    = control;
+      msg.msg_controllen = sizeof(control);
+      const ssize_t n = recvmsg(sock, &msg, 0);
+      if (n != static_cast<ssize_t>(sizeof(request))) break;  // EOF
+      Seen entry;
+      entry.op = request[0];
+      entry.backingId = request[1];
+      for (cmsghdr* c = CMSG_FIRSTHDR(&msg); c; c = CMSG_NXTHDR(&msg, c)) {
+        if (c->cmsg_type != SCM_RIGHTS) continue;
+        const int count = static_cast<int>((c->cmsg_len - CMSG_LEN(0)) / sizeof(int));
+        for (int i = 0; i < count; ++i) close(reinterpret_cast<int*>(CMSG_DATA(c))[i]);
+        entry.fdCount = count;
+      }
+      seen.push_back(entry);
+      const int32_t result = entry.op == 1 ? nextId++ : (entry.backingId == 7 ? 0 : -EINVAL);
+      send(sock, &result, sizeof(result), 0);
+    }
+    close(sock);
+  });
+
+  {
+    fusepassthrough::Helper helper;
+    int devnull = ::open("/dev/null", O_RDONLY);
+    int backing = ::open("/dev/null", O_RDONLY);
+    ASSERT_TRUE(helper.attach(pair[0], devnull));
+    EXPECT_EQ(helper.open(backing), 7);
+    EXPECT_EQ(helper.open(backing), 8);
+    helper.close(7);
+    helper.stop();
+    EXPECT_FALSE(helper.running());
+    EXPECT_EQ(helper.open(backing), -ENODEV);
+    ::close(devnull);
+    ::close(backing);
+  }
+  fake.join();
+
+  ASSERT_EQ(seen.size(), 3u);
+  EXPECT_EQ(seen[0].op, 1u);
+  EXPECT_EQ(seen[0].fdCount, 2);
+  EXPECT_EQ(seen[2].op, 2u);
+  EXPECT_EQ(seen[2].backingId, 7u);
+  EXPECT_EQ(seen[2].fdCount, 1);
+}
+
+TEST(VfsPassthrough, MissingHelperFallsBackToNormalReads)
+{
+  MountedVfs vfs;
+  ASSERT_TRUE(vfs.valid());
+  vfs.passthroughHelper = "/nonexistent/fluorine-fuse-helper";
+  writeText(vfs.modA() / "big.bin", std::string(64 * 1024, 'x'));
+  vfs.addModFile(vfs.modA() / "big.bin", "big.bin");
+  MOUNT_OR_SKIP(vfs);
+
+  EXPECT_EQ(readText(vfs.mountPoint() / "big.bin").size(), 64u * 1024);
+  EXPECT_FALSE(vfs.context()->passthrough_active.load());
+  EXPECT_EQ(vfs.context()->passthrough_opens.load(), 0u);
+  vfs.unmount();
+}
+
+// Needs a helper that holds CAP_SYS_ADMIN (installed through Settings, or built
+// and `setcap`ed by hand) and a kernel with FUSE passthrough:
+//   FLUORINE_TEST_PASSTHROUGH_HELPER=/path/to/fluorine-fuse-helper
+TEST(VfsPassthrough, LargeReadOnlyFilesBypassUserspace)
+{
+  const char* helper = std::getenv("FLUORINE_TEST_PASSTHROUGH_HELPER");
+  if (helper == nullptr) GTEST_SKIP() << "FLUORINE_TEST_PASSTHROUGH_HELPER not set";
+
+  MountedVfs vfs;
+  ASSERT_TRUE(vfs.valid());
+  vfs.passthroughHelper  = helper;
+  vfs.passthroughMinSize = 1024 * 1024;
+
+  std::string big(6 * 1024 * 1024, '\0');
+  for (size_t i = 0; i < big.size(); ++i) big[i] = static_cast<char>((i * 31 + i / 4096) & 0xff);
+  writeText(vfs.modA() / "big.bin", big);
+  writeText(vfs.modA() / "small.txt", "tiny");
+  writeText(vfs.modA() / "Big.ESP", std::string(2 * 1024 * 1024, 'p'));
+  vfs.addModFile(vfs.modA() / "Big.ESP", "Big.ESP");
+  vfs.addModFile(vfs.modA() / "big.bin", "big.bin");
+  vfs.addModFile(vfs.modA() / "small.txt", "small.txt");
+  MOUNT_OR_SKIP(vfs);
+  // Capabilities are negotiated when the first request is served.
+  struct stat rootStat {};
+  ASSERT_EQ(stat(vfs.mountPoint().c_str(), &rootStat), 0);
+  if (!vfs.context()->passthrough_active.load()) {
+    GTEST_SKIP() << "kernel or helper did not enable passthrough";
+  }
+
+  const auto reads = [&] { return vfs.context()->read_count.load(); };
+  EXPECT_EQ(readText(vfs.mountPoint() / "small.txt"), "tiny");
+  const uint64_t readsAfterSmall = reads();
+  EXPECT_GE(readsAfterSmall, 1u);  // small files still go through userspace
+
+  // Plugins are large enough but deliberately stay on the normal path.
+  EXPECT_EQ(readText(vfs.mountPoint() / "Big.ESP").size(), 2u * 1024 * 1024);
+  EXPECT_EQ(vfs.context()->passthrough_opens.load(), 0u);
+  const uint64_t readsAfterPlugin = reads();
+  EXPECT_GT(readsAfterPlugin, readsAfterSmall);
+
+  EXPECT_EQ(readText(vfs.mountPoint() / "big.bin"), big);
+  EXPECT_EQ(vfs.context()->passthrough_opens.load(), 1u);
+  EXPECT_EQ(reads(), readsAfterPlugin) << "reads of a passthrough file reached userspace";
+
+  // A write open of the same file must not use passthrough.
+  ASSERT_TRUE(writeFd(vfs.mountPoint() / "big.bin", O_WRONLY, "Z"));
+  EXPECT_EQ(vfs.context()->passthrough_opens.load(), 1u);
+  vfs.unmount();
+  EXPECT_EQ(readText(vfs.modA() / "big.bin").substr(0, 1), "Z");
 }

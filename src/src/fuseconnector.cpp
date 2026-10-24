@@ -1,5 +1,6 @@
 #include "fuseconnector.h"
 #include "fusemountoptions.h"
+#include "vfs/fusepassthrough.h"
 
 #include "memorydiagnostics.h"
 #include "mountpathutils.h"
@@ -33,6 +34,7 @@
 #include <iplugingame.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cerrno>
 #include <cstdio>
@@ -935,6 +937,42 @@ bool FuseConnector::mount(
   m_context->advertise_case_insensitive =
       instanceSettings.value(kFuseCaseInsensitiveHintSetting, true).toBool() &&
       std::getenv("FLUORINE_VFS_DISABLE_CASE_INSENSITIVE_HINT") == nullptr;
+  if (instanceSettings.value(kFusePassthroughSetting, false).toBool()) {
+    const std::string bundled =
+        (QCoreApplication::applicationDirPath() + "/fluorine-fuse-helper")
+            .toStdString();
+    const auto status =
+        fusepassthrough::helperStatus(fusepassthrough::kInstalledHelperPath, bundled);
+    if (status == fusepassthrough::HelperStatus::Ready) {
+      m_context->passthrough             = std::make_shared<fusepassthrough::Helper>();
+      m_context->passthrough_helper_path = fusepassthrough::kInstalledHelperPath;
+      m_context->passthrough_trace =
+          std::getenv("FLUORINE_VFS_TRACE_PASSTHROUGH") != nullptr;
+      if (const char* minSize = std::getenv("FLUORINE_VFS_PASSTHROUGH_MIN_SIZE")) {
+        m_context->passthrough_min_size = std::strtoull(minSize, nullptr, 10);
+      }
+      if (const char* exts = std::getenv("FLUORINE_VFS_PASSTHROUGH_EXTS")) {
+        std::string current;
+        for (const char* c = exts;; ++c) {
+          if (*c == ',' || *c == '\0') {
+            if (!current.empty()) m_context->passthrough_extensions.push_back(current);
+            current.clear();
+            if (*c == '\0') break;
+          } else {
+            current.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(*c))));
+          }
+        }
+      }
+    } else {
+      log::warn("VFS passthrough is enabled but its helper is not ready ({}); "
+                "using normal reads. Run the setup again from Settings.",
+                status == fusepassthrough::HelperStatus::NotInstalled
+                    ? "not installed"
+                    : status == fusepassthrough::HelperStatus::Outdated
+                          ? "outdated"
+                          : "missing capability");
+    }
+  }
   m_context->auto_create_dirs      = m_autoCreateDirs;
   const auto indexStart = std::chrono::steady_clock::now();
   const std::size_t prewarmed = mo2PrewarmLookupIndex(m_context.get());
@@ -1075,6 +1113,10 @@ void FuseConnector::unmount()
 
   if (m_fuseThread.joinable()) {
     m_fuseThread.join();
+  }
+
+  if (m_context != nullptr && m_context->passthrough != nullptr) {
+    m_context->passthrough->stop();
   }
 
   if (m_context != nullptr) {
