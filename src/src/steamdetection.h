@@ -5,6 +5,9 @@
 #include <QStringList>
 #include <QVector>
 
+/// Oldest Proton major version Fluorine supports.
+constexpr int kMinimumSupportedProtonMajor = 11;
+
 /// Information about an installed Proton version.
 struct SteamProtonInfo {
   QString name;
@@ -31,12 +34,20 @@ __attribute__((visibility("default"))) QStringList findSteamLibraryPaths();
 
 /// Find supported Proton versions in explicit Steam libraries and additional
 /// compatibility-tool directories. Exposed separately for deterministic tests.
+/// Versions older than kMinimumSupportedProtonMajor are dropped unless
+/// `allowUnsupported` is set.
 __attribute__((visibility("default"))) QVector<SteamProtonInfo>
 findProtonsForPaths(const QStringList& steamLibraries,
-                    const QStringList& compatibilityToolDirs);
+                    const QStringList& compatibilityToolDirs,
+                    bool allowUnsupported = false);
+
+/// True if the Proton is at least kMinimumSupportedProtonMajor (or unversioned).
+__attribute__((visibility("default"))) bool
+isSupportedProton(const SteamProtonInfo& proton);
 
 /// Find all installed Proton versions, including Steam, system, and Heroic
-/// installations (Proton 10+ only, sorted newest first).
-__attribute__((visibility("default"))) QVector<SteamProtonInfo> findSteamProtons();
+/// installations (sorted newest first).
+__attribute__((visibility("default"))) QVector<SteamProtonInfo>
+findSteamProtons(bool allowUnsupported = false);
 
 #endif // STEAMDETECTION_H

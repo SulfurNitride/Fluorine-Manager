@@ -71,3 +71,39 @@ TEST_F(ProtonDetection, DeduplicatesCanonicalRunnerPaths)
 
   ASSERT_EQ(protons.size(), 1);
 }
+
+TEST_F(ProtonDetection, HidesProtonOlderThanElevenUnlessAllowed)
+{
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+
+  for (const char* name : {"GE-Proton10-34", "GE-Proton11-7"}) {
+    const QString runner = QDir(temporary.path()).filePath(name);
+    createFile(QDir(runner).filePath("proton"));
+    createFile(QDir(runner).filePath("files/bin/wine"));
+  }
+
+  const QVector<SteamProtonInfo> supported =
+      findProtonsForPaths({}, {temporary.path()});
+  ASSERT_EQ(supported.size(), 1);
+  EXPECT_EQ(supported[0].name, QStringLiteral("GE-Proton11-7"));
+
+  const QVector<SteamProtonInfo> all =
+      findProtonsForPaths({}, {temporary.path()}, true);
+  EXPECT_EQ(all.size(), 2);
+}
+
+TEST_F(ProtonDetection, IsSupportedProtonChecksMajorVersion)
+{
+  auto named = [](const char* name) {
+    SteamProtonInfo info;
+    info.name = QString::fromLatin1(name);
+    return info;
+  };
+
+  EXPECT_FALSE(isSupportedProton(named("GE-Proton10-34")));
+  EXPECT_FALSE(isSupportedProton(named("Proton 10.0")));
+  EXPECT_TRUE(isSupportedProton(named("GE-Proton11-7")));
+  EXPECT_TRUE(isSupportedProton(named("Proton 11.0")));
+  EXPECT_TRUE(isSupportedProton(named("GE-Proton-latest")));
+}

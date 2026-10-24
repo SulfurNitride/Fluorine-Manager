@@ -33,6 +33,7 @@ private:
   void onWinetricks();
   void onBrowsePrefixLocation();
   void onCustomPrefixLocationClicked(bool checked);
+  void onAllowUnsupportedProtonClicked(bool checked);
   void onDownloadSLR();
   void onFuseAllowOtherClicked(bool checked);
   void onFuseIoUringClicked(bool checked);

@@ -46,6 +46,8 @@ namespace
 {
 std::atomic<ProtonSettingsTab*> g_activeInstallTab = nullptr;
 
+constexpr auto kAllowUnsupportedProtonSetting = "fluorine/allow_unsupported_proton";
+
 QString defaultPrefixLocation()
 {
   return fluorineDataDir() + "/Prefix";
@@ -104,6 +106,11 @@ ProtonSettingsTab::ProtonSettingsTab(Settings& s, SettingsDialog& d)
   ui->usvfsSharedContextCheckBox->setChecked(
       instanceSettings.value(kUsvfsSharedContextSetting, false).toBool());
 
+  ui->allowUnsupportedProtonCheckBox->setChecked(
+      QSettings().value(kAllowUnsupportedProtonSetting, false).toBool());
+  QObject::connect(ui->allowUnsupportedProtonCheckBox, &QCheckBox::clicked, this,
+                   &ProtonSettingsTab::onAllowUnsupportedProtonClicked);
+
   populateProtons();
 
   QObject::connect(ui->createPrefixButton, &QPushButton::clicked, this,
@@ -156,6 +163,8 @@ void ProtonSettingsTab::update()
                               "Check that its configuration folder is writable."));
     }
   }
+  QSettings().setValue(kAllowUnsupportedProtonSetting,
+                       ui->allowUnsupportedProtonCheckBox->isChecked());
   QSettings().setValue("fluorine/launch_wrapper", ui->launchWrapperEdit->text());
   QSettings().setValue("fluorine/disable_vfs_cache",
                        ui->disableVfsCacheCheckBox->isChecked());
@@ -493,7 +502,8 @@ void ProtonSettingsTab::populateProtons()
   ui->runtimeSetupNote->setText(tr("Proton is shared across your library."));
   ui->protonVersionCombo->clear();
 
-  const auto protonList = findSteamProtons();
+  const auto protonList =
+      findSteamProtons(ui->allowUnsupportedProtonCheckBox->isChecked());
 
   for (int i = 0; i < protonList.size(); ++i) {
     const SteamProtonInfo& proton = protonList[i];
@@ -524,6 +534,50 @@ void ProtonSettingsTab::populateProtons()
       ui->runtimeSetupNote->setText(
           tr("The saved Proton version is unavailable. Choose a replacement and select Save."));
     }
+  }
+
+  SteamProtonInfo selected;
+  selected.name = ui->protonVersionCombo->currentText().trimmed();
+  if (!selected.name.isEmpty() && !isSupportedProton(selected)) {
+    ui->runtimeSetupNote->setText(
+        tr("This Proton version is unsupported. Fluorine requires Proton %1 or "
+           "newer and provides no support for older versions.")
+            .arg(kMinimumSupportedProtonMajor));
+  }
+}
+
+void ProtonSettingsTab::onAllowUnsupportedProtonClicked(bool checked)
+{
+  if (checked) {
+    QMessageBox box(QMessageBox::Warning, tr("Unsupported Proton Versions"),
+                    tr("Fluorine requires Proton %1 or newer. Older versions can "
+                       "break audio, prefix setup and other features.\n\n"
+                       "If you pick one, no support will be provided for any "
+                       "problem unless you first switch to a supported version and "
+                       "the problem still occurs.\n\n"
+                       "Do you read and understand this, and want to continue?")
+                        .arg(kMinimumSupportedProtonMajor),
+                    QMessageBox::NoButton, parentWidget());
+    QPushButton* accept =
+        box.addButton(tr("I Understand"), QMessageBox::AcceptRole);
+    QPushButton* cancel = box.addButton(QMessageBox::Cancel);
+    box.setDefaultButton(cancel);
+    box.exec();
+
+    if (box.clickedButton() != accept) {
+      ui->allowUnsupportedProtonCheckBox->setChecked(false);
+      return;
+    }
+  }
+
+  // Keep the current selection across the list change when it is still offered.
+  const QString currentPath =
+      ui->protonVersionCombo->currentData(Qt::UserRole + 1).toString();
+  populateProtons();
+  if (const int idx =
+          ui->protonVersionCombo->findData(currentPath, Qt::UserRole + 1);
+      idx >= 0) {
+    ui->protonVersionCombo->setCurrentIndex(idx);
   }
 }
 

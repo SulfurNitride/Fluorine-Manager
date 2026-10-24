@@ -112,8 +112,8 @@ QStringList findSteamLibraryPaths()
 
 namespace {
 
-/// Check if a Proton version is 10 or newer.
-bool isProton10OrNewer(const SteamProtonInfo& p)
+/// Check if a Proton version is at least `minMajor`. Unparseable names pass.
+bool isProtonAtLeast(const SteamProtonInfo& p, int minMajor)
 {
   if (p.is_experimental || p.name.contains(QStringLiteral("Experimental")))
     return true;
@@ -133,15 +133,15 @@ bool isProton10OrNewer(const SteamProtonInfo& p)
 
   if (p.name.startsWith(QStringLiteral("GE-Proton"))) {
     int v = extractMajor(p.name.mid(9), '-');
-    return v < 0 || v >= 10;
+    return v < 0 || v >= minMajor;
   }
   if (p.name.startsWith(QStringLiteral("Proton "))) {
     int v = extractMajor(p.name.mid(7), '.');
-    return v < 0 || v >= 10;
+    return v < 0 || v >= minMajor;
   }
   if (p.name.startsWith(QStringLiteral("EM-"))) {
     int v = extractMajor(p.name.mid(3), '.');
-    return v < 0 || v >= 10;
+    return v < 0 || v >= minMajor;
   }
 
   return true;  // unknown format — allow
@@ -191,7 +191,7 @@ void scanProtonDir(const QString& dir, bool isSteamBuiltin,
 
 QVector<SteamProtonInfo>
 findProtonsForPaths(const QStringList& steamLibraries,
-                    const QStringList& compatibilityToolDirs)
+                    const QStringList& compatibilityToolDirs, bool allowUnsupported)
 {
   QVector<SteamProtonInfo> protons;
 
@@ -219,10 +219,13 @@ findProtonsForPaths(const QStringList& steamLibraries,
     scanProtonDir(directory, false, protons);
   }
 
-  // Filter to Proton 10+.
+  // Filter to supported Proton versions (runtimes are always dropped).
+  const int minMajor = allowUnsupported ? 0 : kMinimumSupportedProtonMajor;
   protons.erase(
       std::remove_if(protons.begin(), protons.end(),
-                     [](const SteamProtonInfo& p) { return !isProton10OrNewer(p); }),
+                     [minMajor](const SteamProtonInfo& p) {
+                       return !isProtonAtLeast(p, minMajor);
+                     }),
       protons.end());
 
   // Filter to Protons with valid wine binaries.
@@ -279,7 +282,12 @@ findProtonsForPaths(const QStringList& steamLibraries,
   return protons;
 }
 
-QVector<SteamProtonInfo> findSteamProtons()
+bool isSupportedProton(const SteamProtonInfo& proton)
+{
+  return isProtonAtLeast(proton, kMinimumSupportedProtonMajor);
+}
+
+QVector<SteamProtonInfo> findSteamProtons(bool allowUnsupported)
 {
   const QString home = QDir::homePath();
   const QStringList compatibilityToolDirs = {
@@ -291,5 +299,6 @@ QVector<SteamProtonInfo> findSteamProtons()
 
   // Do not require Steam to be installed: Heroic and system Proton runners
   // are valid inputs for Fluorine's direct Proton launcher.
-  return findProtonsForPaths(findSteamLibraryPaths(), compatibilityToolDirs);
+  return findProtonsForPaths(findSteamLibraryPaths(), compatibilityToolDirs,
+                             allowUnsupported);
 }
