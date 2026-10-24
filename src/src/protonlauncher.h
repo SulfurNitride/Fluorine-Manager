@@ -60,8 +60,11 @@ private:
 public:
   // Default for the per-instance "Steam DRM" option when the user has not set
   // it: only games installed in a Steam library need the Steam bridge. GOG,
-  // Epic and other installs must not start (or wait for) Steam.
-  static bool defaultSteamDrmForGame(const QString& gameDirectory);
+  // Epic and other installs must not start (or wait for) Steam. A Steam
+  // edition instance keeps it on even when the files were copied out of the
+  // Steam library, because those executables still validate against Steam.
+  static bool defaultSteamDrmForGame(const QString& gameDirectory,
+                                     const QString& storeVariant = {});
 
 private:
 

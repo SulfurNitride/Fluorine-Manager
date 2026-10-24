@@ -1003,6 +1003,28 @@ TEST(NativeLaunchLifecycle, PluginTokenFollowsChildAfterDelayedLauncherHandoff)
   EXPECT_TRUE(QFileInfo::exists(finishedPath));
 }
 
+TEST(ProtonLauncherSteamDrm, DefaultsOnlyForSteamInstalls)
+{
+  QTemporaryDir plain;
+  ASSERT_TRUE(plain.isValid());
+
+  EXPECT_TRUE(ProtonLauncher::defaultSteamDrmForGame(QString()));
+  EXPECT_FALSE(ProtonLauncher::defaultSteamDrmForGame(plain.path()));
+  EXPECT_FALSE(ProtonLauncher::defaultSteamDrmForGame(plain.path(), "GOG"));
+  EXPECT_TRUE(ProtonLauncher::defaultSteamDrmForGame(
+      "/home/u/.local/share/Steam/steamapps/common/Skyrim Special Edition"));
+
+  // A Steam edition instance keeps the bridge even when its files were copied
+  // out of the Steam library (Stock Game, Game Root).
+  EXPECT_TRUE(ProtonLauncher::defaultSteamDrmForGame(plain.path(), "Steam"));
+  EXPECT_TRUE(ProtonLauncher::defaultSteamDrmForGame(plain.path(), "steam"));
+
+  QFile appId(QDir(plain.path()).filePath("steam_appid.txt"));
+  ASSERT_TRUE(appId.open(QIODevice::WriteOnly));
+  appId.close();
+  EXPECT_TRUE(ProtonLauncher::defaultSteamDrmForGame(plain.path()));
+}
+
 int main(int argc, char** argv)
 {
   QCoreApplication app(argc, argv);

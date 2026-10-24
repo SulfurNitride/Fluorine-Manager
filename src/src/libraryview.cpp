@@ -1286,7 +1286,9 @@ void LibraryView::fillData(const Instance& ii)
     setup.steamDrm =
         settings
             .value("fluorine/steam_drm",
-                   ProtonLauncher::defaultSteamDrmForGame(ii.gameDirectory()))
+                   ProtonLauncher::defaultSteamDrmForGame(
+                       ii.gameDirectory(),
+                       settings.value("game_edition").toString().trimmed()))
             .toBool();
     setup.rootBuilder = settings.value("fluorine/vfs_root_builder", true).toBool();
   }

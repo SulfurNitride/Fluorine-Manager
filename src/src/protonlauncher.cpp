@@ -1199,8 +1199,12 @@ bool ProtonLauncher::launchDirect(env::NativeProcess& process) const
                       /*forwardAllChannels=*/true);
 }
 
-bool ProtonLauncher::defaultSteamDrmForGame(const QString& gameDirectory)
+bool ProtonLauncher::defaultSteamDrmForGame(const QString& gameDirectory,
+                                            const QString& storeVariant)
 {
+  if (storeVariant.compare(QStringLiteral("Steam"), Qt::CaseInsensitive) == 0) {
+    return true;
+  }
   if (gameDirectory.isEmpty()) {
     return true;  // unknown install: keep the historical behavior
   }
