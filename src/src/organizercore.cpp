@@ -2848,7 +2848,8 @@ bool OrganizerCore::beforeRun(
     const QString& profileName, const QString& customOverwrite,
     const QList<MOBase::ExecutableForcedLoadSetting>& forcedLibraries,
     bool useProton, QString* usvfsRequestPath,
-    QString* saveBindMountSource, QString* saveBindMountTarget)
+    QString* saveBindMountSource, QString* saveBindMountTarget,
+    QString* usvfsLogPath)
 {
   saveCurrentProfile();
   {
@@ -2869,6 +2870,7 @@ bool OrganizerCore::beforeRun(
   if (saveBindMountSource) saveBindMountSource->clear();
   if (saveBindMountTarget) saveBindMountTarget->clear();
   if (usvfsRequestPath) usvfsRequestPath->clear();
+  if (usvfsLogPath) usvfsLogPath->clear();
 
   // need to wait until directory structure is ready
   if (m_DirectoryUpdate) {
@@ -3110,6 +3112,10 @@ bool OrganizerCore::beforeRun(
         }
       }
       *usvfsRequestPath = request.path;
+      // The Wine-side helper opens this path as its first action, before it
+      // reads the request, so every failure message ends up in the same file
+      // as the normal launch diagnostics.
+      if (usvfsLogPath) *usvfsLogPath = requestOptions.logPath;
       log::info("beforeRun: using Wine/Proton USVFS backend (instance='{}', "
                 "request='{}', mappings={})",
                 request.instanceName, request.path, mappings.size());

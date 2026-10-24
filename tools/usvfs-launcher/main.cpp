@@ -378,6 +378,20 @@ void writeLog(std::ofstream& log, const std::string& message)
   }
 }
 
+// Open a diagnostic log before any work that can fail, so failure messages
+// are recorded in the same file as the normal launch output. Creating the
+// parent directory throws like it always did; an unopenable stream is simply
+// reported by `log` testing false in writeLog().
+void openLogFile(std::ofstream& log, const std::filesystem::path& path)
+{
+  if (path.empty() || log.is_open()) return;
+  const std::filesystem::path parent = path.parent_path();
+  if (!parent.empty()) {
+    std::filesystem::create_directories(parent);
+  }
+  log.open(path, std::ios::app);
+}
+
 long long elapsedMilliseconds(Clock::time_point start,
                               Clock::time_point end = Clock::now())
 {
@@ -441,24 +455,27 @@ int wmain(int argc, wchar_t** argv)
     }
   }
 
-  if (argc != 2) {
-    std::cerr << "usage: fluorine-usvfs-launcher.exe <request-file>|--self-test\n";
+  if (argc != 2 && argc != 3) {
+    std::cerr << "usage: fluorine-usvfs-launcher.exe <request-file> "
+                 "[log-file]|--self-test\n";
     return 2;
   }
 
   const auto helperStartedAt = Clock::now();
   const std::filesystem::path requestPath(argv[1]);
+  std::ofstream log;
   try {
+    // The log path Fluorine passes out-of-band is usable before the request
+    // can be read, so request-read failures land in the log instead of only
+    // on a console the helper may not have.
+    if (argc == 3) openLogFile(log, std::filesystem::path(argv[2]));
+
     Request request = readRequest(requestPath);
     const auto requestParsedAt = Clock::now();
     DeleteFileW(requestPath.c_str());
 
-    std::ofstream log;
-    if (!request.logPath.empty()) {
-      std::filesystem::create_directories(
-          std::filesystem::path(request.logPath).parent_path());
-      log.open(std::filesystem::path(request.logPath), std::ios::app);
-    }
+    // Fall back to the path embedded in the request when none was supplied.
+    openLogFile(log, std::filesystem::path(request.logPath));
     writeBenchmark(log, "request_parse", helperStartedAt, requestParsedAt,
                    "mappings=" + std::to_string(request.mappings.size()));
 
@@ -594,8 +611,11 @@ int wmain(int argc, wchar_t** argv)
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     PROCESS_INFORMATION process{};
+    // The helper is a Windows-GUI-subsystem binary and therefore owns no
+    // console. Without this a console-subsystem target would be handed a new
+    // console window of its own.
     if (!api.createHooked(nullptr, mutableCommand.data(), nullptr, nullptr, FALSE,
-                          CREATE_BREAKAWAY_FROM_JOB, nullptr,
+                          CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW, nullptr,
                           request.cwd.empty() ? nullptr : request.cwd.c_str(),
                           &startup, &process)) {
       throw std::runtime_error("usvfsCreateProcessHooked failed with Windows error " +
@@ -672,7 +692,9 @@ int wmain(int argc, wchar_t** argv)
                    "exit_code=" + std::to_string(exitCode));
     return static_cast<int>(exitCode);
   } catch (const std::exception& error) {
-    std::cerr << "Fluorine USVFS helper: " << error.what() << '\n';
+    // Same text as before, but also into the log: this is the only place
+    // request-read and runtime failures are reported.
+    writeLog(log, std::string("Fluorine USVFS helper: ") + error.what());
     DeleteFileW(requestPath.c_str());
     return 1;
   }
