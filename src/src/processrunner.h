@@ -93,6 +93,10 @@ public:
                                       UILocker::Reasons reason = UILocker::LockUI);
   ProcessRunner& setHooked(bool b);
 
+  // waits for the process without the lock dialog; Steam can stop it with a
+  // signal
+  ProcessRunner& setHeadless(bool headless);
+
   // - if the target is an executable file, runs it hooked
   // - if the target is a file:
   //     - if forceHook is false, opens it with the desktop service
@@ -160,6 +164,7 @@ private:
   env::NativeProcess m_process;
   std::optional<QStringList> m_attachedExpectedExecutables;
   int m_exitCode = -1;
+  bool m_headless = false;
 
   bool shouldRunShell() const;
   bool shouldRefresh(Results r) const;

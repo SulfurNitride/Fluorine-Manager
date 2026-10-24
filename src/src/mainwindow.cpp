@@ -36,6 +36,9 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "downloadstab.h"
 #include "editexecutablesdialog.h"
 #include "envshortcut.h"
+#include "steamcef.h"
+#include "steamlaunchoption.h"
+#include "steamlaunchoptions.h"
 #include "eventfilter.h"
 #include "executableinfo.h"
 #include "executableslist.h"
@@ -432,6 +435,12 @@ MainWindow::MainWindow(Settings& settings, OrganizerCore& organizerCore,
   m_LinkStartMenu = linkMenu->addAction(QIcon(":/MO/gui/link"),
                                         tr("Application menu shortcut"), this,
                                         SLOT(linkMenu()));
+  QMenu* steamMenu = linkMenu->addMenu(tr("Steam launch option"));
+  steamMenu->setToolTipsVisible(true);
+  m_SteamCopy = steamMenu->addAction(tr("Copy launch option"), this,
+                                     &MainWindow::copySteamLaunchOption);
+  m_SteamSet  = steamMenu->addAction(tr("Set in Steam…"), this,
+                                     &MainWindow::setSteamLaunchOption);
   ui->linkButton->setMenu(linkMenu);
   connect(linkMenu, &QMenu::aboutToShow, this, &MainWindow::updateLaunchMenu);
 
@@ -3093,9 +3102,115 @@ void MainWindow::linkMenu()
   }
 }
 
+QString MainWindow::steamLaunchOptionLineFor(const Executable& exe) const
+{
+  const auto instance      = InstanceManager::singleton().currentInstance();
+  const QString instanceId = steamlaunch::instanceArgument(
+      instance->isPortable(), instance->directory(), instance->displayName());
+
+  // -p is only needed when there is a choice of profile.
+  QString profile;
+  const QDir profilesDir(m_OrganizerCore.settings().paths().profiles());
+  const auto profileDirs = profilesDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+  if (profileDirs.size() > 1 && m_OrganizerCore.currentProfile()) {
+    profile = m_OrganizerCore.currentProfile()->name();
+  }
+
+  return steamlaunch::launchOptionLine(
+      steamlaunch::launcherForLine(QProcessEnvironment::systemEnvironment(),
+                                   env::launcherOrBinary()),
+      instanceId, profile, exe.title());
+}
+
+void MainWindow::copySteamLaunchOption()
+{
+  if (const auto* exe = getSelectedExecutable()) {
+    QGuiApplication::clipboard()->setText(steamLaunchOptionLineFor(*exe));
+    ui->statusBar->showMessage(
+        tr("Steam launch option copied. Paste it into the game's Properties → "
+           "Launch Options."),
+        8000);
+  }
+}
+
+void MainWindow::setSteamLaunchOption()
+{
+  const auto* exe = getSelectedExecutable();
+  if (!exe) {
+    return;
+  }
+
+  const QString line = steamLaunchOptionLineFor(*exe);
+  const auto appId   = steamlaunch::steamAppIdFor(
+      exe->steamAppID(), m_OrganizerCore.managedGame()->steamAPPId());
+  if (!appId) {
+    QMessageBox::information(this, tr("Steam launch option"),
+                             tr("This game has no Steam app id"));
+    return;
+  }
+
+  const auto copyInstead = [&](const QString& why) {
+    QGuiApplication::clipboard()->setText(line);
+    QMessageBox::information(this, tr("Steam launch option"),
+                             why + "\n\n" +
+                                 tr("The launch option was copied instead. Paste it "
+                                    "into the game's Properties → Launch Options."));
+  };
+
+  const SteamCef::Client client;
+  QString current;
+  try {
+    current = SteamLaunchOptions::read(client, *appId);
+  } catch (const SteamCef::Error& e) {
+    if (e.kind() == SteamCef::Error::Kind::Unavailable ||
+        e.kind() == SteamCef::Error::Kind::NoContext) {
+      copyInstead(tr("Steam's debugging connection isn't available. Start Steam "
+                     "with -cef-enable-debugging, or create "
+                     "~/.local/share/Steam/.cef-enable-remote-debugging."));
+    } else {
+      copyInstead(tr("Couldn't read the current launch option from Steam: %1")
+                      .arg(QString::fromUtf8(e.what())));
+    }
+    return;
+  }
+
+  const auto answer = QMessageBox::question(
+      this, tr("Steam launch option"),
+      tr("Current:\n%1\n\nNew:\n%2\n\nThe current launch option will be replaced.")
+          .arg(current.isEmpty() ? tr("(empty)") : current, line));
+  if (answer != QMessageBox::Yes) {
+    return;
+  }
+
+  try {
+    SteamLaunchOptions::write(client, *appId, line);
+    if (SteamLaunchOptions::read(client, *appId) != line) {
+      copyInstead(tr("Steam did not keep the new launch option."));
+      return;
+    }
+  } catch (const SteamCef::Error& e) {
+    copyInstead(tr("Couldn't set the launch option in Steam: %1")
+                    .arg(QString::fromUtf8(e.what())));
+    return;
+  }
+  ui->statusBar->showMessage(tr("Launch option set in Steam."), 8000);
+}
+
 void MainWindow::updateLaunchMenu()
 {
   const Executable* exe = getSelectedExecutable();
+  if (m_SteamCopy) {
+    m_SteamCopy->setEnabled(exe != nullptr);
+  }
+  if (m_SteamSet) {
+    const bool hasAppId =
+        exe && steamlaunch::steamAppIdFor(exe->steamAppID(),
+                                          m_OrganizerCore.managedGame()->steamAPPId())
+                   .has_value();
+    m_SteamSet->setEnabled(hasAppId);
+    m_SteamSet->setToolTip(exe && !hasAppId ? tr("This game has no Steam app id")
+                                            : QString());
+  }
   m_LinkRunMenu->setEnabled(exe != nullptr);
   m_LinkDesktop->setEnabled(exe != nullptr);
   if (m_LinkStartMenu) {

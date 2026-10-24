@@ -28,9 +28,39 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 #include <QMainWindow>
 #include <QRadioButton>
 #include <QThread>
+#include <mutex>
 
 namespace MOBase
 {
+
+namespace
+{
+  std::mutex g_headlessMutex;
+  HeadlessReportHandler g_headlessHandler;
+
+  // Calls the handler outside the lock; returns false if none is set.
+  bool callHeadlessHandler(const QString& message)
+  {
+    HeadlessReportHandler handler;
+    {
+      std::lock_guard lock(g_headlessMutex);
+      handler = g_headlessHandler;
+    }
+
+    if (!handler) {
+      return false;
+    }
+
+    handler(message);
+    return true;
+  }
+}  // namespace
+
+void setHeadlessReportHandler(HeadlessReportHandler handler)
+{
+  std::lock_guard lock(g_headlessMutex);
+  g_headlessHandler = std::move(handler);
+}
 
 QWidget* topLevelWindow()
 {
@@ -49,6 +79,10 @@ QWidget* topLevelWindow()
 
 void criticalOnTop(const QString& message)
 {
+  if (callHeadlessHandler(message)) {
+    return;
+  }
+
   QMessageBox mb(QMessageBox::Critical, "Mod Organizer", message);
 
   mb.show();
@@ -64,6 +98,10 @@ void reportError(const QString& message)
   // QMessageBox must only be created on the main (GUI) thread.
   // If we're on a background thread, just log — showing a dialog would crash.
   if (QThread::currentThread() != qApp->thread()) {
+    return;
+  }
+
+  if (callHeadlessHandler(message)) {
     return;
   }
 
@@ -158,6 +196,11 @@ QMessageBox::StandardButton TaskDialog::exec()
   const auto b = checkMemory();
   if (b != QMessageBox::NoButton) {
     return b;
+  }
+
+  // remembered answers win above; otherwise nobody is there to click
+  if (callHeadlessHandler(QStringList{m_title, m_main, m_content}.join('\n'))) {
+    return QMessageBox::Cancel;
   }
 
   setDialog();

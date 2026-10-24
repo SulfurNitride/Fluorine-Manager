@@ -46,6 +46,19 @@ class ExecutableShortcutSurfaceTests(unittest.TestCase):
         application_menu = application_menu.split("void MainWindow::updateLaunchMenu()", 1)[0]
         self.assertIn("Shortcut::ApplicationMenu", application_menu)
 
+    def test_options_menu_has_steam_launch_option_actions(self) -> None:
+        source = (SOURCE_DIR / "mainwindow.cpp").read_text(encoding="utf-8")
+        header = (SOURCE_DIR / "mainwindow.h").read_text(encoding="utf-8")
+        self.assertIn('tr("Steam launch option")', source)
+        self.assertIn('tr("Copy launch option")', source)
+        self.assertIn('tr("Set in Steam\u2026")', source)
+        # QMenu hides action tooltips (the disabled "no Steam app id" reason) unless enabled.
+        self.assertIn("steamMenu->setToolTipsVisible(true);", source)
+        self.assertIn("void copySteamLaunchOption();", header)
+        self.assertIn("void setSteamLaunchOption();", header)
+        self.assertIn("QAction* m_SteamCopy{nullptr};", header)
+        self.assertIn("QAction* m_SteamSet{nullptr};", header)
+
     def test_application_icon_setting_still_controls_shortcut_icon(self) -> None:
         edit_ui = ET.parse(SOURCE_DIR / "editexecutablesdialog.ui").getroot()
         self.assertIsNotNone(edit_ui.find(".//widget[@name='useApplicationIcon']"))

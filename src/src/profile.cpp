@@ -22,6 +22,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <uibase/filesystemutilities.h>
 #include "game_features.h"
+#include "headless.h"
 #include "modinfo.h"
 #include "modinfoforeign.h"
 #include "registry.h"
@@ -920,14 +921,18 @@ bool Profile::localSettingsEnabled() const
     }
     if (!missingFiles.empty()) {
       m_GamePlugin->initializeProfile(m_Directory, IPluginGame::CONFIGURATION);
-      QMessageBox::warning(QApplication::activeModalWidget(),
-                           tr("Missing profile-specific game INI files!"),
-                           tr("Some of your profile-specific game INI files were "
-                              "missing.  They will now be copied "
-                              "from the vanilla game folder.  You might want to "
-                              "double-check your settings.\n\n"
-                              "Missing files:\n") +
-                               missingFiles.join("\n"));
+      if (headless::active()) {
+        log::info("headless: profile-specific INI files missing; continuing");
+      } else {
+        QMessageBox::warning(QApplication::activeModalWidget(),
+                             tr("Missing profile-specific game INI files!"),
+                             tr("Some of your profile-specific game INI files were "
+                                "missing.  They will now be copied "
+                                "from the vanilla game folder.  You might want to "
+                                "double-check your settings.\n\n"
+                                "Missing files:\n") +
+                                 missingFiles.join("\n"));
+      }
     }
   }
   return enabled;

@@ -1,5 +1,7 @@
 #include "commandline.h"
 #include "env.h"
+#include "headless.h"
+#include "headlessstop.h"
 #include "instancegeneralsettings.h"
 #include "instancemanager.h"
 #include "loglist.h"
@@ -408,6 +410,11 @@ bool CommandLine::multiple() const
   return (m_vm.contains("multiple"));
 }
 
+bool CommandLine::headless() const
+{
+  return m_command && m_command->headless();
+}
+
 std::optional<QString> CommandLine::profile() const
 {
   if (m_vm.contains("profile")) {
@@ -669,7 +676,10 @@ po::options_description RunCommand::getVisibleOptions() const
                   po::value<bool>()->default_value(false)->zero_tokens(),
                   "the name is a configured executable name")(
       "arguments,a", po::value<std::string>(), "override arguments")(
-      "cwd,c", po::value<std::string>(), "override working directory");
+      "cwd,c", po::value<std::string>(), "override working directory")(
+      "headless", po::value<bool>()->default_value(false)->zero_tokens(),
+      "run without a window; report problems as notifications (for Steam launch "
+      "options)");
 
   return d;
 }
@@ -695,14 +705,59 @@ po::positional_options_description RunCommand::getPositional() const
 
 bool RunCommand::canForwardToPrimary() const
 {
-  return true;
+  return !headless();
 }
+
+bool RunCommand::headless() const
+{
+  return vm().count("headless") && vm()["headless"].as<bool>();
+}
+
+namespace
+{
+  // Reports a headless launch failure unless an earlier, more specific reason
+  // (for example a prompt routed through the headless seam) was already given.
+  int headlessFailure(const QString& reason)
+  {
+    if (!headless::firstFailure()) {
+      headless::fail(reason);
+    }
+
+    return headless::LaunchFailedExitCode;
+  }
+}  // namespace
 
 std::optional<int> RunCommand::runPostOrganizer(OrganizerCore& core)
 {
-  const auto program = QString::fromStdString(vm()["NAME"].as<std::string>());
+  const auto program    = QString::fromStdString(vm()["NAME"].as<std::string>());
+  const bool isHeadless = headless();
+
+  const auto instanceName = [] {
+    return InstanceManager::singleton().currentInstance()->displayName();
+  };
 
   try {
+    if (isHeadless) {
+      headless::setSubject(program);
+
+      if (headless::firstFailure()) {
+        return headless::LaunchFailedExitCode;
+      }
+
+      // setCurrentProfile falls back to another profile when the requested one
+      // is missing, which would launch different mods
+      if (vm().count("profile")) {
+        const auto wanted  = QString::fromStdString(vm()["profile"].as<std::string>());
+        const auto profile = core.currentProfile();
+
+        if (!profile || wanted.compare(profile->name(), Qt::CaseInsensitive) != 0) {
+          return headlessFailure(QObject::tr("Profile '%1' not found in instance '%2'.")
+                                     .arg(wanted)
+                                     .arg(instanceName()));
+        }
+      }
+    }
+
     // make sure MO doesn't exit even if locking is disabled, ForceWait and
     // PreventExit will do that
     auto p = core.processRunner();
@@ -718,10 +773,16 @@ std::optional<int> RunCommand::runPostOrganizer(OrganizerCore& core)
 
         if (itor == exes.end()) {
           // not found
-          reportError(
-              QObject::tr("Executable '%1' not found in instance '%2'.")
-                  .arg(program)
-                  .arg(InstanceManager::singleton().currentInstance()->displayName()));
+          if (isHeadless) {
+            return headlessFailure(
+                QObject::tr("Executable '%1' not found in instance '%2'.")
+                    .arg(program)
+                    .arg(instanceName()));
+          }
+
+          reportError(QObject::tr("Executable '%1' not found in instance '%2'.")
+                          .arg(program)
+                          .arg(instanceName()));
 
           return 1;
         }
@@ -742,7 +803,41 @@ std::optional<int> RunCommand::runPostOrganizer(OrganizerCore& core)
 
     p.setWaitForCompletion(ProcessRunner::ForCommandLine, UILocker::PreventExit);
 
+    if (isHeadless) {
+      p.setHeadless(true);
+    }
+
     const auto r = p.run();
+
+    if (isHeadless) {
+      switch (r) {
+      case ProcessRunner::Completed:
+        return headless::runExitCode(headless::RunOutcome::Completed, p.exitCode());
+
+      case ProcessRunner::ForceUnlocked:
+        if (headless::stopRequested()) {
+          return headless::runExitCode(headless::RunOutcome::Stopped, -1);
+        }
+        break;
+
+      case ProcessRunner::Error:
+        if (headless::stopRequested()) {
+          // the kill failed, so the VFS stays mounted
+          return headlessFailure(QObject::tr(
+              "Couldn't stop the game. Its mods stay mounted until the next "
+              "launch."));
+        }
+        break;
+
+      default:
+        break;
+      }
+
+      return headlessFailure(
+          QObject::tr("Failed to run '%1'. The logs might have more information.")
+              .arg(program));
+    }
+
     if (r == ProcessRunner::Error) {
       reportError(
           QObject::tr("Failed to run '%1'. The logs might have more information.")
@@ -753,6 +848,10 @@ std::optional<int> RunCommand::runPostOrganizer(OrganizerCore& core)
 
     return 0;
   } catch (const std::exception& e) {
+    if (isHeadless) {
+      return headlessFailure(QString::fromUtf8(e.what()));
+    }
+
     reportError(
         QObject::tr("Failed to run '%1'. The logs might have more information. %2")
             .arg(program)

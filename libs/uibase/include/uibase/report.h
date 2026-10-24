@@ -27,6 +27,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 #include <QList>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <functional>
 #include <wchar.h>
 
 namespace Ui
@@ -42,6 +43,13 @@ class ExpanderWidget;
 // Convenience function displaying an error message box. This function uses
 // WinAPI if no Qt Window is available yet or QMessageBox otherwise.
 //
+using HeadlessReportHandler = std::function<void(const QString&)>;
+
+// When set, reportError(), criticalOnTop() and TaskDialog::exec() hand their
+// text to the handler instead of showing a dialog. Pass an empty function to
+// turn it off.
+QDLLEXPORT void setHeadlessReportHandler(HeadlessReportHandler handler);
+
 QDLLEXPORT void reportError(const QString& message);
 
 // shows a critical message box that's raised to the top of the zorder, useful

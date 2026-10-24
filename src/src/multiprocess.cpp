@@ -14,10 +14,10 @@ using MOBase::reportError;
 // Liveness probe: a real primary owns a QLocalServer listening on s_Key.
 // If we can connect, a primary exists. If not, the shm/socket is stale
 // (prior crash left SysV segment + unix socket file behind on Linux).
-static bool primaryAlive()
+static bool primaryAlive(const QString& key)
 {
   QLocalSocket probe;
-  probe.connectToServer(s_Key, QIODevice::WriteOnly);
+  probe.connectToServer(key, QIODevice::WriteOnly);
   const bool alive = probe.waitForConnected(500);
   if (alive) {
     probe.disconnectFromServer();
@@ -25,12 +25,53 @@ static bool primaryAlive()
   return alive;
 }
 
-MOMultiProcess::MOMultiProcess(bool allowMultiple, QObject* parent)
-    : QObject(parent)
+QString MOMultiProcess::defaultKey()
 {
-  m_SharedMem.setKey(s_Key);
+  return QString::fromLatin1(s_Key);
+}
 
-  if (m_SharedMem.create(1)) {
+bool MOMultiProcess::createSegment()
+{
+  if (!m_SharedMem.create(1)) {
+    return false;
+  }
+  if (m_SharedMem.lock()) {
+    *static_cast<char*>(m_SharedMem.data()) = 0;
+    m_SharedMem.unlock();
+  }
+  return true;
+}
+
+void MOMultiProcess::setHeadlessPrimary(bool headless)
+{
+  if (!m_SharedMem.isAttached()) {
+    MOBase::log::warn("cannot record headless state: shared memory not attached");
+    return;
+  }
+  if (!m_SharedMem.lock()) {
+    MOBase::log::warn("cannot record headless state: {}", m_SharedMem.errorString());
+    return;
+  }
+  *static_cast<char*>(m_SharedMem.data()) = headless ? 1 : 0;
+  m_SharedMem.unlock();
+}
+
+bool MOMultiProcess::primaryIsHeadless() const
+{
+  if (!m_SharedMem.isAttached() || !m_SharedMem.lock()) {
+    return false;
+  }
+  const bool headless = *static_cast<const char*>(m_SharedMem.constData()) != 0;
+  m_SharedMem.unlock();
+  return headless;
+}
+
+MOMultiProcess::MOMultiProcess(bool allowMultiple, QObject* parent, const QString& key)
+    : QObject(parent), m_Key(key)
+{
+  m_SharedMem.setKey(m_Key);
+
+  if (createSegment()) {
     m_OwnsSM = true;
   } else {
     auto error = m_SharedMem.error();
@@ -40,14 +81,14 @@ MOMultiProcess::MOMultiProcess(bool allowMultiple, QObject* parent)
       if (m_SharedMem.attach()) {
         // Verify a primary is actually listening. Stale SysV shm on Linux
         // survives crashes — attach succeeds against a dead segment.
-        if (primaryAlive()) {
+        if (primaryAlive(m_Key)) {
           m_Ephemeral = true;
         } else {
           MOBase::log::debug(
               "stale shared memory detected (no primary listener), "
               "claiming ownership");
           m_SharedMem.detach();
-          if (m_SharedMem.create(1)) {
+          if (createSegment()) {
             m_OwnsSM = true;
             error    = QSharedMemory::NoError;
           } else {
@@ -75,7 +116,7 @@ MOMultiProcess::MOMultiProcess(bool allowMultiple, QObject* parent)
           MOBase::log::debug(
               "shared memory attach race: {} ({}), retrying as owner",
               m_SharedMem.errorString(), static_cast<int>(attachError));
-          if (m_SharedMem.create(1)) {
+          if (createSegment()) {
             m_OwnsSM = true;
             error    = QSharedMemory::NoError;
           } else {
@@ -101,11 +142,11 @@ MOMultiProcess::MOMultiProcess(bool allowMultiple, QObject* parent)
             Qt::QueuedConnection);
     // has to be called before listen
     m_Server.setSocketOptions(QLocalServer::WorldAccessOption);
-    if (!m_Server.listen(s_Key)) {
+    if (!m_Server.listen(m_Key)) {
       // Never remove the endpoint until we have proved it is stale. An
       // unconditional remove can unlink a live listener created by another
       // process during concurrent startup.
-      if (primaryAlive()) {
+      if (primaryAlive(m_Key)) {
         MOBase::log::info(
             "another primary started concurrently, running as ephemeral");
         m_OwnsSM    = false;
@@ -114,13 +155,13 @@ MOMultiProcess::MOMultiProcess(bool allowMultiple, QObject* parent)
         MOBase::log::debug("removing stale local-server endpoint after listen "
                            "failed: {}",
                            m_Server.errorString().toStdString());
-        QLocalServer::removeServer(s_Key);
+        QLocalServer::removeServer(m_Key);
 
-        if (!m_Server.listen(s_Key)) {
+        if (!m_Server.listen(m_Key)) {
           // A competitor may have claimed the name between removeServer() and
           // our retry. Demote if it is alive; otherwise fail explicitly rather
           // than running a primary that cannot receive forwarded links.
-          if (primaryAlive()) {
+          if (primaryAlive(m_Key)) {
             MOBase::log::info(
                 "another primary claimed the listener, running as ephemeral");
             m_OwnsSM    = false;
@@ -151,7 +192,7 @@ void MOMultiProcess::sendMessage(const QString& message)
     }
 
     // other process may be just starting up
-    socket.connectToServer(s_Key, QIODevice::WriteOnly);
+    socket.connectToServer(m_Key, QIODevice::WriteOnly);
     connected = socket.waitForConnected(s_Timeout);
   }
 

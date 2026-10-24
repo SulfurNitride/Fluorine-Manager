@@ -1,8 +1,11 @@
 #include "commandline.h"
+#include "desktopnotifier.h"
 #include "desktopportalpolicy.h"
 #include "env.h"
 #include "fluorinepaths.h"
 #include "fluorine_build_info.h"
+#include "headless.h"
+#include "headlessstop.h"
 #include "instancemanager.h"
 #include "launchenvironment.h"
 #include "loglist.h"
@@ -21,6 +24,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QMessageBox>
+#include <QProcessEnvironment>
 #include <QString>
 
 #include <atomic>
@@ -37,6 +42,8 @@
 using namespace MOBase;
 
 int run(int argc, char* argv[]);
+static void linuxTermHandler(int sig);
+static void setTermHandlers();
 
 namespace
 {
@@ -104,12 +111,24 @@ int run(int argc, char* argv[])
 
   MOShared::SetThisThreadName("main");
   setExceptionHandlers();
+  setTermHandlers();
 
   cl::CommandLine cl;
 
   const auto cmdLine = commandLineFromUtf8Arguments(argc, argv);
   if (auto r = cl.process(cmdLine)) {
     return *r;
+  }
+
+  if (cl.headless()) {
+    // one bus per call keeps the lambda copyable for std::function; failures
+    // are rare and one-off
+    headless::activate([](const QString& summary, const QString& body) {
+      auto bus = notify::sessionBus(QProcessEnvironment::systemEnvironment());
+      notify::send(*bus, summary, body);
+    });
+
+    headless::installStopHandlers(linuxTermHandler);
   }
 
   fluorineMigrateDataDir();
@@ -129,10 +148,32 @@ int run(int argc, char* argv[])
     return *r;
   }
 
-  MOMultiProcess multiProcess(cl.multiple());
+  // a second process would otherwise become a secondary with its own mount
+  MOMultiProcess multiProcess(cl.multiple() && !cl.headless());
 
   if (multiProcess.ephemeral()) {
     // not the primary process
+
+    if (cl.headless()) {
+      // forwarding would remap the VFS under whatever is already running
+      if (multiProcess.primaryIsHeadless()) {
+        headless::fail(QObject::tr(
+            "A game is running from Steam through Fluorine. Quit the game first."));
+      } else {
+        headless::fail(QObject::tr("Fluorine is open. Close it and press Play again."));
+      }
+
+      return headless::LaunchFailedExitCode;
+    }
+
+    if (multiProcess.primaryIsHeadless()) {
+      QMessageBox::information(
+          nullptr, QObject::tr("Mod Organizer"),
+          QObject::tr(
+              "A game is running from Steam through Fluorine. Quit the game first."));
+
+      return 1;
+    }
 
     if (cl.forwardToPrimary(multiProcess)) {
       // there's something on the command line that could be forwarded — exit
@@ -144,6 +185,10 @@ int run(int argc, char* argv[])
         QObject::tr("An instance of Mod Organizer is already running"));
 
     return 1;
+  }
+
+  if (cl.headless()) {
+    multiProcess.setHeadlessPrimary(true);
   }
 
   if (auto r = cl.runPostMultiProcess(multiProcess)) {
@@ -179,6 +224,15 @@ int run(int argc, char* argv[])
         MemoryDiagnostics::snapshot("startup.application_setup_complete");
         pick         = false;
 
+        if (cl.headless() && (r == RestartExitCode || r == ReselectExitCode)) {
+          if (!headless::firstFailure()) {
+            headless::fail(QObject::tr("Fluorine needed to restart or pick another "
+                                       "instance, which it can't do from Steam."));
+          }
+
+          return headless::LaunchFailedExitCode;
+        }
+
         if (r == RestartExitCode || r == ReselectExitCode) {
           app.resetForRestart();
           cl.clear();
@@ -189,6 +243,15 @@ int run(int argc, char* argv[])
 
           continue;
         } else if (r != 0) {
+          if (cl.headless()) {
+            if (!headless::firstFailure()) {
+              headless::fail(QObject::tr("Couldn't load instance '%1'.")
+                                 .arg(cl.instance().value_or(QString())));
+            }
+
+            return headless::LaunchFailedExitCode;
+          }
+
           return r;
         }
       }
@@ -237,7 +300,7 @@ int run(int argc, char* argv[])
       return r;
     } catch (const std::exception& e) {
       reportError(e.what());
-      return 1;
+      return cl.headless() ? headless::LaunchFailedExitCode : 1;
     }
   }
 }
@@ -357,12 +420,18 @@ void setExceptionHandlers()
   sigaction(SIGFPE, &sa, nullptr);
   sigaction(SIGBUS, &sa, nullptr);
 
+  std::set_terminate(linuxTerminateHandler);
+}
+
+// Kept apart from setExceptionHandlers(): startSafeThread runs that in every
+// thread, and sigaction is process-wide, so installing these there would undo
+// the headless stop handlers.
+static void setTermHandlers()
+{
   struct sigaction term{};
   term.sa_handler = linuxTermHandler;
   term.sa_flags   = SA_RESETHAND;
   sigemptyset(&term.sa_mask);
   sigaction(SIGTERM, &term, nullptr);
   sigaction(SIGINT, &term, nullptr);
-
-  std::set_terminate(linuxTerminateHandler);
 }

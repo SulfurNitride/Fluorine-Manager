@@ -1,5 +1,6 @@
 #include "fuseconnector.h"
 #include "fusemountoptions.h"
+#include "headless.h"
 
 #include "memorydiagnostics.h"
 #include "mountpathutils.h"
@@ -582,7 +583,8 @@ bool FuseConnector::mount(
   m_lastIndexPublication.reset();
   bool cancellationRequested = false;
   std::unique_ptr<QProgressDialog> catalogProgress;
-  if (qApp != nullptr && QThread::currentThread() == qApp->thread()) {
+  if (qApp != nullptr && !headless::active() &&
+      QThread::currentThread() == qApp->thread()) {
     catalogProgress = std::make_unique<QProgressDialog>(
         QObject::tr("Indexing file metadata…"), QObject::tr("Cancel"),
         0, 0, QApplication::activeWindow());

@@ -8,6 +8,7 @@
 #include "organizercore.h"
 #include "vfsbackend.h"
 #include "steamcloudsync.h"
+#include "headlessstop.h"
 
 #include <iplugingame.h>
 #include <log.h>
@@ -240,6 +241,12 @@ ProcessRunner& ProcessRunner::setWaitForCompletion(WaitFlags flags,
               "makes no sense, will be ignored");
   }
 
+  return *this;
+}
+
+ProcessRunner& ProcessRunner::setHeadless(bool headless)
+{
+  m_headless = headless;
   return *this;
 }
 
@@ -508,7 +515,12 @@ std::optional<ProcessRunner::Results> ProcessRunner::runBinary()
   QWidget* parent = (m_ui ? m_ui->mainWindow() : nullptr);
   const QString appId = m_sp.steamAppID.trimmed().isEmpty()
                             ? game->steamAPPId() : m_sp.steamAppID;
-  if (m_sp.useProton && m_sp.useSteam
+  if (m_headless && m_sp.useProton && m_sp.useSteam
+      && SteamCloud::supported(appId, m_sp.binary.fileName())) {
+    log::info("headless run: skipping Steam Cloud sync, which needs a prompt");
+  }
+
+  if (!m_headless && m_sp.useProton && m_sp.useSteam
       && SteamCloud::supported(appId, m_sp.binary.fileName())
       && SteamCloudSync::optIn(parent, settings.filename())) {
     const auto profile = m_core.currentProfile();
@@ -670,13 +682,14 @@ bool ProcessRunner::shouldRefresh(Results r) const
 
 ProcessRunner::Results ProcessRunner::postRun()
 {
-  const bool mustWait = (m_waitFlags & ForceWait);
+  // a headless run always waits: nothing else would keep the process alive
+  const bool mustWait = (m_waitFlags & ForceWait) || m_headless;
 
   if (!m_sp.hooked && !mustWait) {
     return Running;
   }
 
-  if (mustWait && m_lockReason == UILocker::NoReason) {
+  if (mustWait && !m_headless && m_lockReason == UILocker::NoReason) {
     log::debug("the ForceWait flag is set but the lock reason wasn't, "
                "defaulting to LockUI");
 
@@ -760,21 +773,39 @@ ProcessRunner::Results ProcessRunner::postRun()
   const bool killTreeOnUnlock = (game == nullptr) || game->usesVFS();
 
   auto r = Error;
-  withLock([&](auto& ls) {
+
+  if (m_headless) {
+    // No lock dialog: the wait ends when the process tree exits or when a stop
+    // signal makes waitAction() answer Unlock. Steam asked for the stop, so
+    // the tree is killed even for a native game.
+    struct WaitGuard
+    {
+      WaitGuard() { headless::setWaitActive(true); }
+      ~WaitGuard() { headless::setWaitActive(false); }
+    } guard;
+
     const auto completion = env::waitForProcessTree(
-        m_process, expectedExecutables, killTreeOnUnlock,
-        [&](pid_t pid, const QString& name) {
-          ls.setInfo(pid, name);
-          switch (UILocker::Session::result()) {
-          case UILocker::StillLocked: return env::ProcessWaitAction::Continue;
-          case UILocker::Cancelled: return env::ProcessWaitAction::Cancel;
-          case UILocker::ForceUnlocked: return env::ProcessWaitAction::Unlock;
-          default: return env::ProcessWaitAction::Abort;
-          }
-        });
-    r = runnerResult(completion.result);
+        m_process, expectedExecutables, /*killTreeOnUnlock*/ true,
+        [](pid_t, const QString&) { return headless::waitAction(); });
+    r          = runnerResult(completion.result);
     m_exitCode = completion.exitCode;
-  });
+  } else {
+    withLock([&](auto& ls) {
+      const auto completion = env::waitForProcessTree(
+          m_process, expectedExecutables, killTreeOnUnlock,
+          [&](pid_t pid, const QString& name) {
+            ls.setInfo(pid, name);
+            switch (UILocker::Session::result()) {
+            case UILocker::StillLocked: return env::ProcessWaitAction::Continue;
+            case UILocker::Cancelled: return env::ProcessWaitAction::Cancel;
+            case UILocker::ForceUnlocked: return env::ProcessWaitAction::Unlock;
+            default: return env::ProcessWaitAction::Abort;
+            }
+          });
+      r = runnerResult(completion.result);
+      m_exitCode = completion.exitCode;
+    });
+  }
 
   if (shouldRefresh(r)) {
     QEventLoop loop;

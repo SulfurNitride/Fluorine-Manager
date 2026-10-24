@@ -22,6 +22,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "env.h"
 #include "envmodule.h"
 #include "fluorineconfig.h"
+#include "headless.h"
 #include "protonlauncher.h"
 #include "launchenvironment.h"
 #include "settings.h"
@@ -169,6 +170,20 @@ QMessageBox::StandardButton confirmBlacklisted(QWidget* parent,
 
 namespace spawn
 {
+
+namespace
+{
+  // A headless run has no window to show the error in: it becomes a notification
+  // and the launch fails.
+  void reportLaunchProblem(QWidget* parent, const QString& title, const QString& text)
+  {
+    if (headless::active()) {
+      headless::fail(text);
+      return;
+    }
+    QMessageBox::critical(parent, title, text);
+  }
+}  // namespace
 
 void logSpawning(const SpawnParameters& sp, const QString& realCmd)
 {
@@ -588,6 +603,11 @@ bool checkSteam(QWidget* parent, const SpawnParameters& sp, const QDir& gameDire
   auto ss = getSteamStatus();
 
   if (!ss.running) {
+    if (headless::active()) {
+      log::info("headless: Steam isn't running; continuing without starting it");
+      return true;
+    }
+
     log::debug("steam isn't running, asking to start steam");
 
     const auto c = dialogs::confirmStartSteam(parent, sp, details);
@@ -635,17 +655,18 @@ env::NativeProcess startBinary(QWidget* parent, const SpawnParameters& sp)
 {
   QString wrapperError;
   if (!parseLaunchWrapperOptions(sp.wrapperOptions, &wrapperError)) {
-    QMessageBox::critical(parent, QObject::tr("Invalid wrapper options"),
-                          wrapperError);
+    reportLaunchProblem(parent, QObject::tr("Invalid wrapper options"), wrapperError);
     return {};
   }
   if (!sp.useProton) {
     QFile binary(sp.binary.absoluteFilePath());
     if (binary.open(QIODevice::ReadOnly) && binary.peek(2) == "MZ") {
-      QMessageBox::critical(parent, QObject::tr("Windows executable requires Proton"),
+      reportLaunchProblem(
+          parent, QObject::tr("Windows executable requires Proton"),
           QObject::tr("'%1' is a Windows executable. Enable Use Proton for it in "
                       "Edit Executables, then select an installed Proton version "
-                      "in Settings > Wine/Proton.").arg(sp.binary.fileName()));
+                      "in Settings > Wine/Proton.")
+              .arg(sp.binary.fileName()));
       return {};
     }
   }
@@ -656,7 +677,8 @@ env::NativeProcess startBinary(QWidget* parent, const SpawnParameters& sp)
     }
     if (protonScript.isEmpty() || !QFileInfo(protonScript).isFile() ||
         !QFileInfo(protonScript).isExecutable()) {
-      QMessageBox::critical(parent, QObject::tr("Proton is not available"),
+      reportLaunchProblem(
+          parent, QObject::tr("Proton is not available"),
           QObject::tr("This executable is configured to use Proton, but the selected "
                       "Proton launcher is missing or cannot be executed.\n\n"
                       "Select an installed version in Settings > Wine/Proton. "
@@ -670,7 +692,7 @@ env::NativeProcess startBinary(QWidget* parent, const SpawnParameters& sp)
 
   if (e != 0) {
     if (e == ENOENT && sp.useProton && !FluorineConfig::isSetup()) {
-      QMessageBox::critical(
+      reportLaunchProblem(
           parent, QObject::tr("No Wine Prefix"),
           QObject::tr("No Wine prefix has been configured for this instance.\n\n"
                       "A Wine prefix is required to run Windows games through "
@@ -758,6 +780,9 @@ FileExecutionContext getFileExecutionContext(QWidget* parent, const QFileInfo& t
     auto java = findJavaInstallation(target.absoluteFilePath());
 
     if (java.isEmpty()) {
+      if (headless::active()) {
+        return {.binary = {}, .arguments = {}, .type = FileExecutionTypes::Other};
+      }
       java = QFileDialog::getOpenFileName(parent, QObject::tr("Select binary"),
                                           QString(), QObject::tr("Binary") + " (*)");
     }

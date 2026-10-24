@@ -94,6 +94,11 @@ public:
   //
   virtual bool canForwardToPrimary() const;
 
+  // whether the command runs without a window, reporting problems as desktop
+  // notifications; only `run --headless` does
+  //
+  virtual bool headless() const { return false; }
+
 protected:
   // meta information about this command, returned by derived classes
   //
@@ -183,6 +188,7 @@ protected:
   po::positional_options_description getPositional() const override;
 
   bool canForwardToPrimary() const override;
+  bool headless() const override;
   std::optional<int> runPostOrganizer(OrganizerCore& core) override;
 };
 
@@ -355,6 +361,10 @@ public:
   // whether --multiple was given
   //
   bool multiple() const;
+
+  // whether the selected command is running headless
+  //
+  bool headless() const;
 
   // profile override (-p)
   //

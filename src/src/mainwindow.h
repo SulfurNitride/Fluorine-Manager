@@ -338,6 +338,8 @@ private:
   QAction* m_LinkRunMenu{nullptr};
   QAction* m_LinkDesktop{nullptr};
   QAction* m_LinkStartMenu{nullptr};
+  QAction* m_SteamCopy{nullptr};
+  QAction* m_SteamSet{nullptr};
 
   SystemTrayManager* m_SystemTrayManager{nullptr};
 
@@ -374,6 +376,11 @@ private slots:
   void linkRunMenu();
   void linkDesktop();
   void linkMenu();
+  void copySteamLaunchOption();
+  void setSteamLaunchOption();
+
+  // The Steam launch-option line for `exe` in the current instance.
+  QString steamLaunchOptionLineFor(const Executable& exe) const;
 
   void languageChange(const QString& newLanguage);
 

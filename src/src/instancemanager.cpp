@@ -22,6 +22,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "createinstancedialogpages.h"
 #include "filesystemutilities.h"
 #include "fluorinepaths.h"
+#include "headless.h"
 #include "instancemanagerdialog.h"
 #include "nexusinterface.h"
 #include "plugincontainer.h"
@@ -763,6 +764,10 @@ void InstanceManager::unregisterPortableInstance(const QString& path)
 
 std::unique_ptr<Instance> selectInstance()
 {
+  if (headless::active()) {
+    return {};
+  }
+
   auto& m = InstanceManager::singleton();
 
   // since there is no instance currently active, load plugins with a null
@@ -897,6 +902,10 @@ SetupInstanceResults setupInstance(Instance& instance, PluginContainer& pc)
             .arg(instance.displayName())
             .arg(instance.iniPath()));
 
+    if (headless::active()) {
+      return SetupInstanceResults::Exit;
+    }
+
     return selectGame(instance, pc);
   }
 
@@ -927,11 +936,19 @@ SetupInstanceResults setupInstance(Instance& instance, PluginContainer& pc)
             .arg(instance.gameDirectory())
             .arg(instance.gameName()));
 
+    if (headless::active()) {
+      return SetupInstanceResults::Exit;
+    }
+
     return selectGame(instance, pc);
   }
 
   case Instance::SetupResults::MissingVariant: {
     // the game variant is missing from the ini, ask the user for it
+    if (headless::active()) {
+      return SetupInstanceResults::Exit;
+    }
+
     return selectVariant(instance, pc);
   }
 

@@ -1,4 +1,5 @@
 #include "plugincontainer.h"
+#include "headless.h"
 #include "iuserinterface.h"
 #include "organizercore.h"
 #include "organizerproxy.h"
@@ -1306,20 +1307,24 @@ void PluginContainer::loadPlugins()
       const auto Blacklist = QMessageBox::Cancel;
       const auto Load      = QMessageBox::Ok;
 
+      // Skip, never Blacklist: Cancel would blacklist the plugin for good.
       const auto r =
-          dlg.title(tr("Plugin error"))
-              .main(tr("Mod Organizer failed to load the plugin '%1' last time it was "
-                       "started.")
-                        .arg(fileName))
-              .content(tr(
-                  "The plugin can be skipped for this session, blacklisted, "
-                  "or loaded normally, in which case it might fail again. Blacklisted "
-                  "plugins can be re-enabled later in the settings."))
-              .icon(QMessageBox::Warning)
-              .button({tr("Skip this plugin"), Skip})
-              .button({tr("Blacklist this plugin"), Blacklist})
-              .button({tr("Load this plugin"), Load})
-              .exec();
+          headless::active()
+              ? Skip
+              : dlg.title(tr("Plugin error"))
+                    .main(tr("Mod Organizer failed to load the plugin '%1' last time "
+                             "it was started.")
+                              .arg(fileName))
+                    .content(
+                        tr("The plugin can be skipped for this session, blacklisted, "
+                           "or loaded normally, in which case it might fail again. "
+                           "Blacklisted plugins can be re-enabled later in "
+                           "the settings."))
+                    .icon(QMessageBox::Warning)
+                    .button({tr("Skip this plugin"), Skip})
+                    .button({tr("Blacklist this plugin"), Blacklist})
+                    .button({tr("Load this plugin"), Load})
+                    .exec();
 
       switch (r) {
       case Skip:

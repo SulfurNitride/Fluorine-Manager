@@ -17,7 +17,18 @@ class MOMultiProcess : public QObject
 public:
   // `allowMultiple`: if another process is running, run this one
   // disconnected from the shared memory
-  explicit MOMultiProcess(bool allowMultiple, QObject* parent = nullptr);
+  explicit MOMultiProcess(bool allowMultiple, QObject* parent = nullptr,
+                          const QString& key = defaultKey());
+
+  static QString defaultKey();
+
+  // primary only: records in the shared segment that this process is a
+  // headless run, so ephemeral processes can tell
+  void setHeadlessPrimary(bool headless);
+
+  // ephemeral only: reads what the primary recorded; false if the segment
+  // isn't attached or can't be locked
+  bool primaryIsHeadless() const;
 
   /**
    * @return true if this process's job is to forward data to the primary
@@ -53,9 +64,15 @@ private slots:
   void receiveMessage();
 
 private:
+  // create() the segment and zero its flag byte (a fresh segment's contents
+  // are unspecified)
+  bool createSegment();
+
   bool m_Ephemeral{false};
   bool m_OwnsSM{false};
-  QSharedMemory m_SharedMem;
+  QString m_Key;
+  // mutable so primaryIsHeadless() const can lock()
+  mutable QSharedMemory m_SharedMem;
   QLocalServer m_Server;
 };
 

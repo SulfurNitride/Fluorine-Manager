@@ -22,7 +22,7 @@ namespace env
 // Prefer the fluorine-manager launcher script over the bare ModOrganizer-core
 // binary — the launcher sets up bundled library paths, Qt plugin paths, etc.
 // Without it, shortcuts fail on systems that don't have all deps in PATH.
-static QString launcherOrBinary()
+QString launcherOrBinary()
 {
   const QString appDir = QCoreApplication::applicationDirPath();
   const QString launcher = appDir + "/fluorine-manager";

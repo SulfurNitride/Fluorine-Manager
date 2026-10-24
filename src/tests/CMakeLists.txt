@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Network)
+find_package(Qt6 REQUIRED COMPONENTS Core Network DBus)
 find_package(GTest REQUIRED)
 find_package(SQLite3 REQUIRED)
 find_package(ZLIB REQUIRED)
@@ -24,6 +24,54 @@ target_compile_options(test_xdgpaths PRIVATE
 target_link_libraries(test_xdgpaths PRIVATE
     Qt6::Core Qt6::Network Qt6::DBus mo2::uibase GTest::gtest)
 add_test(NAME test_xdgpaths COMMAND test_xdgpaths)
+
+add_executable(test_multiprocess EXCLUDE_FROM_ALL
+    test_multiprocess.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/multiprocess.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/multiprocess.h)
+set_target_properties(test_multiprocess PROPERTIES AUTOMOC ON CXX_STANDARD 23)
+target_include_directories(test_multiprocess PRIVATE ${CMAKE_SOURCE_DIR}/src/src)
+target_compile_options(test_multiprocess PRIVATE
+    "-idirafter" "${CMAKE_SOURCE_DIR}/libs/uibase/include/uibase")
+target_link_libraries(test_multiprocess PRIVATE
+    Qt6::Core Qt6::Network mo2::uibase GTest::gtest)
+add_test(NAME test_multiprocess COMMAND test_multiprocess)
+
+add_executable(test_desktopnotifier EXCLUDE_FROM_ALL
+    test_desktopnotifier.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/desktopnotifier.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/desktopnotifier.h)
+set_target_properties(test_desktopnotifier PROPERTIES AUTOMOC ON CXX_STANDARD 23)
+target_include_directories(test_desktopnotifier PRIVATE ${CMAKE_SOURCE_DIR}/src/src)
+target_compile_options(test_desktopnotifier PRIVATE
+    "-idirafter" "${CMAKE_SOURCE_DIR}/libs/uibase/include/uibase")
+target_link_libraries(test_desktopnotifier PRIVATE
+    Qt6::Core Qt6::DBus mo2::uibase GTest::gtest)
+add_test(NAME test_desktopnotifier COMMAND test_desktopnotifier)
+
+find_package(Qt6 REQUIRED COMPONENTS Widgets)
+add_executable(test_headless EXCLUDE_FROM_ALL
+    test_headless.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/headless.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/headless.h)
+set_target_properties(test_headless PROPERTIES AUTOMOC ON CXX_STANDARD 23)
+target_include_directories(test_headless PRIVATE ${CMAKE_SOURCE_DIR}/src/src)
+target_compile_options(test_headless PRIVATE
+    "-idirafter" "${CMAKE_SOURCE_DIR}/libs/uibase/include/uibase")
+target_link_libraries(test_headless PRIVATE
+    Qt6::Core Qt6::Widgets mo2::uibase GTest::gtest)
+add_test(NAME test_headless COMMAND test_headless)
+set_tests_properties(test_headless PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+add_executable(test_headlessstop EXCLUDE_FROM_ALL
+    test_headlessstop.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/headlessstop.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/headlessstop.h)
+set_target_properties(test_headlessstop PROPERTIES AUTOMOC OFF CXX_STANDARD 23)
+target_include_directories(test_headlessstop PRIVATE ${CMAKE_SOURCE_DIR}/src/src)
+target_link_libraries(test_headlessstop PRIVATE
+    Qt6::Core GTest::gtest GTest::gtest_main)
+add_test(NAME test_headlessstop COMMAND test_headlessstop)
+set_tests_properties(test_headlessstop PROPERTIES TIMEOUT 30)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(TEST_FUSE3 REQUIRED IMPORTED_TARGET fuse3)
 
@@ -914,12 +962,24 @@ find_package(Qt6 REQUIRED COMPONENTS Widgets WebSockets Network)
 add_executable(test_steam_cloud EXCLUDE_FROM_ALL
     test_steam_cloud.cpp
     ${CMAKE_SOURCE_DIR}/src/src/steamcloudsync.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/steamcef.cpp
     ${CMAKE_SOURCE_DIR}/src/src/vdfparser.cpp
 )
 set_target_properties(test_steam_cloud PROPERTIES CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON)
 target_link_libraries(test_steam_cloud PRIVATE Qt6::Widgets Qt6::Network Qt6::WebSockets GTest::gtest)
 add_test(NAME test_steam_cloud COMMAND test_steam_cloud)
 set_tests_properties(test_steam_cloud PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(test_steam_cef EXCLUDE_FROM_ALL
+    test_steam_cef.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/steamcef.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/steamlaunchoptions.cpp
+)
+set_target_properties(test_steam_cef PROPERTIES CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON)
+target_include_directories(test_steam_cef PRIVATE ${CMAKE_SOURCE_DIR}/src/src)
+target_link_libraries(test_steam_cef PRIVATE Qt6::Core Qt6::Network Qt6::WebSockets GTest::gtest)
+add_test(NAME test_steam_cef COMMAND test_steam_cef)
+set_tests_properties(test_steam_cef PROPERTIES TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # ---------------------------------------------------------------------------
 # Installed/portable stylesheet lookup and containment tests
@@ -1041,6 +1101,8 @@ add_test(NAME test_desktop_portable_policy
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_desktop_portable_policy.py)
 add_test(NAME test_executable_shortcut_surface
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_executable_shortcut_surface.py)
+add_test(NAME test_headless_prompt_surface
+    COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/test_headless_prompt_surface.py)
 
 add_executable(test_logredaction EXCLUDE_FROM_ALL test_logredaction.cpp)
 set_target_properties(test_logredaction PROPERTIES
@@ -1137,6 +1199,17 @@ target_link_libraries(test_library_setup_panel PRIVATE Qt6::Widgets Qt6::Network
 add_test(NAME test_library_setup_panel COMMAND test_library_setup_panel)
 set_tests_properties(test_library_setup_panel PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(test_steam_launch_option EXCLUDE_FROM_ALL
+    test_steam_launch_option.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/steamlaunchoption.cpp)
+set_target_properties(test_steam_launch_option PROPERTIES
+    AUTOMOC OFF CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON)
+target_include_directories(test_steam_launch_option PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src)
+target_link_libraries(test_steam_launch_option PRIVATE Qt6::Core GTest::gtest)
+add_test(NAME test_steam_launch_option COMMAND test_steam_launch_option)
+set_tests_properties(test_steam_launch_option PROPERTIES TIMEOUT 30)
+
 add_custom_target(fluorine-tests
     DEPENDS test_stylesheetpath test_applicationappearance test_plugindatapath
             test_instancegeneralsettings test_desktopshortcutpolicy test_desktopshortcut
@@ -1145,7 +1218,7 @@ add_custom_target(fluorine-tests
             test_nativeprocess test_pluginprocessregistry
             test_game_artwork test_settings_navigation test_fluorine_menu_bar
             test_library_setup_panel
-            test_esptk_tes3 test_falloutnv_plugin_types test_bsatk_extraction test_executable_options test_steam_cloud
+            test_esptk_tes3 test_falloutnv_plugin_types test_bsatk_extraction test_executable_options test_steam_cloud test_steam_cef
             test_conflict_sorting test_launch_environment test_faudioruntime
             test_plugincompatibility test_pefileutils test_curatedguide
             test_metainiutils test_fomoddependency test_fomodpaths test_registry_ini test_persistentcookiejar test_fluorineupdater
@@ -1154,6 +1227,7 @@ add_custom_target(fluorine-tests
             test_prefixsymlinks
             test_heroicjson test_protondetection
             test_external_dir_mapping test_portablelauncherscript test_xdgpaths
+            test_steam_launch_option test_desktopnotifier test_multiprocess test_headless test_headlessstop
             test_vfs_file_ops
             test_shell_operations
             test_vfs_descriptor_cleanup test_vfs_inplace_writes test_mount_path_utils

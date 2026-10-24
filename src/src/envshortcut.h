@@ -104,6 +104,10 @@ private:
   QString scriptFilename() const;
 };
 
+// the fluorine-manager launcher next to the running binary, or the binary itself
+//
+QString launcherOrBinary();
+
 // returns a string representation of the given location
 //
 QString toString(Shortcut::Locations loc);

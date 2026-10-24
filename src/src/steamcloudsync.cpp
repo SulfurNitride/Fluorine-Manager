@@ -1,4 +1,5 @@
 #include "steamcloudsync.h"
+#include "steamcef.h"
 #include "vdfparser.h"
 
 #include <QCoreApplication>
@@ -354,48 +355,20 @@ bool SteamCloudSync::optIn(QWidget* parent, const QString& settingsFile)
 
 QJsonObject SteamCloudSync::evaluate(const QString& expression)
 {
-  QNetworkAccessManager network;
-  network.setProxy(QNetworkProxy::NoProxy);
-  QNetworkRequest request(QUrl("http://127.0.0.1:8080/json/list"));
-  request.setTransferTimeout(3000);
-  auto* reply = network.get(request);
-  QEventLoop loop;
-  QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
-  loop.exec(QEventLoop::ExcludeUserInputEvents);
-  if (reply->error() != QNetworkReply::NoError) fail(QObject::tr("Steam's local debugging connection is unavailable."));
-  QUrl endpoint;
-  for (const auto& target : QJsonDocument::fromJson(reply->readAll()).array()) {
-    const auto object = target.toObject();
-    if (object.value("title").toString() == "SharedJSContext")
-      endpoint = QUrl(object.value("webSocketDebuggerUrl").toString());
-  }
-  if (endpoint.scheme() != "ws" || endpoint.host() != "127.0.0.1" || endpoint.port() != 8080)
-    fail(QObject::tr("Steam did not expose a trusted local UI context."));
-  QWebSocket socket;
-  socket.setProxy(QNetworkProxy::NoProxy);
-  socket.setMaxAllowedIncomingMessageSize(2 * 1024 * 1024);
-  QTimer timeout;
-  timeout.setSingleShot(true);
-  QJsonObject response;
-  QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
-  QObject::connect(&socket, &QWebSocket::disconnected, &loop, &QEventLoop::quit);
-  QObject::connect(&socket, &QWebSocket::connected, &loop, [&] {
-    socket.sendTextMessage(QString::fromUtf8(QJsonDocument(QJsonObject{
-      {"id", 1}, {"method", "Runtime.evaluate"}, {"params", QJsonObject{
-        {"expression", expression}, {"returnByValue", true}, {"awaitPromise", true}}}}).toJson()));
-  });
-  QObject::connect(&socket, &QWebSocket::textMessageReceived, &loop, [&](const QString& text) {
-    const auto message = QJsonDocument::fromJson(text.toUtf8()).object();
-    if (message.value("id").toInt() == 1) { response = message; loop.quit(); }
-  });
-  timeout.start(10000);
-  socket.open(endpoint);
-  loop.exec(QEventLoop::ExcludeUserInputEvents);
-  socket.abort();
-  const auto result = response.value("result").toObject();
-  if (response.isEmpty() || response.contains("error") || result.contains("exceptionDetails"))
+  try {
+    return SteamCef::Client().evaluate(expression).toObject();
+  } catch (const SteamCef::Error& e) {
+    switch (e.kind()) {
+    case SteamCef::Error::Kind::Unavailable:
+      fail(QObject::tr("Steam's local debugging connection is unavailable."));
+    case SteamCef::Error::Kind::NoContext:
+      fail(QObject::tr("Steam did not expose a trusted local UI context."));
+    case SteamCef::Error::Kind::NoResponse:
+    case SteamCef::Error::Kind::ScriptFailed:
+      break;
+    }
     fail(QObject::tr("Steam's internal cloud interface did not respond successfully."));
-  return result.value("result").toObject().value("value").toObject();
+  }
 }
 
 void SteamCloudSync::ensureClient()
