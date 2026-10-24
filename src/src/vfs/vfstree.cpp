@@ -256,12 +256,132 @@ bool removeNodeRecursive(VfsNode* node, const std::vector<std::string>& componen
 
 }  // namespace
 
+namespace
+{
+
+// Simple lowercase mapping for the scripts that carry case in mod file names.
+// Wine resolves case-insensitive names with its own Unicode upcase table, and
+// the FUSE mount tells Wine its directories are case-insensitive, so lookup
+// must agree with Wine on more than ASCII or Wine's fallback directory scan
+// would be the only thing that could find "Café.nif" for "CAFÉ.NIF".
+uint32_t foldCodePoint(uint32_t c)
+{
+  if (c < 0x80) {
+    return (c >= 'A' && c <= 'Z') ? c + 0x20 : c;
+  }
+  if (c < 0x100) {
+    return (c >= 0xC0 && c <= 0xDE && c != 0xD7) ? c + 0x20 : c;
+  }
+  if (c < 0x180) {  // Latin Extended-A
+    if ((c >= 0x100 && c <= 0x12F) || (c >= 0x132 && c <= 0x137) ||
+        (c >= 0x14A && c <= 0x177)) {
+      return (c & 1) == 0 ? c + 1 : c;
+    }
+    if ((c >= 0x139 && c <= 0x148) || (c >= 0x179 && c <= 0x17E)) {
+      return (c & 1) != 0 ? c + 1 : c;
+    }
+    return c == 0x178 ? 0xFF : c;
+  }
+  if (c >= 0x370 && c < 0x400) {  // Greek
+    if (c == 0x386) return 0x3AC;
+    if (c >= 0x388 && c <= 0x38A) return c + 0x25;
+    if (c == 0x38C) return 0x3CC;
+    if (c == 0x38E || c == 0x38F) return c + 0x3F;
+    if ((c >= 0x391 && c <= 0x3A1) || (c >= 0x3A3 && c <= 0x3AB)) return c + 0x20;
+    if (c == 0x3C2) return 0x3C3;  // final sigma
+    return c;
+  }
+  if (c >= 0x400 && c < 0x530) {  // Cyrillic
+    if (c <= 0x40F) return c + 0x50;
+    if (c <= 0x42F) return c + 0x20;
+    if ((c >= 0x460 && c <= 0x481) || (c >= 0x48A && c <= 0x4BF) ||
+        (c >= 0x4D0 && c <= 0x52F)) {
+      return (c & 1) == 0 ? c + 1 : c;
+    }
+    if (c >= 0x4C1 && c <= 0x4CE) return (c & 1) != 0 ? c + 1 : c;
+    return c;
+  }
+  if (c >= 0x531 && c <= 0x556) return c + 0x30;  // Armenian
+  if ((c >= 0x1E00 && c <= 0x1E95) || (c >= 0x1EA0 && c <= 0x1EFF)) {
+    return (c & 1) == 0 ? c + 1 : c;  // Latin Extended Additional
+  }
+  if (c >= 0xFF21 && c <= 0xFF3A) return c + 0x20;  // Fullwidth Latin
+  return c;
+}
+
+// Decodes one well-formed UTF-8 sequence starting at s[i]. Returns its length,
+// or 0 for anything malformed so the caller can pass the byte through.
+size_t decodeUtf8(const std::string& s, size_t i, uint32_t* cp)
+{
+  const unsigned char lead = static_cast<unsigned char>(s[i]);
+  size_t len = 0;
+  uint32_t value = 0;
+  if (lead >= 0xC2 && lead <= 0xDF) {
+    len = 2; value = lead & 0x1F;
+  } else if (lead >= 0xE0 && lead <= 0xEF) {
+    len = 3; value = lead & 0x0F;
+  } else if (lead >= 0xF0 && lead <= 0xF4) {
+    len = 4; value = lead & 0x07;
+  } else {
+    return 0;
+  }
+  if (i + len > s.size()) return 0;
+  for (size_t k = 1; k < len; ++k) {
+    const unsigned char cont = static_cast<unsigned char>(s[i + k]);
+    if ((cont & 0xC0) != 0x80) return 0;
+    value = (value << 6) | (cont & 0x3F);
+  }
+  if ((len == 3 && (value < 0x800 || (value >= 0xD800 && value <= 0xDFFF))) ||
+      (len == 4 && (value < 0x10000 || value > 0x10FFFF))) {
+    return 0;
+  }
+  *cp = value;
+  return len;
+}
+
+void appendUtf8(std::string& out, uint32_t cp)
+{
+  if (cp < 0x80) {
+    out.push_back(static_cast<char>(cp));
+  } else if (cp < 0x800) {
+    out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+  } else if (cp < 0x10000) {
+    out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+  } else {
+    out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+    out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+  }
+}
+
+}  // namespace
+
 std::string normalizeForLookup(const std::string& path)
 {
   std::string result;
   result.reserve(path.size());
-  for (unsigned char c : path) {
-    result.push_back(c == '\\' ? '/' : static_cast<char>(std::tolower(c)));
+  for (size_t i = 0; i < path.size();) {
+    const unsigned char c = static_cast<unsigned char>(path[i]);
+    if (c < 0x80) {
+      // Locale-independent: std::tolower would fold 'I' differently under tr_TR.
+      result.push_back(c == '\\' ? '/'
+                                  : static_cast<char>(c >= 'A' && c <= 'Z' ? c + 0x20 : c));
+      ++i;
+      continue;
+    }
+    uint32_t cp = 0;
+    const size_t len = decodeUtf8(path, i, &cp);
+    if (len == 0) {
+      result.push_back(static_cast<char>(c));
+      ++i;
+      continue;
+    }
+    appendUtf8(result, foldCodePoint(cp));
+    i += len;
   }
   return result;
 }

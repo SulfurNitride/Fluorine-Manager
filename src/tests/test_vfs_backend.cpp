@@ -59,6 +59,44 @@ TEST(FuseMountOptions, SharingEnforcesPermissionsAndPreservesReadLimit)
   }
 }
 
+TEST(FuseMountOptions, WorkerThreadsFollowHardwareThreads)
+{
+  EXPECT_EQ(fuseWorkerThreadCount(0), 4);
+  EXPECT_EQ(fuseWorkerThreadCount(2), 4);
+  EXPECT_EQ(fuseWorkerThreadCount(16), 16);
+  EXPECT_EQ(fuseWorkerThreadCount(32), 32);
+}
+
+TEST(FuseMountOptions, IoUringIsOptIn)
+{
+  const auto contains = [](const std::vector<std::string>& args, const char* option) {
+    return std::find(args.begin(), args.end(), option) != args.end();
+  };
+  EXPECT_FALSE(contains(fuseMountArguments(false), "io_uring"));
+  const auto withUring = fuseMountArguments(true, true);
+  EXPECT_TRUE(contains(withUring, "io_uring"));
+  EXPECT_TRUE(contains(withUring, "max_read=1048576"));
+  EXPECT_TRUE(contains(withUring, "allow_other"));
+}
+
+TEST(FuseMountOptions, IoUringKernelParameterParsing)
+{
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const auto write = [&](const QByteArray& bytes) {
+    const QString path = temporary.filePath("enable_uring");
+    QFile file(path);
+    EXPECT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    file.write(bytes);
+    return path;
+  };
+  EXPECT_TRUE(fuseIoUringKernelEnabled(write("Y\n")));
+  EXPECT_TRUE(fuseIoUringKernelEnabled(write("1\n")));
+  EXPECT_FALSE(fuseIoUringKernelEnabled(write("N\n")));
+  EXPECT_FALSE(fuseIoUringKernelEnabled(write("")));
+  EXPECT_FALSE(fuseIoUringKernelEnabled(temporary.filePath("missing")));
+}
+
 TEST(FusePermissions, AppendsWithoutReplacingExistingConfiguration)
 {
   QTemporaryDir temporary;

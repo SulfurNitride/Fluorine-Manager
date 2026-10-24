@@ -1179,7 +1179,7 @@ TEST(VfsCatalog, UpgradesVersionOneCatalogWithoutRehashing)
                 -1, &stmt, nullptr),
             SQLITE_OK);
   ASSERT_EQ(sqlite3_step(stmt), SQLITE_ROW);
-  EXPECT_EQ(sqlite3_column_int(stmt, 0), 5);
+  EXPECT_EQ(sqlite3_column_int(stmt, 0), 6);
   sqlite3_finalize(stmt);
   sqlite3_close(db);
 }

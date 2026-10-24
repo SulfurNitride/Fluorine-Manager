@@ -932,6 +932,9 @@ bool FuseConnector::mount(
       std::getenv("FLUORINE_VFS_ENABLE_READDIRPLUS") != nullptr;
   m_context->zero_file_flags       =
       std::getenv("FLUORINE_VFS_ZERO_FILE_FLAGS") != nullptr;
+  m_context->advertise_case_insensitive =
+      instanceSettings.value(kFuseCaseInsensitiveHintSetting, true).toBool() &&
+      std::getenv("FLUORINE_VFS_DISABLE_CASE_INSENSITIVE_HINT") == nullptr;
   m_context->auto_create_dirs      = m_autoCreateDirs;
   const auto indexStart = std::chrono::steady_clock::now();
   const std::size_t prewarmed = mo2PrewarmLookupIndex(m_context.get());
@@ -951,22 +954,46 @@ bool FuseConnector::mount(
   // "fuse: reading device: Invalid argument" on some kernels where
   // libfuse's receive buffer is sized off max_write + header and the
   // kernel reads don't fit.  1MB is the safe ceiling.
-  std::vector<std::string> argvStorage = fuseMountArguments(allowOther);
   std::fprintf(stderr, "[VFS] libfuse=%s headers=%d.%d\n",
                fuse_pkgversion(), FUSE_MAJOR_VERSION, FUSE_MINOR_VERSION);
 
-  std::vector<char*> argv;
-  argv.reserve(argvStorage.size());
-  for (auto& s : argvStorage) {
-    argv.push_back(s.data());
+  // io_uring is opt-in. It only takes effect when the kernel parameter is on
+  // (libfuse otherwise keeps the classic path), and libfuse older than 3.18
+  // rejects the option outright, so a failed session falls back without it.
+  bool ioUring = instanceSettings.value(kFuseIoUringSetting, false).toBool();
+  if (ioUring && !fuseIoUringKernelEnabled()) {
+    std::fprintf(stderr,
+                 "[VFS] io_uring requested but %s is not enabled; using the "
+                 "standard FUSE transport\n",
+                 kFuseIoUringKernelParameter);
   }
-
-  struct fuse_args args = FUSE_ARGS_INIT(static_cast<int>(argv.size()), argv.data());
 
   struct fuse_lowlevel_ops ops;
   setupFuseOps(&ops);
 
-  m_session = fuse_session_new(&args, &ops, sizeof(ops), m_context.get());
+  const auto createSession = [&](bool withIoUring) -> struct fuse_session* {
+    std::vector<std::string> argvStorage = fuseMountArguments(allowOther, withIoUring);
+    std::vector<char*> argv;
+    argv.reserve(argvStorage.size());
+    for (auto& arg : argvStorage) {
+      argv.push_back(arg.data());
+    }
+    struct fuse_args args = FUSE_ARGS_INIT(static_cast<int>(argv.size()), argv.data());
+    struct fuse_session* session =
+        fuse_session_new(&args, &ops, sizeof(ops), m_context.get());
+    if (session == nullptr) {
+      fuse_opt_free_args(&args);
+    }
+    return session;
+  };
+
+  m_session = createSession(ioUring);
+  if (m_session == nullptr && ioUring) {
+    std::fprintf(stderr,
+                 "[VFS] libfuse rejected the io_uring option; retrying without it\n");
+    ioUring   = false;
+    m_session = createSession(false);
+  }
   if (m_session == nullptr) {
     throw FuseConnectorException(QObject::tr("Failed to create FUSE session"));
   }
@@ -1004,7 +1031,8 @@ bool FuseConnector::mount(
     // eliminating contention on a single fd lock under heavy parallel I/O.
     struct fuse_loop_config* cfg = fuse_loop_cfg_create();
     fuse_loop_cfg_set_clone_fd(cfg, 1);
-    fuse_loop_cfg_set_max_threads(cfg, 16);
+    fuse_loop_cfg_set_max_threads(
+        cfg, fuseWorkerThreadCount(std::thread::hardware_concurrency()));
     fuse_session_loop_mt(m_session, cfg);
     fuse_loop_cfg_destroy(cfg);
   });

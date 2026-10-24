@@ -1923,10 +1923,13 @@ void mo2_init(void* userdata, struct fuse_conn_info* conn)
                conn->want, conn->max_write, conn->max_read);
   std::fprintf(stderr,
                "[VFS] feature_gates: no_opendir_disabled=%d "
-               "readdirplus_enabled=%d zero_file_flags=%d\n",
+               "readdirplus_enabled=%d zero_file_flags=%d "
+               "case_insensitive_hint=%d io_uring=%d\n",
                ctx->disable_no_opendir ? 1 : 0,
                ctx->readdirplus_enabled ? 1 : 0,
-               ctx->zero_file_flags ? 1 : 0);
+               ctx->zero_file_flags ? 1 : 0,
+               ctx->advertise_case_insensitive ? 1 : 0,
+               fuseHasFeature(conn, FUSE_CAP_OVER_IO_URING) ? 1 : 0);
 }
 
 void mo2_lookup(fuse_req_t req, fuse_ino_t parent, const char* name)
@@ -2568,6 +2571,10 @@ void mo2_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi)
 
   fi->fh = fh;
   fi->keep_cache = vfsKeepCache(ctx);
+  // Wine closes through two flushes per handle. Read-only handles have no
+  // dirty metadata to push (release still runs), so skip those round-trips.
+  // Writable handles keep flush: it publishes size/mtime for still-open files.
+  fi->noflush = (!writable && !ctx->cache_disabled) ? 1 : 0;
 
   fuse_reply_open(req, fi);
 }
@@ -4040,11 +4047,11 @@ void mo2_removexattr(fuse_req_t req, fuse_ino_t /*ino*/, const char* /*name*/)
 }
 
 #if FUSE_USE_VERSION < 35
-void mo2_ioctl(fuse_req_t req, fuse_ino_t /*ino*/, int cmd, void* /*arg*/,
+void mo2_ioctl(fuse_req_t req, fuse_ino_t ino, int cmd, void* /*arg*/,
                struct fuse_file_info* /*fi*/, unsigned /*flags*/,
                const void* /*in_buf*/, size_t /*in_bufsz*/, size_t out_bufsz)
 #else
-void mo2_ioctl(fuse_req_t req, fuse_ino_t /*ino*/, unsigned int cmd, void* /*arg*/,
+void mo2_ioctl(fuse_req_t req, fuse_ino_t ino, unsigned int cmd, void* /*arg*/,
                struct fuse_file_info* /*fi*/, unsigned /*flags*/,
                const void* /*in_buf*/, size_t /*in_bufsz*/, size_t out_bufsz)
 #endif
@@ -4075,12 +4082,27 @@ void mo2_ioctl(fuse_req_t req, fuse_ino_t /*ino*/, unsigned int cmd, void* /*arg
 #endif
 
   if (ucmd == static_cast<unsigned int>(FS_IOC_GETFLAGS)) {
-    if (ctx != nullptr && ctx->zero_file_flags && out_bufsz >= sizeof(uint32_t)) {
-      const uint32_t fileFlags = 0;
-      fuse_reply_ioctl(req, 0, &fileFlags, sizeof(fileFlags));
-      return;
+    if (ctx != nullptr && out_bufsz >= sizeof(uint32_t)) {
+      bool isDirectory = false;
+      if (ctx->advertise_case_insensitive) {
+        if (ino == FUSE_ROOT_ID) {
+          isDirectory = true;
+        } else if (auto index = runtimeIndex(ctx); index != nullptr) {
+          const auto node = index->node(ino);
+          isDirectory = node.has_value() && node->is_directory;
+        }
+      }
+      // Wine asks this after an exact-case lookup fails. Calling a directory
+      // casefolded makes it report the miss instead of scanning the directory
+      // for a case variant that lookup has already ruled out.
+      if (const auto flags = mo2FileFlagsReply(ctx->advertise_case_insensitive,
+                                               ctx->zero_file_flags, isDirectory)) {
+        const uint32_t fileFlags = *flags;
+        fuse_reply_ioctl(req, 0, &fileFlags, sizeof(fileFlags));
+        return;
+      }
     }
-    // The compatibility default is unchanged; zero-flags success is opt-in.
+    // Without either option the answer stays ENOTTY, as before.
     fuse_reply_err(req, ENOTTY);
     return;
   }

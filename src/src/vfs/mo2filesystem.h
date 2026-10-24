@@ -11,15 +11,35 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <condition_variable>
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+// FS_CASEFOLD_FL (linux/fs.h, 5.2+) is the same bit as EXT4_CASEFOLD_FL, which
+// is what Wine tests after FS_IOC_GETFLAGS. Defined here so older headers work.
+inline constexpr uint32_t kMo2CaseFoldFlag = 0x40000000u;
+
+// Reply for FS_IOC_GETFLAGS, or nullopt to answer ENOTTY like a filesystem
+// without inode flags. Only directories advertise case-insensitivity.
+inline std::optional<uint32_t> mo2FileFlagsReply(bool advertiseCaseInsensitive,
+                                                 bool zeroFlags, bool isDirectory)
+{
+  if (advertiseCaseInsensitive && isDirectory) {
+    return kMo2CaseFoldFlag;
+  }
+  if (zeroFlags) {
+    return 0u;
+  }
+  return std::nullopt;
+}
 
 struct Mo2OpenFileCleanupResult
 {
@@ -262,6 +282,10 @@ struct Mo2FsContext
   bool disable_no_opendir = false;
   bool readdirplus_enabled = false;
   bool zero_file_flags = false;
+  // Answer FS_IOC_GETFLAGS on directories with the casefold flag. Wine then
+  // trusts that exact-case misses are real and skips its directory scan; lookup
+  // is already case-insensitive (normalizeForLookup), so the scan can find nothing.
+  bool advertise_case_insensitive = false;
   bool trace_audio_reads = false;
 
   // When true, mo2_lookup inserts phantom directories for missing path

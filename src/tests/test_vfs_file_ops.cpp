@@ -1,5 +1,6 @@
 #include "vfs/inodetable.h"
 #include "vfs/overwritemanager.h"
+#include "vfs/vfstree.h"
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -235,4 +236,34 @@ TEST(VfsFileOps, InodeRenameReplacesExistingDestination)
   EXPECT_EQ(table.get("config/settings.ini"), source);
   EXPECT_EQ(table.getPath(source), "config/settings.ini");
   EXPECT_TRUE(table.getPath(replaced).empty());
+}
+
+TEST(VfsLookupKey, FoldsAsciiAndPathSeparators)
+{
+  EXPECT_EQ(normalizeForLookup("Meshes\\ARMOR\\Outfit.NIF"), "meshes/armor/outfit.nif");
+  EXPECT_EQ(normalizeForLookup(""), "");
+}
+
+TEST(VfsLookupKey, FoldsNonAsciiLettersLikeWine)
+{
+  // Latin-1, Latin Extended-A, Greek, Cyrillic: the names must collide so a
+  // case-insensitive mount never needs Wine's directory scan to find them.
+  EXPECT_EQ(normalizeForLookup("CAF\xC3\x89.nif"), normalizeForLookup("caf\xC3\xA9.NIF"));
+  EXPECT_EQ(normalizeForLookup("\xC5\x81\xC3\x93" "D\xC5\xB9"),
+            normalizeForLookup("\xC5\x82\xC3\xB3" "d\xC5\xBA"));
+  EXPECT_EQ(normalizeForLookup("\xCE\x91\xCE\x92\xCE\x93"),
+            normalizeForLookup("\xCE\xB1\xCE\xB2\xCE\xB3"));
+  EXPECT_EQ(normalizeForLookup("\xD0\x9F\xD0\xA0\xD0\x98\xD0\x92\xD0\x95\xD0\xA2"),
+            normalizeForLookup("\xD0\xBF\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82"));
+  EXPECT_NE(normalizeForLookup("\xC3\xA9"), normalizeForLookup("e"));
+}
+
+TEST(VfsLookupKey, LeavesUncasedAndMalformedBytesAlone)
+{
+  const std::string cjk = "\xE6\x97\xA5\xE6\x9C\xAC.nif";  // 日本
+  EXPECT_EQ(normalizeForLookup(cjk), cjk);
+  const std::string malformed = "a\xC3(\xFF\xE2\x82";  // bad continuation, lone 0xFF, truncated
+  EXPECT_EQ(normalizeForLookup(malformed), malformed);
+  const std::string overlong = "\xC0\xAF";
+  EXPECT_EQ(normalizeForLookup(overlong), overlong);
 }

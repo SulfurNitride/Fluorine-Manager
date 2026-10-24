@@ -81,6 +81,12 @@ ProtonSettingsTab::ProtonSettingsTab(Settings& s, SettingsDialog& d)
       instanceSettings.value(kFuseAllowOtherSetting, false).toBool());
   QObject::connect(ui->fuseAllowOtherCheckBox, &QCheckBox::clicked, this,
                    &ProtonSettingsTab::onFuseAllowOtherClicked);
+  ui->fuseCaseInsensitiveHintCheckBox->setChecked(
+      instanceSettings.value(kFuseCaseInsensitiveHintSetting, true).toBool());
+  ui->fuseIoUringCheckBox->setChecked(
+      instanceSettings.value(kFuseIoUringSetting, false).toBool());
+  QObject::connect(ui->fuseIoUringCheckBox, &QCheckBox::clicked, this,
+                   &ProtonSettingsTab::onFuseIoUringClicked);
   const QString configuredBackend =
       instanceSettings.value(kVfsBackendSetting, QStringLiteral("fuse"))
           .toString();
@@ -150,6 +156,10 @@ void ProtonSettingsTab::update()
   QSettings instanceSettings(settings().filename(), QSettings::IniFormat);
   instanceSettings.setValue(kFuseAllowOtherSetting,
                             ui->fuseAllowOtherCheckBox->isChecked());
+  instanceSettings.setValue(kFuseCaseInsensitiveHintSetting,
+                            ui->fuseCaseInsensitiveHintCheckBox->isChecked());
+  instanceSettings.setValue(kFuseIoUringSetting,
+                            ui->fuseIoUringCheckBox->isChecked());
   instanceSettings.setValue(kVfsBackendSetting,
                             ui->vfsBackendComboBox->currentData().toString());
   instanceSettings.setValue(kUsvfsExactQueryExhaustionSetting,
@@ -267,6 +277,95 @@ void ProtonSettingsTab::onFuseAllowOtherClicked(bool checked)
              "/etc/fuse.conf, then you can try this option again.")
               .arg(result.error));
     }
+  }
+}
+
+void ProtonSettingsTab::onFuseIoUringClicked(bool checked)
+{
+  if (!checked) {
+    return;
+  }
+
+  const auto uncheck = [this] {
+    const QSignalBlocker blocker(ui->fuseIoUringCheckBox);
+    ui->fuseIoUringCheckBox->setChecked(false);
+  };
+
+  const QString parameter = QString::fromLatin1(kFuseIoUringKernelParameter);
+  if (!QFileInfo::exists(parameter)) {
+    QMessageBox::warning(
+        parentWidget(), tr("io_uring Not Available"),
+        tr("This kernel does not provide FUSE over io_uring (%1 is missing). "
+           "It needs Linux 6.14 or newer built with FUSE_IO_URING.")
+            .arg(parameter));
+    uncheck();
+    return;
+  }
+  if (fuseIoUringKernelEnabled()) {
+    return;
+  }
+
+  const auto answer = QMessageBox::question(
+      parentWidget(), tr("Enable FUSE over io_uring"),
+      tr("The kernel parameter fuse.enable_uring is off, so this option would "
+         "have no effect.\n\nFluorine can turn it on now. This is a system-wide "
+         "kernel setting that your desktop asks administrator authentication "
+         "for. It lasts until the next reboot; to keep it, add the line\n"
+         "w /sys/module/fuse/parameters/enable_uring - - - - Y\n"
+         "to a file in /etc/tmpfiles.d/, or boot with fuse.enable_uring=1.\n\n"
+         "Continue?"),
+      QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
+  if (answer != QMessageBox::Yes) {
+    uncheck();
+    return;
+  }
+
+  // Host tools only, never an executable from the app bundle or user PATH.
+  const QStringList systemPaths{QStringLiteral("/usr/bin"), QStringLiteral("/bin"),
+                                QStringLiteral("/run/wrappers/bin"),
+                                QStringLiteral("/run/current-system/sw/bin")};
+  const QString pkexec = QStandardPaths::findExecutable("pkexec", systemPaths);
+  const QString tee    = QStandardPaths::findExecutable("tee", systemPaths);
+  QString failure;
+  if (pkexec.isEmpty() || tee.isEmpty()) {
+    failure = tr("Administrator authentication tools are unavailable. Install "
+                 "polkit and a desktop authentication agent, or run: "
+                 "echo Y | sudo tee %1")
+                  .arg(parameter);
+  } else {
+    // No shell: tee writes one fixed value to one fixed kernel parameter.
+    QProcess process;
+    process.start(pkexec, {QStringLiteral("--disable-internal-agent"), tee,
+                           QStringLiteral("--"), parameter});
+    if (process.waitForStarted()) {
+      process.write("Y\n");
+      process.closeWriteChannel();
+      if (!process.waitForFinished(120000)) {
+        process.kill();
+        process.waitForFinished(2000);
+        failure = tr("Administrator authentication timed out.");
+      }
+    }
+    const bool cancelled = process.exitStatus() == QProcess::NormalExit &&
+                           process.exitCode() == 126;
+    if (failure.isEmpty() && cancelled) {
+      uncheck();
+      return;
+    }
+    if (failure.isEmpty() && !fuseIoUringKernelEnabled()) {
+      const QString details =
+          QString::fromLocal8Bit(process.readAllStandardError()).trimmed();
+      failure = details.isEmpty() ? process.errorString() : details;
+    }
+  }
+
+  if (!failure.isEmpty()) {
+    uncheck();
+    QMessageBox::warning(
+        parentWidget(), tr("io_uring Not Enabled"),
+        tr("Fluorine could not enable fuse.enable_uring. The option has been "
+           "left off.\n\n%1")
+            .arg(failure));
   }
 }
 

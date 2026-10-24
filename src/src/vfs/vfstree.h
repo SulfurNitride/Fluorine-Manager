@@ -79,6 +79,9 @@ struct VfsTree
   void recount();
 };
 
+// Case-folded lookup key: backslashes become '/', and ASCII plus the Latin, Greek,
+// Cyrillic and Armenian letters Wine's upcase table also equates are lowercased.
+// Malformed UTF-8 passes through byte-for-byte.
 std::string normalizeForLookup(const std::string& path);
 
 VfsTree buildVfsTree(const std::vector<std::pair<std::string, std::string>>& mods,

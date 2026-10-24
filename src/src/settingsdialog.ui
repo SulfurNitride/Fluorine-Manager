@@ -1921,6 +1921,26 @@
                   </widget>
                  </item>
                  <item>
+                  <widget class="QCheckBox" name="fuseCaseInsensitiveHintCheckBox">
+                   <property name="text">
+                    <string>Tell Wine the mod filesystem is case-insensitive (faster)</string>
+                   </property>
+                   <property name="toolTip">
+                    <string>Wine scans a whole directory in userspace every time a file name is not found with exact case. The mod filesystem already matches names case-insensitively, so that scan can never find anything. With this on, the filesystem says so and Wine skips the scan, which makes missing-file probes several times faster in large directories. Applies to the next mount. Turn it off only to test whether a file lookup problem comes from this. Does not affect USVFS launches.</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QCheckBox" name="fuseIoUringCheckBox">
+                   <property name="text">
+                    <string>Use io_uring for the mod filesystem (experimental)</string>
+                   </property>
+                   <property name="toolTip">
+                    <string>Carries FUSE requests over io_uring instead of /dev/fuse. Measured gains are mostly for many small files read in parallel; large sequential reads can be slightly slower. Requires the kernel parameter fuse.enable_uring=Y (kernel 6.14 or newer); enabling this option offers to set it using administrator authentication, and the setting lasts until reboot unless made permanent. Without it, the normal transport is used. Applies to the next mount. Does not affect USVFS launches.</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
                   <widget class="QLabel" name="cacheScopeNote">
                    <property name="wordWrap">
                     <bool>true</bool>

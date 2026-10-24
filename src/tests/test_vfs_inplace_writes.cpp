@@ -5,6 +5,8 @@
 #include "vfs/mo2filesystem.h"
 
 #include <fcntl.h>
+#include <linux/fs.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -98,6 +100,8 @@ public:
   const fs::path& overwrite() const { return m_overwrite; }
   const fs::path& staging() const { return m_staging; }
   const fs::path& mountPoint() const { return m_mount; }
+  // Applied by mount(); set before calling it.
+  bool advertiseCaseInsensitive = false;
   Mo2FsContext* context() const { return m_ctx.get(); }
   bool valid() const { return !m_root.empty(); }
 
@@ -139,6 +143,7 @@ public:
                                 {m_overwrite.string(), "Overwrite"}};
     m_ctx->uid = ::getuid();
     m_ctx->gid = ::getgid();
+    m_ctx->advertise_case_insensitive = advertiseCaseInsensitive;
     mo2PrewarmLookupIndex(m_ctx.get());
 
     fuse_lowlevel_ops ops {};
@@ -160,6 +165,7 @@ public:
     ops.flush = mo2_flush;
     ops.access = mo2_access;
     ops.statfs = mo2_statfs;
+    ops.ioctl = mo2_ioctl;
 
     std::string arg0 = "mo2fuse", o = "-o", fsname = "fsname=mo2test",
                 maxRead = "max_read=1048576";
@@ -386,4 +392,89 @@ TEST(VfsInPlaceWrites, ReadOnlyModFileFallsBackToCopyOnWrite)
   vfs.unmount();
   EXPECT_EQ(readText(vfs.modA() / "locked.ini"), "orig");
   EXPECT_EQ(readText(vfs.staging() / "locked.ini"), "new");
+}
+
+namespace
+{
+// FS_IOC_GETFLAGS on an open fd; returns errno (0 on success).
+int getFlags(const fs::path& path, int openFlags, unsigned int* flags)
+{
+  const int fd = open(path.c_str(), openFlags);
+  if (fd < 0) return errno;
+  int err = 0;
+  int value = 0;
+  if (ioctl(fd, FS_IOC_GETFLAGS, &value) != 0) {
+    err = errno;
+  } else {
+    *flags = static_cast<unsigned int>(value);
+  }
+  close(fd);
+  return err;
+}
+}  // namespace
+
+TEST(VfsCaseInsensitiveHint, DirectoriesReportCaseFoldWhenEnabled)
+{
+  MountedVfs vfs;
+  ASSERT_TRUE(vfs.valid());
+  writeText(vfs.modA() / "Meshes/outfit.nif", "x");
+  vfs.addModFile(vfs.modA() / "Meshes/outfit.nif", "Meshes/outfit.nif");
+  vfs.advertiseCaseInsensitive = true;
+  MOUNT_OR_SKIP(vfs);
+
+  unsigned int flags = 0;
+  ASSERT_EQ(getFlags(vfs.mountPoint() / "Meshes", O_RDONLY | O_DIRECTORY, &flags), 0);
+  EXPECT_NE(flags & kMo2CaseFoldFlag, 0u);
+  flags = 0;
+  ASSERT_EQ(getFlags(vfs.mountPoint(), O_RDONLY | O_DIRECTORY, &flags), 0);
+  EXPECT_NE(flags & kMo2CaseFoldFlag, 0u);
+  // Regular files are not directories and keep the plain ENOTTY answer.
+  EXPECT_EQ(getFlags(vfs.mountPoint() / "Meshes/outfit.nif", O_RDONLY, &flags), ENOTTY);
+  vfs.unmount();
+}
+
+TEST(VfsCaseInsensitiveHint, DirectoriesStayPlainWhenDisabled)
+{
+  MountedVfs vfs;
+  ASSERT_TRUE(vfs.valid());
+  writeText(vfs.modA() / "Meshes/outfit.nif", "x");
+  vfs.addModFile(vfs.modA() / "Meshes/outfit.nif", "Meshes/outfit.nif");
+  MOUNT_OR_SKIP(vfs);
+
+  unsigned int flags = 0;
+  EXPECT_EQ(getFlags(vfs.mountPoint() / "Meshes", O_RDONLY | O_DIRECTORY, &flags), ENOTTY);
+  vfs.unmount();
+}
+
+TEST(VfsCaseInsensitiveHint, ReplyPolicy)
+{
+  EXPECT_EQ(mo2FileFlagsReply(true, false, true), kMo2CaseFoldFlag);
+  EXPECT_EQ(mo2FileFlagsReply(true, true, true), kMo2CaseFoldFlag);
+  EXPECT_FALSE(mo2FileFlagsReply(true, false, false).has_value());
+  EXPECT_EQ(mo2FileFlagsReply(true, true, false), 0u);
+  EXPECT_FALSE(mo2FileFlagsReply(false, false, true).has_value());
+  EXPECT_EQ(mo2FileFlagsReply(false, true, true), 0u);
+}
+
+TEST(VfsNoFlush, ReadOnlyHandlesSkipFlushButWritableHandlesKeepIt)
+{
+  MountedVfs vfs;
+  ASSERT_TRUE(vfs.valid());
+  writeText(vfs.modA() / "a.ini", "abc");
+  vfs.addModFile(vfs.modA() / "a.ini", "a.ini");
+  MOUNT_OR_SKIP(vfs);
+  const auto flushes = [&] {
+    return vfs.context()->flush_count.load(std::memory_order_relaxed);
+  };
+
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_EQ(readText(vfs.mountPoint() / "a.ini"), "abc");
+  }
+  // close() waits for FLUSH when the kernel sends one, so the count is exact.
+  EXPECT_EQ(flushes(), 0u);
+
+  ASSERT_TRUE(writeFd(vfs.mountPoint() / "a.ini", O_WRONLY, "Z"));
+  EXPECT_GE(flushes(), 1u);
+  vfs.unmount();
+  EXPECT_EQ(readText(vfs.modA() / "a.ini"), "Zbc");
 }

@@ -37,7 +37,9 @@ namespace fs = std::filesystem;
 
 // v5 allows an empty blake3 blob for unverified content and uses metadata
 // identities for provider generations and archive manifest cache keys.
-constexpr int kSchemaVersion = 5;
+// v6 folds non-ASCII letters in normalized paths (see normalizeForLookup), so
+// derived roots and archive manifests keyed by the old ASCII-only form rebuild.
+constexpr int kSchemaVersion = 6;
 constexpr size_t kHashBufferSize = 1024 * 1024;
 constexpr size_t kMaximumArchiveMembershipCacheBytes = 256 * 1024 * 1024;
 

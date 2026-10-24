@@ -35,6 +35,7 @@ private:
   void onCustomPrefixLocationClicked(bool checked);
   void onDownloadSLR();
   void onFuseAllowOtherClicked(bool checked);
+  void onFuseIoUringClicked(bool checked);
 
   static QString ensureWinetricks();
   static QString findProtonWine(const QString& protonPath);
