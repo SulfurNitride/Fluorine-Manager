@@ -1699,6 +1699,37 @@ ModList* OrganizerCore::modList()
   return &m_ModList;
 }
 
+namespace
+{
+// Returns base/relative as it exists on disk, matching each component without
+// regard to case, or an empty string if there is no such file.
+QString resolvePathIgnoringCase(const QString& base, const QString& relative)
+{
+  QString current = base;
+  for (const QString& part : relative.split('/', Qt::SkipEmptyParts)) {
+    const QString exact = current + "/" + part;
+    if (QFileInfo::exists(exact)) {
+      current = exact;
+      continue;
+    }
+
+    QString match;
+    for (const QString& entry : QDir(current).entryList(
+             QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden)) {
+      if (entry.compare(part, Qt::CaseInsensitive) == 0) {
+        match = entry;
+        break;
+      }
+    }
+    if (match.isEmpty()) {
+      return {};
+    }
+    current += "/" + match;
+  }
+  return QFileInfo(current).isFile() ? current : QString();
+}
+}  // namespace
+
 bool OrganizerCore::previewFileWithAlternatives(QWidget* parent, QString fileName,
                                                 int selectedOrigin)
 {
@@ -1745,9 +1776,11 @@ bool OrganizerCore::previewFileWithAlternatives(QWidget* parent, QString fileNam
 
   auto addFunc = [&](int originId, std::wstring archiveName = L"") {
     FilesOrigin const& origin = directoryStructure()->getOriginByID(originId);
-    QString const filePath =
-        QDir::fromNativeSeparators(ToQString(origin.getPath())) + "/" + fileName;
-    if (QFile::exists(filePath)) {
+    // the virtual tree merges names case-insensitively, so the case shown in
+    // it may differ from what this origin has on disk
+    QString const originPath = QDir::fromNativeSeparators(ToQString(origin.getPath()));
+    QString const filePath   = resolvePathIgnoringCase(originPath, fileName);
+    if (!filePath.isEmpty()) {
       // it's very possible the file doesn't exist, because it's inside an archive. we
       // don't support that
       QWidget* wid = m_PluginContainer->previewGenerator().genPreview(filePath);
@@ -1765,10 +1798,11 @@ bool OrganizerCore::previewFileWithAlternatives(QWidget* parent, QString fileNam
           libbsarch::memory_blob const fileData =
               archiveLoader.extract_to_memory(fileName.toStdWString());
           QByteArray const convertedFileData((char*)(fileData.data), fileData.size);
+          QString const archivePath = originPath + "/" + fileName;
           QWidget* wid = m_PluginContainer->previewGenerator().genArchivePreview(
-              convertedFileData, filePath);
+              convertedFileData, archivePath);
           if (wid == nullptr) {
-            reportError(tr("failed to generate preview for %1").arg(filePath));
+            reportError(tr("failed to generate preview for %1").arg(archivePath));
           } else {
             preview->addVariant(ToQString(origin.getName()), wid);
           }
