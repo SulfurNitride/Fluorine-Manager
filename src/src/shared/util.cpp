@@ -20,6 +20,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "util.h"
 #include "../env.h"
 #include "../mainwindow.h"
+#include "applicationexit.h"
 #include "windows_error.h"
 
 #include <fluorine_build_info.h>
@@ -243,7 +244,7 @@ bool ExitModOrganizer(ExitFlags e)
   g_canClose = true;
 
   const int code = (e.testFlag(Exit::Restart) ? RestartExitCode : 0);
-  qApp->exit(code);
+  MOShared::exitEventLoop(qApp, code);
 
   return true;
 }

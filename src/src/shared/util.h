@@ -23,6 +23,8 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <filesystem>
 #include <string>
 
+#include "applicationexit.h"
+
 #include <uibase/log.h>
 #include <uibase/versioning.h>
 
@@ -74,9 +76,6 @@ enum class Exit
   Restart = 0x02,
   Force   = 0x04
 };
-
-const int RestartExitCode  = INT_MAX;
-const int ReselectExitCode = INT_MAX - 1;
 
 using ExitFlags = QFlags<Exit>;
 Q_DECLARE_OPERATORS_FOR_FLAGS(ExitFlags);

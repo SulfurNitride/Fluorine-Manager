@@ -1434,3 +1434,15 @@ add_dependencies(fluorine-tests test_archive_extraction_containment)
 
 add_test(NAME test_stalkeranomaly_save_fallback
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_stalkeranomaly_save_fallback.py)
+
+# An in-process restart re-enters exec() and must not emit aboutToQuit.
+add_executable(test_applicationexit EXCLUDE_FROM_ALL
+    test_applicationexit.cpp)
+set_target_properties(test_applicationexit PROPERTIES
+    AUTOMOC OFF CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON)
+target_include_directories(test_applicationexit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/src)
+target_link_libraries(test_applicationexit PRIVATE
+    Qt6::Core GTest::gtest GTest::gtest_main)
+add_test(NAME test_applicationexit COMMAND test_applicationexit)
+add_dependencies(fluorine-tests test_applicationexit)
