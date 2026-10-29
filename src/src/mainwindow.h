@@ -52,6 +52,7 @@ class FilterList;
 class DataTab;
 class DownloadsTab;
 class SavesTab;
+class OpenMWSettingsDialog;
 #ifdef MO2_WEBENGINE
 class BrowserDialog;
 #endif
@@ -298,6 +299,10 @@ private:
   std::unique_ptr<DataTab> m_DataTab;
   std::unique_ptr<DownloadsTab> m_DownloadsTab;
   std::unique_ptr<SavesTab> m_SavesTab;
+  // Only for the OpenMW game: the Launcher's settings in their own window.
+  OpenMWSettingsDialog* m_OpenMWSettings{nullptr};
+  void showOpenMWSettings();
+  void buildOpenMWNavmesh();
 
   int m_OldProfileIndex{-1};
 

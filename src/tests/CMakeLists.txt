@@ -1137,6 +1137,28 @@ target_link_libraries(test_library_setup_panel PRIVATE Qt6::Widgets Qt6::Network
 add_test(NAME test_library_setup_panel COMMAND test_library_setup_panel)
 set_tests_properties(test_library_setup_panel PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(test_openmw_settings EXCLUDE_FROM_ALL
+    test_openmw_settings.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/openmwsettings.cpp)
+set_target_properties(test_openmw_settings PROPERTIES CXX_STANDARD 23)
+target_compile_definitions(test_openmw_settings PRIVATE
+    OPENMW_DEFAULTS_PATH="${CMAKE_SOURCE_DIR}/src/src/openmw-settings-default.cfg")
+target_link_libraries(test_openmw_settings PRIVATE Qt6::Core GTest::gtest GTest::gtest_main)
+add_test(NAME test_openmw_settings COMMAND test_openmw_settings)
+
+add_executable(test_openmw_settings_tab EXCLUDE_FROM_ALL
+    test_openmw_settings_tab.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/openmwsettings.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/openmwsettingstab.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/openmwsettings.qrc)
+set_target_properties(test_openmw_settings_tab PROPERTIES AUTOMOC ON AUTORCC ON CXX_STANDARD 23)
+target_include_directories(test_openmw_settings_tab PRIVATE ${CMAKE_SOURCE_DIR}/src/src)
+target_compile_definitions(test_openmw_settings_tab PRIVATE
+    OPENMW_SCREENSHOT_DIR="${CMAKE_BINARY_DIR}/openmw-settings-screenshots")
+target_link_libraries(test_openmw_settings_tab PRIVATE Qt6::Widgets Qt6::Test GTest::gtest GTest::gtest_main)
+add_test(NAME test_openmw_settings_tab COMMAND test_openmw_settings_tab)
+set_tests_properties(test_openmw_settings_tab PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_custom_target(fluorine-tests
     DEPENDS test_stylesheetpath test_applicationappearance test_plugindatapath
             test_instancegeneralsettings test_desktopshortcutpolicy test_desktopshortcut
@@ -1161,7 +1183,8 @@ add_custom_target(fluorine-tests
             test_gamebryo_save_compression
             test_game_save_migration test_gamepath
             test_vfs_catalog test_vfs_index
-            test_staging_promotion test_clf3_nxm_broker test_clf3_install)
+            test_staging_promotion test_clf3_nxm_broker test_clf3_install
+            test_openmw_settings test_openmw_settings_tab)
     if(TARGET test_python_module_switch)
         add_dependencies(fluorine-tests test_python_module_switch)
     endif()

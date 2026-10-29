@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/openmw">
+    <file alias="settings-default.cfg">openmw-settings-default.cfg</file>
+  </qresource>
+</RCC>

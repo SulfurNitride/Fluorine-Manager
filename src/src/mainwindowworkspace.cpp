@@ -6,6 +6,7 @@
 #include "libraryview.h"
 #include "modlist.h"
 #include "modlistviewactions.h"
+#include "openmwsettingstab.h"
 #include "organizercore.h"
 #include "profile.h"
 #include "settings.h"

@@ -78,6 +78,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include "problemsdialog.h"
 #include "profile.h"
 #include "profilesdialog.h"
+#include "openmwsettingstab.h"
 #include "savestab.h"
 #include "selectiondialog.h"
 #include "serverinfo.h"
@@ -209,6 +210,9 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #endif  // TEST_MODELS
 
 #pragma warning(disable : 4428)
+
+// The title game_openmw.py gives the bundled navmesh tool.
+static const QString kOpenMWNavmeshExecutable = QStringLiteral("OpenMW Navmesh Tool");
 
 using namespace MOBase;
 using namespace MOShared;
@@ -409,6 +413,26 @@ MainWindow::MainWindow(Settings& settings, OrganizerCore& organizerCore,
   }
   if (!features.gameFeature<DataArchives>()) {
     ui->tabWidget->removeTab(ui->tabWidget->indexOf(ui->bsaTab));
+  }
+  if (m_OrganizerCore.managedGame() &&
+      m_OrganizerCore.managedGame()->gameName() == QStringLiteral("Morrowind (OpenMW)")) {
+    m_OpenMWSettings = new OpenMWSettingsDialog(this);
+    connect(m_OpenMWSettings, &OpenMWSettingsDialog::navmeshRequested, this,
+            &MainWindow::buildOpenMWNavmesh);
+    // A button beside Run, and the same command under Tools.
+    auto* button = new QToolButton;
+    button->setObjectName("openmwSettingsButton");
+    button->setText(tr("OpenMW Settings"));
+    button->setIcon(QIcon::fromTheme(QStringLiteral("preferences-system")));
+    button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    button->setToolTip(tr("Display, graphics, audio, gameplay and every other OpenMW "
+                          "setting, with OpenMW's own explanation of each."));
+    ui->horizontalLayout_5->insertWidget(
+        ui->horizontalLayout_5->indexOf(ui->setupChecksButton) + 1, button);
+    connect(button, &QToolButton::clicked, this, &MainWindow::showOpenMWSettings);
+    auto* action = new QAction(tr("OpenMW Settings…"), this);
+    ui->menuTools->addAction(action);
+    connect(action, &QAction::triggered, this, &MainWindow::showOpenMWSettings);
   }
 
   setupWorkspace();
@@ -1556,6 +1580,10 @@ void MainWindow::onBeforeClose()
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+  if (m_OpenMWSettings && !m_OpenMWSettings->promptToSave()) {
+    event->ignore();
+    return;
+  }
   if (isVisible()) {
     // this is messy
     //
@@ -2466,7 +2494,8 @@ void MainWindow::on_tabWidget_currentChanged(int index)
     const QString destination = currentWidget == ui->espTab ? "plugins" :
         currentWidget == ui->dataTab ? "files" :
         currentWidget == ui->downloadTab ? "downloads" :
-        currentWidget == ui->savesTab ? "saves" : "archives";
+        currentWidget == ui->savesTab ? "saves" :
+        "archives";
     showWorkspaceDestination(destination);
   }
   if (currentWidget == ui->espTab) {
@@ -2481,8 +2510,51 @@ void MainWindow::on_tabWidget_currentChanged(int index)
   }
 }
 
+// Open the settings window on the settings.cfg OpenMW will read for this profile.
+void MainWindow::showOpenMWSettings()
+{
+  if (!m_OpenMWSettings || !m_OrganizerCore.currentProfile())
+    return;
+  const auto profile = m_OrganizerCore.currentProfile();
+  const bool local   = profile->localSettingsEnabled();
+  if (!m_OpenMWSettings->setSettingsFile(
+          OpenMWSettingsTab::settingsPathFor(local, profile->absolutePath()),
+          local ? tr("This profile's own OpenMW settings")
+                : tr("Your OpenMW user settings (shared by every instance)")))
+    return;
+  m_OpenMWSettings->setNavmeshAvailable(
+      m_OrganizerCore.executablesList()->find(kOpenMWNavmeshExecutable) !=
+      m_OrganizerCore.executablesList()->end());
+  m_OpenMWSettings->setWindowTitle(
+      tr("OpenMW Settings — %1").arg(profile->name()));
+  m_OpenMWSettings->show();
+  m_OpenMWSettings->raise();
+  m_OpenMWSettings->activateWindow();
+}
+
+// Runs the instance's bundled navmesh tool the way any other program is run,
+// so the profile's openmw.cfg is rewritten for the current load order first.
+void MainWindow::buildOpenMWNavmesh()
+{
+  const auto& list = *m_OrganizerCore.executablesList();
+  const auto itor  = list.find(kOpenMWNavmeshExecutable);
+  if (itor == list.end()) {
+    QMessageBox::information(this, tr("Navigation meshes"),
+                             tr("This instance has no bundled OpenMW navigation mesh tool."));
+    return;
+  }
+  m_OrganizerCore.processRunner()
+      .setFromExecutable(*itor)
+      .setWaitForCompletion(ProcessRunner::TriggerRefresh)
+      .run();
+}
+
 void MainWindow::on_startButton_clicked()
 {
+  // OpenMW reads settings.cfg when it starts, so unsaved edits would be missed.
+  if (m_OpenMWSettings && !m_OpenMWSettings->promptToSave()) {
+    return;
+  }
   const Executable* selectedExecutable = getSelectedExecutable();
   if (!selectedExecutable) {
     return;

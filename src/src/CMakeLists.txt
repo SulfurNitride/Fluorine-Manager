@@ -114,6 +114,8 @@ list(APPEND ORGANIZER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/clf3collectionhost.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/clf3installertabs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/clf3momwpage.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/openmwsettings.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/openmwsettingstab.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/clf3momwinstalldialog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nexuswebauth.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/installprogressview.cpp
@@ -160,6 +162,8 @@ list(APPEND ORGANIZER_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/clf3collectionhost.h
     ${CMAKE_CURRENT_SOURCE_DIR}/clf3installertabs.h
     ${CMAKE_CURRENT_SOURCE_DIR}/clf3momwpage.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/openmwsettings.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/openmwsettingstab.h
     ${CMAKE_CURRENT_SOURCE_DIR}/clf3momwinstalldialog.h
     ${CMAKE_CURRENT_SOURCE_DIR}/nexuswebauth.h
     ${CMAKE_CURRENT_SOURCE_DIR}/clf3collectiondialog.h
