@@ -98,8 +98,11 @@ struct Mo2FsContext
     uint64_t virtual_size = 0;
     std::chrono::system_clock::time_point virtual_mtime;
     // FUSE passthrough backing id (0 = none). Reads of this handle never reach
-    // userspace; the id is returned to the helper on release.
+    // userspace. The id is shared by every passthrough open of the inode and
+    // returned to the helper when the last of them is released.
     int backing_id = 0;
+    // Counted in Mo2FsContext::passthrough_inodes (see there).
+    bool passthrough_tracked = false;
   };
 
   std::unordered_map<uint64_t, OpenFile> open_files;
@@ -294,6 +297,20 @@ struct Mo2FsContext
   // those extensions; FLUORINE_VFS_TRACE_PASSTHROUGH logs each registered file).
   std::vector<std::string> passthrough_extensions;
   bool passthrough_trace = false;
+  // The kernel allows one backing file per FUSE inode, and refuses to mix
+  // passthrough and normal opens of an inode, so opens are tracked per inode:
+  // every passthrough open of an inode shares one backing id, and an inode with
+  // a normal open (for example a writer) stays off passthrough until it closes.
+  // Only inodes eligible for passthrough (large enough, allowed extension) are
+  // tracked here.
+  struct PassthroughInode
+  {
+    int backing_id = 0;
+    uint32_t passthrough_refs = 0;
+    uint32_t normal_refs      = 0;
+  };
+  std::unordered_map<uint64_t, PassthroughInode> passthrough_inodes;
+  std::mutex passthrough_mutex;
   std::atomic<bool> passthrough_active{false};
   std::atomic<uint64_t> passthrough_opens{0};
   std::atomic<uint64_t> passthrough_fallbacks{0};

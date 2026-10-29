@@ -2385,13 +2385,8 @@ void mo2_readdirplus(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
   fuse_reply_buf(req, buf.data(), used);
 }
 
-// Plugins never use passthrough. Measured on a 1660-plugin Skyrim SE list with
-// kernel passthrough on, BSA archives, DDS textures and other loose assets all
-// ran fine, but with plugins (.esm/.esp/.esl) enabled Skyrim crashed about a
-// minute in, reproducibly, with no failing system call. The cause is not
-// understood. They are ~50 files read once at startup, so the speed gain is
-// negligible either way. FLUORINE_VFS_PASSTHROUGH_EXTS overrides this list for
-// diagnosis.
+// FLUORINE_VFS_PASSTHROUGH_EXTS limits passthrough to the listed extensions for
+// diagnosis; by default every large read-only file is eligible.
 static bool passthroughExtensionAllowed(const Mo2FsContext* ctx,
                                         const std::string& path)
 {
@@ -2401,7 +2396,7 @@ static bool passthroughExtensionAllowed(const Mo2FsContext* ctx,
   for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 
   if (ctx->passthrough_extensions.empty()) {
-    return ext != "esm" && ext != "esp" && ext != "esl";
+    return true;
   }
   for (const auto& allowed : ctx->passthrough_extensions) {
     if (allowed == ext) return true;
@@ -2441,6 +2436,59 @@ static int openPassthroughBacking(Mo2FsContext* ctx, const std::string& realPath
   }
   close(fd);
   return id;
+}
+
+static bool passthroughEligible(const Mo2FsContext* ctx, const std::string& path,
+                                uint64_t size)
+{
+  return ctx->passthrough_active.load(std::memory_order_acquire) &&
+         !ctx->cache_disabled && size >= ctx->passthrough_min_size &&
+         passthroughExtensionAllowed(ctx, path);
+}
+
+// Records an open of an eligible inode and returns the backing id to use, or 0
+// for a normal open. Read-only opens share the inode's backing id; a writer,
+// or any open while a normal open is alive, must stay normal because the
+// kernel rejects mixing the two modes on one inode.
+static int acquirePassthroughOpen(Mo2FsContext* ctx, uint64_t ino, bool writable,
+                                  const std::string& realPath, bool isBacking,
+                                  uint64_t size)
+{
+  std::scoped_lock lock(ctx->passthrough_mutex);
+  auto& state = ctx->passthrough_inodes[ino];
+  if (!writable && state.normal_refs == 0) {
+    if (state.passthrough_refs > 0) {
+      ++state.passthrough_refs;
+      return state.backing_id;
+    }
+    const int id = openPassthroughBacking(ctx, realPath, isBacking, size);
+    if (id > 0) {
+      state.backing_id        = id;
+      state.passthrough_refs = 1;
+      return id;
+    }
+  }
+  ++state.normal_refs;
+  return 0;
+}
+
+static void releasePassthroughOpen(Mo2FsContext* ctx, uint64_t ino, int backingId)
+{
+  std::scoped_lock lock(ctx->passthrough_mutex);
+  const auto it = ctx->passthrough_inodes.find(ino);
+  if (it == ctx->passthrough_inodes.end()) return;
+  auto& state = it->second;
+  if (backingId > 0) {
+    if (state.passthrough_refs > 0 && --state.passthrough_refs == 0) {
+      if (ctx->passthrough != nullptr) ctx->passthrough->close(state.backing_id);
+      state.backing_id = 0;
+    }
+  } else if (state.normal_refs > 0) {
+    --state.normal_refs;
+  }
+  if (state.passthrough_refs == 0 && state.normal_refs == 0) {
+    ctx->passthrough_inodes.erase(it);
+  }
 }
 
 void mo2_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi)
@@ -2632,18 +2680,18 @@ void mo2_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi)
     // files only to probe metadata, and retaining those fds can exhaust the
     // process limit on large modlists.
     fd = -1;
+  }
 
-    // Large archives and videos are streamed; let the kernel read the real
-    // file directly instead of bouncing every read through this process.
-    if (ctx->passthrough_active.load(std::memory_order_acquire) &&
-        !ctx->cache_disabled && snap.size >= ctx->passthrough_min_size &&
-        passthroughExtensionAllowed(ctx, path)) {
-      backingId = openPassthroughBacking(ctx, realPath, isBacking, snap.size);
-      if (ctx->passthrough_trace) {
-        std::fprintf(stderr, "[VFS] passthrough open path='%s' size=%llu id=%d\n",
-                     path.c_str(), static_cast<unsigned long long>(snap.size),
-                     backingId);
-      }
+  // Large archives and videos are streamed; let the kernel read the real file
+  // directly instead of bouncing every read through this process.
+  const bool passthroughTracked = passthroughEligible(ctx, path, snap.size);
+  if (passthroughTracked) {
+    backingId = acquirePassthroughOpen(ctx, ino, writable, realPath, isBacking,
+                                       snap.size);
+    if (ctx->passthrough_trace) {
+      std::fprintf(stderr, "[VFS] passthrough open path='%s' size=%llu id=%d\n",
+                   path.c_str(), static_cast<unsigned long long>(snap.size),
+                   backingId);
     }
   }
 
@@ -2662,6 +2710,7 @@ void mo2_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi)
     of.virtual_size  = openSize;
     of.virtual_mtime = openMtime;
     of.backing_id    = backingId;
+    of.passthrough_tracked = passthroughTracked;
     ctx->open_files[fh] = std::move(of);
   }
 
@@ -3695,8 +3744,8 @@ void mo2_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi)
       if (it->second.fd >= 0) {
         close(it->second.fd);
       }
-      if (it->second.backing_id > 0 && ctx->passthrough != nullptr) {
-        ctx->passthrough->close(it->second.backing_id);
+      if (it->second.passthrough_tracked) {
+        releasePassthroughOpen(ctx, ino, it->second.backing_id);
       }
       ctx->open_files.erase(it);
     }

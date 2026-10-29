@@ -7,17 +7,22 @@
 #include <fcntl.h>
 #include <linux/fs.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cstring>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -616,8 +621,6 @@ TEST(VfsPassthrough, LargeReadOnlyFilesBypassUserspace)
   for (size_t i = 0; i < big.size(); ++i) big[i] = static_cast<char>((i * 31 + i / 4096) & 0xff);
   writeText(vfs.modA() / "big.bin", big);
   writeText(vfs.modA() / "small.txt", "tiny");
-  writeText(vfs.modA() / "Big.ESP", std::string(2 * 1024 * 1024, 'p'));
-  vfs.addModFile(vfs.modA() / "Big.ESP", "Big.ESP");
   vfs.addModFile(vfs.modA() / "big.bin", "big.bin");
   vfs.addModFile(vfs.modA() / "small.txt", "small.txt");
   MOUNT_OR_SKIP(vfs);
@@ -633,19 +636,181 @@ TEST(VfsPassthrough, LargeReadOnlyFilesBypassUserspace)
   const uint64_t readsAfterSmall = reads();
   EXPECT_GE(readsAfterSmall, 1u);  // small files still go through userspace
 
-  // Plugins are large enough but deliberately stay on the normal path.
-  EXPECT_EQ(readText(vfs.mountPoint() / "Big.ESP").size(), 2u * 1024 * 1024);
-  EXPECT_EQ(vfs.context()->passthrough_opens.load(), 0u);
-  const uint64_t readsAfterPlugin = reads();
-  EXPECT_GT(readsAfterPlugin, readsAfterSmall);
-
   EXPECT_EQ(readText(vfs.mountPoint() / "big.bin"), big);
   EXPECT_EQ(vfs.context()->passthrough_opens.load(), 1u);
-  EXPECT_EQ(reads(), readsAfterPlugin) << "reads of a passthrough file reached userspace";
+  EXPECT_EQ(reads(), readsAfterSmall) << "reads of a passthrough file reached userspace";
 
   // A write open of the same file must not use passthrough.
   ASSERT_TRUE(writeFd(vfs.mountPoint() / "big.bin", O_WRONLY, "Z"));
   EXPECT_EQ(vfs.context()->passthrough_opens.load(), 1u);
   vfs.unmount();
   EXPECT_EQ(readText(vfs.modA() / "big.bin").substr(0, 1), "Z");
+}
+
+// How Wine loads DLLs and maps data: private (copy-on-write) and executable
+// mappings, shared read mappings, and several handles reading one file at once.
+TEST(VfsPassthrough, MappingsAndConcurrentReadsMatchTheRealFile)
+{
+  const char* helper = std::getenv("FLUORINE_TEST_PASSTHROUGH_HELPER");
+  if (helper == nullptr) GTEST_SKIP() << "FLUORINE_TEST_PASSTHROUGH_HELPER not set";
+
+  MountedVfs vfs;
+  ASSERT_TRUE(vfs.valid());
+  vfs.passthroughHelper  = helper;
+  vfs.passthroughMinSize = 1024 * 1024;
+
+  const size_t size = 6 * 1024 * 1024;
+  std::string data(size, '\0');
+  for (size_t i = 0; i < size; ++i) data[i] = static_cast<char>((i * 131 + i / 997) & 0xff);
+  writeText(vfs.modA() / "image.dll", data);
+  vfs.addModFile(vfs.modA() / "image.dll", "image.dll");
+  MOUNT_OR_SKIP(vfs);
+  struct stat rootStat {};
+  ASSERT_EQ(stat(vfs.mountPoint().c_str(), &rootStat), 0);
+  if (!vfs.context()->passthrough_active.load()) {
+    GTEST_SKIP() << "kernel or helper did not enable passthrough";
+  }
+
+  const std::string path = (vfs.mountPoint() / "image.dll").string();
+  const int fd = ::open(path.c_str(), O_RDONLY);
+  ASSERT_GE(fd, 0);
+  EXPECT_EQ(vfs.context()->passthrough_opens.load(), 1u);
+
+  // Read-only private mapping, as for a data file.
+  void* ro = mmap(nullptr, size, PROT_READ, MAP_PRIVATE, fd, 0);
+  ASSERT_NE(ro, MAP_FAILED) << "private read mapping: " << strerror(errno);
+  EXPECT_EQ(std::memcmp(ro, data.data(), size), 0);
+
+  // Executable private mapping, as the PE loader maps a DLL image.
+  void* exec = mmap(nullptr, size, PROT_READ | PROT_EXEC, MAP_PRIVATE, fd, 0);
+  ASSERT_NE(exec, MAP_FAILED) << "executable mapping: " << strerror(errno);
+  EXPECT_EQ(std::memcmp(exec, data.data(), size), 0);
+
+  // Writable private mapping (relocations): writes stay in memory.
+  void* cow = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+  ASSERT_NE(cow, MAP_FAILED) << "copy-on-write mapping: " << strerror(errno);
+  static_cast<char*>(cow)[4096] ^= 0x5a;
+  EXPECT_NE(static_cast<char*>(cow)[4096], data[4096]);
+  EXPECT_EQ(std::memcmp(ro, data.data(), size), 0) << "private write leaked";
+
+  // Shared read mapping.
+  void* shared = mmap(nullptr, size, PROT_READ, MAP_SHARED, fd, 0);
+  ASSERT_NE(shared, MAP_FAILED) << "shared read mapping: " << strerror(errno);
+  EXPECT_EQ(std::memcmp(shared, data.data(), size), 0);
+
+  // Several handles, each reading the whole file in odd-sized chunks at once.
+  std::mutex failureMutex;
+  std::vector<std::string> failures;
+  const auto fail = [&](const std::string& what) {
+    std::scoped_lock lock(failureMutex);
+    failures.push_back(what);
+  };
+  std::vector<std::thread> readers;
+  for (int t = 0; t < 4; ++t) {
+    readers.emplace_back([&, t] {
+      const int h = ::open(path.c_str(), O_RDONLY);
+      if (h < 0) {
+        fail("reader " + std::to_string(t) + ": open failed: " + strerror(errno));
+        return;
+      }
+      std::string chunk(7919 + t * 1000, '\0');
+      for (size_t off = 0; off < size; off += chunk.size()) {
+        const size_t want = std::min(chunk.size(), size - off);
+        const ssize_t n = pread(h, chunk.data(), chunk.size(), static_cast<off_t>(off));
+        if (n != static_cast<ssize_t>(want)) {
+          fail("reader " + std::to_string(t) + ": pread at " + std::to_string(off) +
+               " returned " + std::to_string(n) + ", wanted " + std::to_string(want) +
+               " (errno " + std::to_string(errno) + ")");
+          break;
+        }
+        if (std::memcmp(chunk.data(), data.data() + off, want) != 0) {
+          fail("reader " + std::to_string(t) + ": data differs at " + std::to_string(off));
+          break;
+        }
+      }
+      ::close(h);
+    });
+  }
+  for (auto& r : readers) r.join();
+  for (const auto& f : failures) ADD_FAILURE() << f;
+
+  munmap(ro, size);
+  munmap(exec, size);
+  munmap(cow, size);
+  munmap(shared, size);
+  ::close(fd);
+  vfs.unmount();
+}
+
+// The kernel allows one backing file per inode and refuses to mix passthrough
+// and normal opens of it, so opens of one file must share a backing id and a
+// writer must not poison later readers.
+TEST(VfsPassthrough, OpensOfOneFileShareABackingIdAndWritersStayNormal)
+{
+  const char* helper = std::getenv("FLUORINE_TEST_PASSTHROUGH_HELPER");
+  if (helper == nullptr) GTEST_SKIP() << "FLUORINE_TEST_PASSTHROUGH_HELPER not set";
+
+  MountedVfs vfs;
+  ASSERT_TRUE(vfs.valid());
+  vfs.passthroughHelper  = helper;
+  vfs.passthroughMinSize = 1024 * 1024;
+  const std::string data(3 * 1024 * 1024, 'q');
+  writeText(vfs.modA() / "Big.esp", data);
+  vfs.addModFile(vfs.modA() / "Big.esp", "Big.esp");
+  MOUNT_OR_SKIP(vfs);
+  struct stat rootStat {};
+  ASSERT_EQ(stat(vfs.mountPoint().c_str(), &rootStat), 0);
+  if (!vfs.context()->passthrough_active.load()) {
+    GTEST_SKIP() << "kernel or helper did not enable passthrough";
+  }
+  const std::string path = (vfs.mountPoint() / "Big.esp").string();
+  const auto registrations = [&] { return vfs.context()->passthrough_opens.load(); };
+
+  // Games open the same plugin several times (wineserver, then the process).
+  const int a = ::open(path.c_str(), O_RDONLY);
+  const int b = ::open(path.c_str(), O_RDONLY);
+  const int c = ::open(path.c_str(), O_RDONLY);
+  ASSERT_GE(a, 0) << strerror(errno);
+  ASSERT_GE(b, 0) << "second open: " << strerror(errno);
+  ASSERT_GE(c, 0) << "third open: " << strerror(errno);
+  EXPECT_EQ(registrations(), 1u) << "opens must share one backing id";
+  std::string buf(4096, '\0');
+  EXPECT_EQ(pread(b, buf.data(), buf.size(), 1000), 4096);
+  EXPECT_EQ(buf, data.substr(1000, 4096));
+  ::close(a);
+  // Still readable after the first handle closes: the shared id stays alive.
+  EXPECT_EQ(pread(c, buf.data(), buf.size(), 2000), 4096);
+  EXPECT_EQ(buf, data.substr(2000, 4096));
+  ::close(b);
+  ::close(c);
+
+  // After every passthrough handle is gone a writer can open the file...
+  {
+    const int w = ::open(path.c_str(), O_RDWR);
+    ASSERT_GE(w, 0) << "writer open after readers closed: " << strerror(errno);
+    // ...and while it is open, readers fall back to normal reads.
+    const uint64_t before = registrations();
+    const int r = ::open(path.c_str(), O_RDONLY);
+    ASSERT_GE(r, 0) << "reader open beside a writer: " << strerror(errno);
+    EXPECT_EQ(registrations(), before) << "reader must not use passthrough beside a writer";
+    EXPECT_EQ(pread(r, buf.data(), buf.size(), 0), 4096);
+    EXPECT_EQ(buf, data.substr(0, 4096));
+    ::close(r);
+    ::close(w);
+  }
+
+  // Once the writer is gone, passthrough is available again. The kernel sends
+  // RELEASE asynchronously after close(), so give it a moment to arrive.
+  const uint64_t before = registrations();
+  for (int attempt = 0; attempt < 100 && registrations() == before; ++attempt) {
+    const int again = ::open(path.c_str(), O_RDONLY);
+    ASSERT_GE(again, 0) << strerror(errno);
+    ::close(again);
+    if (registrations() == before) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+  }
+  EXPECT_EQ(registrations(), before + 1)
+      << "passthrough never became available again after the writer closed";
+  vfs.unmount();
 }
