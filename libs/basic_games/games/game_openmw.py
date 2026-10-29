@@ -42,6 +42,7 @@ from .openmw_support.openmw_cfg import (
     bundled_openmw,
     find_openmw_cfg,
     is_bundled_launch,
+    looks_like_mod_data,
     order_selected_files,
     parse_openmw_selection_chain,
     read_openmw_data_dirs,
@@ -99,15 +100,11 @@ def _detect_openmw_cfg(prefer_flatpak: bool) -> Path | None:
     return find_openmw_cfg(_native_cfg(), _FLATPAK_CFG, prefer_flatpak)
 
 
-# Directories/extensions that mark a folder as valid OpenMW/Morrowind mod data.
-_VALID_DIRS = {
-    "bookart", "fonts", "icons", "meshes", "music", "shaders", "sound",
-    "splash", "textures", "video", "mwse", "distantland",
-    "l10n", "mygui", "scripts",  # OpenMW-native (Lua / localisation / GUI)
-}
-_PLUGIN_EXTS = {".esp", ".esm", ".omwaddon", ".omwgame", ".omwscripts"}
-
 _SELECTION_STATE_FILE = "fluorine-openmw-selection.json"
+
+# The title of the bundled navmesh tool in the executables list; Fluorine's
+# OpenMW settings window starts it by this name.
+NAVMESH_EXECUTABLE = "OpenMW Navmesh Tool"
 
 
 class OpenMWModDataChecker(mobase.ModDataChecker):
@@ -117,13 +114,10 @@ class OpenMWModDataChecker(mobase.ModDataChecker):
     def dataLooksValid(
         self, filetree: mobase.IFileTree
     ) -> mobase.ModDataChecker.CheckReturn:
-        for entry in filetree:
-            if entry.isDir():
-                if entry.name().lower() in _VALID_DIRS:
-                    return mobase.ModDataChecker.VALID
-            else:
-                if Path(entry.name().lower()).suffix in _PLUGIN_EXTS:
-                    return mobase.ModDataChecker.VALID
+        dirs = [entry.name() for entry in filetree if entry.isDir()]
+        files = [entry.name() for entry in filetree if not entry.isDir()]
+        if looks_like_mod_data(dirs, files):
+            return mobase.ModDataChecker.VALID
         return mobase.ModDataChecker.INVALID
 
 
@@ -178,9 +172,11 @@ class OpenMWGame(BasicGame):
     def sortToolName(self) -> str:
         return "OpenMW Sort With LOOT"
 
-    # The base masters that ship with Morrowind; force-loaded and listed first.
+    # Only the base game is force-loaded and listed first. Tribunal.esm and
+    # Bloodmoon.esm keep whatever position the load order gives them: mod lists
+    # need plugins between them (e.g. Distant Seafloor before Bloodmoon.esm).
     def primaryPlugins(self) -> list[str]:
-        return ["Morrowind.esm", "Tribunal.esm", "Bloodmoon.esm"]
+        return ["Morrowind.esm"]
 
     # Extend the plugin list to OpenMW-native formats so they appear in the tab.
     def pluginFileExtensions(self) -> list[str]:
@@ -231,6 +227,15 @@ class OpenMWGame(BasicGame):
             bundled = None
         if bundled is not None:
             out.insert(0, mobase.ExecutableInfo("OpenMW", QFileInfo(str(bundled))))
+            navmeshtool = bundled_openmw(self._organizer.basePath(), "openmw-navmeshtool")
+            if navmeshtool is not None:
+                # Rebuilds the navigation meshes for the current load order.
+                out.append(
+                    mobase.ExecutableInfo(NAVMESH_EXECUTABLE, QFileInfo(str(navmeshtool)))
+                    .withArgument("--remove-unused-tiles")
+                    .withArgument("--threads")
+                    .withArgument(str(max(1, (os.cpu_count() or 2) - 1)))
+                )
         launcher = shutil.which("openmw-launcher")
         if launcher:
             out.append(mobase.ExecutableInfo("OpenMW Launcher", QFileInfo(launcher)))
@@ -246,7 +251,7 @@ class OpenMWGame(BasicGame):
     def _is_openmw_binary(self, app_name: str) -> bool:
         base = Path(app_name).name.lower()
         # 'flatpak' here is our OpenMW launcher (we only register it for OpenMW).
-        return base in {"openmw", "openmw-launcher", "flatpak"}
+        return base in {"openmw", "openmw-launcher", "openmw-navmeshtool", "flatpak"}
 
     def _export_openmw_cfg(self, app_name: str) -> bool:
         # onAboutToRun fires for every launched program; only act for OpenMW.

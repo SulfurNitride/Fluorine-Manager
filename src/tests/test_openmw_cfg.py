@@ -1531,6 +1531,20 @@ class OpenMWConfigTests(unittest.TestCase):
             self.assertIn("content=Current.esp", first)
 
 
+class ModDataCheckTests(unittest.TestCase):
+    def test_any_layout_openmw_can_serve_is_data(self) -> None:
+        self.assertTrue(openmw_cfg.looks_like_mod_data(["animations"], []))
+        self.assertTrue(openmw_cfg.looks_like_mod_data(["lua", "l10n"], []))
+        self.assertTrue(openmw_cfg.looks_like_mod_data([], ["shaders.yaml"]))
+        self.assertTrue(openmw_cfg.looks_like_mod_data([], ["Mod.ESP"]))
+        self.assertTrue(openmw_cfg.looks_like_mod_data(["Docs", "Meshes"], []))
+
+    def test_documentation_only_is_not_data(self) -> None:
+        self.assertFalse(openmw_cfg.looks_like_mod_data(["Docs"], ["readme.txt"]))
+        self.assertFalse(openmw_cfg.looks_like_mod_data(["screenshots"], ["a.PNG"]))
+        self.assertFalse(openmw_cfg.looks_like_mod_data([], []))
+
+
 class BundledOpenMWTests(unittest.TestCase):
     def test_a_bundled_openmw_is_found_only_when_its_wrapper_exists(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1560,6 +1574,19 @@ class BundledOpenMWTests(unittest.TestCase):
             self.assertFalse(
                 openmw_cfg.is_bundled_launch(str(wrapper), Path(temporary) / "none")
             )
+
+    def test_the_bundled_navmesh_tool_is_a_bundled_launch_too(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            instance = Path(temporary)
+            bin_dir = instance / "openmw" / "bin"
+            bin_dir.mkdir(parents=True)
+            tool = bin_dir / "openmw-navmeshtool"
+            tool.write_text("#!/bin/sh\n")
+            self.assertEqual(
+                openmw_cfg.bundled_openmw(instance, "openmw-navmeshtool"), tool
+            )
+            self.assertIsNone(openmw_cfg.bundled_openmw(instance))
+            self.assertTrue(openmw_cfg.is_bundled_launch(str(tool), instance))
 
     def test_a_clf3_profile_config_survives_fluorines_rewrite(self) -> None:
         # CLF3 writes the profile's openmw.cfg as one complete file. Fluorine
@@ -1597,11 +1624,79 @@ class BundledOpenMWTests(unittest.TestCase):
             self.assertIn('data="/inst/mods/New"', lines)
             self.assertEqual(
                 [line for line in lines if line.startswith("content=")],
-                ["content=Morrowind.esm", "content=Tribunal.esm",
-                 "content=Bloodmoon.esm", "content=New.esp"],
+                ["content=Morrowind.esm", "content=New.esp"],
             )
             self.assertEqual(lines.count("groundcover=New.omwaddon"), 1)
             self.assertNotIn("groundcover=Old.omwaddon", lines)
+
+
+class ExpansionLoadOrderTests(unittest.TestCase):
+    """Tribunal.esm and Bloodmoon.esm are ordinary plugins, not forced first."""
+
+    PRIMARY = ["Morrowind.esm"]
+
+    def test_a_plugin_listed_between_the_expansions_keeps_its_place(self) -> None:
+        # MOMW lists load Distant Seafloor before Bloodmoon.esm.
+        order = [
+            "Morrowind.esm", "Tribunal.esm", "distant_seafloor_2.00.esm",
+            "Bloodmoon.esm", "Patch.esp",
+        ]
+        state = {
+            "version": 3,
+            "plugin_order": list(order),
+            "enabled_plugins": list(order),
+            "groundcover": [],
+            "known_archives": [],
+            "archives": [],
+            "profile_config_entries": [],
+            "profile_config_entries_known": True,
+            "profile_config_terminal": False,
+            "content_migration_source": "x",
+            "groundcover_migration_source": "x",
+            "archive_migration_source": "x",
+            "order_migration_source": "x",
+            "plugin_state_migrated": True,
+        }
+        result = openmw_cfg.reconcile_plugin_inventory(state, order, self.PRIMARY)
+        self.assertEqual(result["state"]["plugin_order"], order)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            cfg = Path(temporary) / "openmw.cfg"
+            openmw_cfg.write_openmw_cfg(
+                cfg, data_dirs=[], content_plugins=result["state"]["enabled_plugins"]
+            )
+            content = [
+                line for line in cfg.read_text(encoding="utf-8").splitlines()
+                if line.startswith("content=")
+            ]
+        self.assertEqual(content, [f"content={name}" for name in order])
+
+    def test_a_fresh_state_loads_tribunal_then_bloodmoon_before_other_plugins(self) -> None:
+        available = ["Bloodmoon.esm", "Aardvark.esp", "Tribunal.esm", "Morrowind.esm"]
+        state = openmw_cfg.migrate_selection_state(
+            None,
+            available_plugins=available,
+            available_archives=[],
+            primary_plugins=self.PRIMARY,
+        )
+        self.assertEqual(
+            state["plugin_order"],
+            ["Morrowind.esm", "Tribunal.esm", "Bloodmoon.esm", "Aardvark.esp"],
+        )
+        # Plugins that appear later are placed the same way.
+        later = openmw_cfg.reconcile_plugin_inventory(
+            {**state, "plugin_order": ["Morrowind.esm", "Aardvark.esp"],
+             "enabled_plugins": ["Morrowind.esm", "Aardvark.esp"]},
+            available,
+            self.PRIMARY,
+        )
+        self.assertEqual(
+            later["state"]["plugin_order"],
+            ["Morrowind.esm", "Aardvark.esp", "Tribunal.esm", "Bloodmoon.esm"],
+        )
+
+    def test_only_the_base_game_is_forced_to_the_top(self) -> None:
+        self.assertEqual(openmw_cfg.VANILLA_MASTERS, ["Morrowind.esm"])
 
 
 if __name__ == "__main__":

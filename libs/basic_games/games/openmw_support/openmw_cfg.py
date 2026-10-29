@@ -39,11 +39,52 @@ from typing import Iterable, Iterator, Mapping, TextIO, TypedDict
 # engine itself.  If we also emit ``content=builtin.omwscripts`` it ends up
 # specified twice across the config chain and OpenMW aborts on startup with
 # "Content file specified more than once: builtin.omwscripts. Aborting...".
+#
+# Only the base game is forced to the top. Tribunal.esm and Bloodmoon.esm are
+# OpenMW has no list of valid mod contents: its VFS serves every file under a
+# data folder by path. A mod folder is therefore data unless it holds nothing
+# but documentation, so unknown layouts (animations, Lua, l10n, shaders.yaml...)
+# are never rejected.
+NON_DATA_EXTENSIONS: frozenset[str] = frozenset({
+    ".txt", ".md", ".pdf", ".rtf", ".doc", ".docx", ".url", ".html", ".htm",
+    ".png", ".jpg", ".jpeg", ".gif",
+})
+NON_DATA_DIRS: frozenset[str] = frozenset({
+    "doc", "docs", "documentation", "readme", "screenshots", "__macosx",
+})
+
+
+def looks_like_mod_data(dir_names, file_names) -> bool:  # noqa: ANN001
+    """True when a mod's top-level folders/files can contain OpenMW data."""
+    if any(name.lower() not in NON_DATA_DIRS for name in dir_names):
+        return True
+    return any(
+        os.path.splitext(name.lower())[1] not in NON_DATA_EXTENSIONS
+        for name in file_names
+    )
+
+
+# ordinary masters whose place belongs to the load order: mod lists need other
+# masters between them (for example Distant Seafloor must load before
+# Bloodmoon.esm, or Solstheim's landscape is missing).
 VANILLA_MASTERS: list[str] = [
     "Morrowind.esm",
-    "Tribunal.esm",
-    "Bloodmoon.esm",
 ]
+
+
+def _load_rank(name: str) -> int:
+    """Default placement of the expansions among plugins not yet ordered.
+
+    Tribunal.esm then Bloodmoon.esm come first (Bloodmoon needs Tribunal),
+    then everything else alphabetically. Plugins already in the saved order
+    keep the position they have.
+    """
+    folded = name.casefold()
+    if folded == "tribunal.esm":
+        return 0
+    if folded == "bloodmoon.esm":
+        return 1
+    return 2
 
 # Vanilla BSAs, always emitted as the lowest-priority fallback-archive entries.
 VANILLA_BSAS: list[str] = [
@@ -158,22 +199,28 @@ def find_openmw_cfg(
     return candidate if candidate.is_file() else None
 
 
-def bundled_openmw(instance_dir: Path | str) -> Path | None:
-    """The OpenMW bundled with an instance (``openmw/bin/openmw``), if any.
+def bundled_openmw(instance_dir: Path | str, program: str = "openmw") -> Path | None:
+    """A program bundled with an instance (``openmw/bin/<program>``), if any.
 
     CLF3 installs OpenMW lists with their own version-matched OpenMW so an
-    instance runs without anything installed on the system.
+    instance runs without anything installed on the system. ``program`` is
+    ``openmw`` (the game) or ``openmw-navmeshtool``.
     """
-    exe = Path(instance_dir) / "openmw" / "bin" / "openmw"
+    exe = Path(instance_dir) / "openmw" / "bin" / program
     return exe if exe.is_file() else None
 
 
+BUNDLED_PROGRAMS: tuple[str, ...] = ("openmw", "openmw-navmeshtool")
+
+
 def is_bundled_launch(app_name: str, instance_dir: Path | str) -> bool:
-    """Whether ``app_name`` is the OpenMW bundled with ``instance_dir``."""
-    exe = bundled_openmw(instance_dir)
-    return exe is not None and (
-        Path(app_name).resolve(strict=False) == exe.resolve(strict=False)
-    )
+    """Whether ``app_name`` is an OpenMW program bundled with ``instance_dir``."""
+    target = Path(app_name).resolve(strict=False)
+    for program in BUNDLED_PROGRAMS:
+        exe = bundled_openmw(instance_dir, program)
+        if exe is not None and target == exe.resolve(strict=False):
+            return True
+    return False
 
 
 def escape_data_path(path: str) -> str:
@@ -792,7 +839,7 @@ def reconcile_plugin_inventory(
     inventory_names.update(providers)
     inventory_names.update(primary_by_key)
     new_keys = [key for key in inventory_names if key not in old_order_keys]
-    new_keys.sort(key=lambda key: (key, inventory_names[key]))
+    new_keys.sort(key=lambda key: (_load_rank(key), key, inventory_names[key]))
 
     def current_casing(name: str) -> str:
         folded = name.casefold()
@@ -1094,13 +1141,13 @@ def migrate_selection_state(
     _, providers, wrappers, _, _ = _inventory_providers(available_plugins)
     inventory = sorted(
         _canonical_plugin_names(providers.values(), wrappers.values()),
-        key=lambda name: (name.casefold(), name),
+        key=lambda name: (_load_rank(name), name.casefold(), name),
     )
     if order_source == "inventory":
         base_order = inventory
     completion = sorted(
         _canonical_plugin_names(inventory, enabled, groundcover),
-        key=lambda name: (name.casefold(), name),
+        key=lambda name: (_load_rank(name), name.casefold(), name),
     )
     plugin_order = _canonical_plugin_names(
         primary_plugins, base_order, completion
