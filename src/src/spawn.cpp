@@ -367,21 +367,14 @@ int spawn(const SpawnParameters& sp, env::NativeProcess& process)
     bool useSteamDrm                  = true;
     QString storeVariant;
     if (instanceForLaunch) {
-      const QSettings instanceIni(instanceForLaunch->filename(), QSettings::IniFormat);
-      storeVariant = instanceIni.value("game_edition").toString().trimmed();
-      // Unless the user chose explicitly, only Steam-library installs and
-      // Steam edition instances get the Steam bridge (and the background
-      // Steam start that comes with it).
-      const bool explicitDrm = instanceIni.contains("fluorine/steam_drm");
-      useSteamDrm = instanceIni
-                        .value("fluorine/steam_drm",
-                               ProtonLauncher::defaultSteamDrmForGame(
-                                   sp.gameDirectory.absolutePath(), storeVariant))
-                        .toBool();
+      const auto choice = ProtonLauncher::steamDrmForInstance(
+          instanceForLaunch->filename(), sp.gameDirectory.absolutePath());
+      useSteamDrm  = choice.enabled;
+      storeVariant = choice.storeVariant;
       log::info("Steam DRM bridge {} ({}), store variant '{}', game dir '{}'",
                 useSteamDrm ? "on" : "off",
-                explicitDrm ? "instance setting" : "default",
-                storeVariant, sp.gameDirectory.absolutePath());
+                choice.explicitSetting ? "instance setting" : "default",
+                storeVariant, choice.gameDirectory);
     }
 
     launcher.setSteamDrm(useSteamDrm && sp.useSteam)

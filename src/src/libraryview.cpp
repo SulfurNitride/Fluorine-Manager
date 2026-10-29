@@ -1284,12 +1284,7 @@ void LibraryView::fillData(const Instance& ii)
   if (!ini.isEmpty() && QFile::exists(ini)) {
     QSettings const settings(ini, QSettings::IniFormat);
     setup.steamDrm =
-        settings
-            .value("fluorine/steam_drm",
-                   ProtonLauncher::defaultSteamDrmForGame(
-                       ii.gameDirectory(),
-                       settings.value("game_edition").toString().trimmed()))
-            .toBool();
+        ProtonLauncher::steamDrmForInstance(ini, ii.gameDirectory()).enabled;
     setup.rootBuilder = settings.value("fluorine/vfs_root_builder", true).toBool();
   }
   ui->details->setSetup(setup);

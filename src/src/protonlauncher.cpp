@@ -14,6 +14,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QProcess>
+#include <QSettings>
 #include <QProcessEnvironment>
 #include <QUuid>
 #include <QStandardPaths>
@@ -1202,7 +1203,11 @@ bool ProtonLauncher::launchDirect(env::NativeProcess& process) const
 bool ProtonLauncher::defaultSteamDrmForGame(const QString& gameDirectory,
                                             const QString& storeVariant)
 {
-  if (storeVariant.compare(QStringLiteral("Steam"), Qt::CaseInsensitive) == 0) {
+  // An instance with no recorded edition is a Steam install; the instance
+  // loader reads it the same way. Only an explicit non-Steam edition (GOG,
+  // Epic, ...) falls through to the location checks below.
+  if (storeVariant.isEmpty() ||
+      storeVariant.compare(QStringLiteral("Steam"), Qt::CaseInsensitive) == 0) {
     return true;
   }
   if (gameDirectory.isEmpty()) {
@@ -1211,6 +1216,39 @@ bool ProtonLauncher::defaultSteamDrmForGame(const QString& gameDirectory,
   const QString path = QDir::cleanPath(gameDirectory);
   return path.contains(QStringLiteral("/steamapps/"), Qt::CaseInsensitive) ||
          QFileInfo::exists(QDir(path).filePath(QStringLiteral("steam_appid.txt")));
+}
+
+ProtonLauncher::SteamDrmChoice
+ProtonLauncher::steamDrmForInstance(const QString& iniPath,
+                                    const QString& fallbackGameDirectory)
+{
+  SteamDrmChoice choice;
+  choice.gameDirectory = fallbackGameDirectory;
+  if (iniPath.isEmpty()) {
+    return choice;
+  }
+
+  const QSettings ini(iniPath, QSettings::IniFormat);
+  choice.storeVariant = ini.value("game_edition").toString().trimmed();
+
+  // The ini stores the game path the way Wine sees it (Z:\home\...), which
+  // is not a usable Linux path for the checks below.
+  QString path = ini.value("gamePath").toString().trimmed();
+  if (!path.isEmpty()) {
+    path.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    if (path.size() >= 2 && path.at(1) == QLatin1Char(':') &&
+        path.at(0).toLower() == QLatin1Char('z')) {
+      path.remove(0, 2);
+    }
+    choice.gameDirectory = path;
+  }
+
+  choice.explicitSetting = ini.contains("fluorine/steam_drm");
+  choice.enabled =
+      ini.value("fluorine/steam_drm",
+                defaultSteamDrmForGame(choice.gameDirectory, choice.storeVariant))
+          .toBool();
+  return choice;
 }
 
 bool ProtonLauncher::ensureSteamRunning()

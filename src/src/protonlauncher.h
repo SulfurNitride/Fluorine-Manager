@@ -59,12 +59,29 @@ private:
 
 public:
   // Default for the per-instance "Steam DRM" option when the user has not set
-  // it: only games installed in a Steam library need the Steam bridge. GOG,
-  // Epic and other installs must not start (or wait for) Steam. A Steam
-  // edition instance keeps it on even when the files were copied out of the
-  // Steam library, because those executables still validate against Steam.
+  // it: Steam installs need the Steam bridge, including copies of the game
+  // files made outside the Steam library (Stock Game, Game Root) and
+  // instances with no recorded edition, because those executables still
+  // validate against Steam. An explicit GOG, Epic or other edition must not
+  // start (or wait for) Steam unless its files sit in a Steam library or have
+  // a steam_appid.txt.
   static bool defaultSteamDrmForGame(const QString& gameDirectory,
                                      const QString& storeVariant = {});
+
+  // The one place that decides the Steam DRM option for an instance, shared by
+  // the launch and the library panel so the checkbox always shows what the
+  // launch will do. An explicit fluorine/steam_drm in the instance ini wins;
+  // otherwise the default is computed from that ini's own game path and
+  // edition (not from a separately detected game directory).
+  struct SteamDrmChoice
+  {
+    bool enabled          = true;
+    bool explicitSetting  = false;
+    QString storeVariant;
+    QString gameDirectory;
+  };
+  static SteamDrmChoice steamDrmForInstance(const QString& iniPath,
+                                            const QString& fallbackGameDirectory = {});
 
 private:
 

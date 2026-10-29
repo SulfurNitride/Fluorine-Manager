@@ -10,6 +10,7 @@
 #include <QFileInfo>
 #include <QProcess>
 #include <QProcessEnvironment>
+#include <QSettings>
 #include <QTemporaryDir>
 #include <QThread>
 #include <boost/program_options.hpp>
@@ -1003,26 +1004,76 @@ TEST(NativeLaunchLifecycle, PluginTokenFollowsChildAfterDelayedLauncherHandoff)
   EXPECT_TRUE(QFileInfo::exists(finishedPath));
 }
 
-TEST(ProtonLauncherSteamDrm, DefaultsOnlyForSteamInstalls)
+TEST(ProtonLauncherSteamDrm, DefaultsFollowTheStoreEdition)
 {
   QTemporaryDir plain;
   ASSERT_TRUE(plain.isValid());
 
   EXPECT_TRUE(ProtonLauncher::defaultSteamDrmForGame(QString()));
-  EXPECT_FALSE(ProtonLauncher::defaultSteamDrmForGame(plain.path()));
-  EXPECT_FALSE(ProtonLauncher::defaultSteamDrmForGame(plain.path(), "GOG"));
+
+  // Steam installs and Steam copies outside the library (Stock Game, Game
+  // Root) keep the bridge. An instance with no recorded edition is Steam.
+  EXPECT_TRUE(ProtonLauncher::defaultSteamDrmForGame(plain.path()));
+  EXPECT_TRUE(ProtonLauncher::defaultSteamDrmForGame(plain.path(), "Steam"));
+  EXPECT_TRUE(ProtonLauncher::defaultSteamDrmForGame(plain.path(), "steam"));
   EXPECT_TRUE(ProtonLauncher::defaultSteamDrmForGame(
       "/home/u/.local/share/Steam/steamapps/common/Skyrim Special Edition"));
 
-  // A Steam edition instance keeps the bridge even when its files were copied
-  // out of the Steam library (Stock Game, Game Root).
-  EXPECT_TRUE(ProtonLauncher::defaultSteamDrmForGame(plain.path(), "Steam"));
-  EXPECT_TRUE(ProtonLauncher::defaultSteamDrmForGame(plain.path(), "steam"));
-
+  // An explicit non-Steam edition must not start Steam...
+  EXPECT_FALSE(ProtonLauncher::defaultSteamDrmForGame(plain.path(), "GOG"));
+  EXPECT_FALSE(ProtonLauncher::defaultSteamDrmForGame(plain.path(), "Epic"));
+  // ...unless its files sit in a Steam library or ship a steam_appid.txt.
+  EXPECT_TRUE(ProtonLauncher::defaultSteamDrmForGame(
+      "/home/u/.local/share/Steam/steamapps/common/Fallout 4", "GOG"));
   QFile appId(QDir(plain.path()).filePath("steam_appid.txt"));
   ASSERT_TRUE(appId.open(QIODevice::WriteOnly));
   appId.close();
-  EXPECT_TRUE(ProtonLauncher::defaultSteamDrmForGame(plain.path()));
+  EXPECT_TRUE(ProtonLauncher::defaultSteamDrmForGame(plain.path(), "GOG"));
+}
+
+TEST(ProtonLauncherSteamDrm, InstanceChoiceUsesTheIniGamePath)
+{
+  QTemporaryDir dir;
+  ASSERT_TRUE(dir.isValid());
+  const QString ini = dir.filePath("ModOrganizer.ini");
+  const auto write = [&](const QString& edition, const QVariant& explicitDrm) {
+    QFile::remove(ini);
+    QSettings settings(ini, QSettings::IniFormat);
+    // Stored the way the instance writes it: a Wine path inside a ByteArray.
+    settings.setValue("gamePath",
+                      QByteArray("Z:\\home\\u\\Games\\Wasteland\\Stock Game"));
+    if (!edition.isEmpty()) settings.setValue("game_edition", edition);
+    if (explicitDrm.isValid()) settings.setValue("fluorine/steam_drm", explicitDrm);
+    settings.sync();
+  };
+
+  // No recorded edition: a Steam copy outside the library keeps the bridge,
+  // and the game directory is the Linux form of the ini path.
+  write({}, {});
+  auto choice = ProtonLauncher::steamDrmForInstance(ini);
+  EXPECT_TRUE(choice.enabled);
+  EXPECT_FALSE(choice.explicitSetting);
+  EXPECT_EQ(choice.gameDirectory, "/home/u/Games/Wasteland/Stock Game");
+
+  // The ini's own path wins over a separately detected directory, so the
+  // library panel and the launch cannot disagree.
+  choice = ProtonLauncher::steamDrmForInstance(
+      ini, "/home/u/.local/share/Steam/steamapps/common/Fallout 4");
+  EXPECT_EQ(choice.gameDirectory, "/home/u/Games/Wasteland/Stock Game");
+
+  write("GOG", {});
+  EXPECT_FALSE(ProtonLauncher::steamDrmForInstance(ini).enabled);
+
+  // An explicit setting overrides the default either way.
+  write("GOG", true);
+  choice = ProtonLauncher::steamDrmForInstance(ini);
+  EXPECT_TRUE(choice.enabled);
+  EXPECT_TRUE(choice.explicitSetting);
+  write("Steam", false);
+  EXPECT_FALSE(ProtonLauncher::steamDrmForInstance(ini).enabled);
+
+  // Without an ini there is nothing to decide from; keep the historical default.
+  EXPECT_TRUE(ProtonLauncher::steamDrmForInstance(QString()).enabled);
 }
 
 int main(int argc, char** argv)
