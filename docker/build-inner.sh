@@ -776,6 +776,15 @@ if [ "${HERE_REAL}" != "${DST_REAL}" ]; then
                 <(sort -u "${MANIFEST}"))
         fi
 
+        # Step 1b: file-level removal. Files dropped from a directory we still
+        # ship (e.g. a retired plugin module) aren't visible at top-level
+        # granularity. The new bundle's prune script diffs the two file lists.
+        PRUNE="${HERE}/libexec/fluorine-prune"
+        # Run through bash so a lost exec bit can't silently skip the prune.
+        if [ -f "${PRUNE}" ] && [ -f "${HERE}/fluorine-files.txt" ]; then
+            bash "${PRUNE}" "${BIN_DST}/fluorine-files.txt" "${HERE}/fluorine-files.txt" "${BIN_DST}" >&2 || true
+        fi
+
         # Step 2: overlay copy. tar piped to tar streams the manifested entries
         # from HERE into BIN_DST. Existing directories stay; existing files we
         # ship get overwritten with the new version; user-added files inside
@@ -957,6 +966,10 @@ cat > "${OUT_DIR}/qt.conf" <<'QTCONF'
 Plugins = qt6plugins
 QTCONF
 
+# ── Stale-file pruning helper (shared by the launcher sync and the .bin installer) ──
+cp -f /src/docker/fluorine-prune "${OUT_DIR}/libexec/fluorine-prune"
+chmod +x "${OUT_DIR}/libexec/fluorine-prune"
+
 # ── Desktop integration files ──
 mkdir -p "${OUT_DIR}/icons"
 cp -f /src/data/icons/com.fluorine.manager.desktop "${OUT_DIR}/icons/"
@@ -966,12 +979,13 @@ cp -f /src/data/icons/com.fluorine.manager.metainfo.xml "${OUT_DIR}/icons/"
 # ── Content-derived bundle identity ──
 # Compute this once while packaging. The launcher hashes only this tiny file,
 # not the full payload, on normal startup. Exclude the identity itself and the
-# subsequently generated manifest to avoid circular input.
+# subsequently generated manifest and file list to avoid circular input.
 BUNDLE_SHA256="$(
     cd "${OUT_DIR}"
     find . -type f \
         ! -path './fluorine-bundle-version.txt' \
-        ! -path './fluorine-manifest.txt' -print0 \
+        ! -path './fluorine-manifest.txt' \
+        ! -path './fluorine-files.txt' -print0 \
         | LC_ALL=C sort -z \
         | xargs -0 sha256sum \
         | sha256sum \
@@ -987,8 +1001,18 @@ BUNDLE_SHA256="$(
 # ~/.local/share/fluorine/bin/. Without a manifest it would have to guess
 # (previously: tar the whole extraction dir), and would slurp any unrelated
 # files the user parked next to the launcher — e.g. 38 GB of mods in Downloads.
+# fluorine-files.txt is created empty first so the manifest lists it; it is
+# filled in below once the manifest exists and can be listed too.
+: > "${OUT_DIR}/fluorine-files.txt"
 (cd "${OUT_DIR}" && ls -A | grep -v '^fluorine-manifest\.txt$') > "${OUT_DIR}/fluorine-manifest.txt"
 echo "Wrote manifest: $(wc -l < "${OUT_DIR}/fluorine-manifest.txt") entries"
+
+# ── Per-file list of everything in the bundle ──
+# Diffed against the installed copy's list on update to find files a release
+# stopped shipping inside directories that are otherwise still ours.
+(cd "${OUT_DIR}" && find . \( -type f -o -type l \) ! -path './fluorine-files.txt' -printf '%P\n' \
+    | LC_ALL=C sort) > "${OUT_DIR}/fluorine-files.txt"
+echo "Wrote file list: $(wc -l < "${OUT_DIR}/fluorine-files.txt") entries"
 
 # ── Determine build mode ──
 # BUILD_MODE is passed from build.sh: tarball (default), installer, all
@@ -1055,9 +1079,24 @@ case "${CHOICE}" in
         echo ""
         echo "Installing to ${INSTALL_DIR}..."
         mkdir -p "${INSTALL_DIR}"
+        # Keep the previous release's file list; extraction overwrites it.
+        # An empty file (no previous list) makes the prune a no-op.
+        OLD_FILES="$(mktemp)"
+        trap 'rm -f "${OLD_FILES}"' EXIT
+        if [ -f "${INSTALL_DIR}/fluorine-files.txt" ]; then
+            cp -f "${INSTALL_DIR}/fluorine-files.txt" "${OLD_FILES}"
+        fi
         # Extract payload (everything after the __PAYLOAD__ marker)
         ARCHIVE_START=$(awk '/^__PAYLOAD__$/{print NR + 1; exit 0;}' "$0")
         tail -n +"${ARCHIVE_START}" "$0" | tar xzf - -C "${INSTALL_DIR}" --strip-components=1
+
+        # Remove files this release no longer ships (extraction only adds).
+        if [ -f "${INSTALL_DIR}/libexec/fluorine-prune" ] && [ -f "${INSTALL_DIR}/fluorine-files.txt" ]; then
+            bash "${INSTALL_DIR}/libexec/fluorine-prune" "${OLD_FILES}" \
+                "${INSTALL_DIR}/fluorine-files.txt" "${INSTALL_DIR}" || true
+        fi
+        # The trap does not survive the exec of the launcher below.
+        rm -f "${OLD_FILES}"
 
         # Create desktop shortcut
         mkdir -p "${DESKTOP_DIR}" "${ICON_DIR}"
