@@ -326,6 +326,11 @@ SKIP_PATTERN="${SKIP_PATTERN}|libpython"
 SKIP_PATTERN="${SKIP_PATTERN}|libssl\.so|libcrypto\.so"
 # Fontconfig must match the host configuration it parses.
 SKIP_PATTERN="${SKIP_PATTERN}|libfontconfig\.so"
+# Expat is loaded by Mesa's drivers (EGL, libva) as well as by Qt WebEngine and
+# fontconfig. A bundled copy shadows the host's through LD_LIBRARY_PATH, and a
+# Mesa built against a newer expat then fails on missing symbols such as
+# XML_GetCurrentByteIndex64. It is ABI-stable and present on every desktop distro.
+SKIP_PATTERN="${SKIP_PATTERN}|libexpat\.so"
 # NSS and NSPR must also come from the host as one matching stack. In
 # particular, bundling a newer libsmime3 while excluding libnss3/libnssutil3
 # makes startup fail on Ubuntu 24.04 with missing NSS_3.101 symbols.
