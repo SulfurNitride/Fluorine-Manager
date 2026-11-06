@@ -379,6 +379,10 @@ int spawn(const SpawnParameters& sp, env::NativeProcess& process)
 
     launcher.setSteamDrm(useSteamDrm && sp.useSteam)
         .setStoreVariant(storeVariant)
+        .setUseSteamShaderCache(
+            QSettings().value("fluorine/use_steam_shader_cache", true).toBool())
+        .setRecordSteamPipelines(
+            QSettings().value("fluorine/record_steam_pipelines", true).toBool())
         .setUseSLR(true);
 
     const QString prefixPath = resolvePrefixPath();

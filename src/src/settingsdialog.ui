@@ -1901,6 +1901,41 @@
                </widget>
               </item>
               <item>
+               <widget class="QGroupBox" name="steamShaderCacheGroup">
+                <layout class="QVBoxLayout" name="steamShaderCacheGroupLayout">
+                 <item>
+                  <widget class="QCheckBox" name="useSteamShaderCacheCheckBox">
+                   <property name="text">
+                    <string>Use Steam's shader cache for Steam games</string>
+                   </property>
+                   <property name="toolTip">
+                    <string>Games installed through Steam load the shaders Steam has already compiled or downloaded for them, and add new ones to the same place. Games from other stores are not affected. Takes effect on the next launch.</string>
+                   </property>
+                   <property name="checked">
+                    <bool>true</bool>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QCheckBox" name="recordSteamPipelinesCheckBox">
+                   <property name="text">
+                    <string>Let Steam pre-compile the shaders my games use</string>
+                   </property>
+                   <property name="toolTip">
+                    <string>Records the shaders a Steam game creates, including ones added by mods, so Steam can compile them in the background for the next launch. Needs Steam's Shader Pre-Caching turned on and the option above. Takes effect on the next launch.</string>
+                   </property>
+                   <property name="checked">
+                    <bool>true</bool>
+                   </property>
+                  </widget>
+                 </item>
+                </layout>
+                <property name="title">
+                 <string>Shader cache</string>
+                </property>
+               </widget>
+              </item>
+              <item>
                <widget class="QWidget" name="experimentalFilesystemGroup">
                 <layout class="QVBoxLayout" name="experimentalFilesystemGroupLayout">
                  <item>

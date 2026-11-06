@@ -8,6 +8,7 @@
 #include "vfsbackend.h"
 #include "vdfparser.h"
 #include <cstdio>
+#include <optional>
 #include <QByteArray>
 #include <QCoreApplication>
 #include <QDir>
@@ -365,9 +366,12 @@ QString compatDataPathFromPrefix(const QString& prefixPath)
   return QDir::cleanPath(QFileInfo(prefixPath).dir().absolutePath());
 }
 
-QString selectedSteamGameLocale(uint32_t appId, const QString& gameDirectory)
+// The `steamapps` folder of the Steam library that `gameDirectory` sits in
+// (the parent of the `common` folder above it), or empty when the directory is
+// not inside a Steam library.
+QString steamAppsDirForGameDirectory(const QString& gameDirectory)
 {
-  if (appId == 0 || gameDirectory.trimmed().isEmpty()) return {};
+  if (gameDirectory.trimmed().isEmpty()) return {};
 
   const QFileInfo gameInfo(gameDirectory);
   const QString canonical = gameInfo.canonicalFilePath();
@@ -376,29 +380,168 @@ QString selectedSteamGameLocale(uint32_t appId, const QString& gameDirectory)
     if (current.dirName().compare(QStringLiteral("common"),
                                   Qt::CaseInsensitive) == 0) {
       QDir steamapps = current;
-      if (!steamapps.cdUp()) return {};
-      const QString manifestPath = steamapps.filePath(
-          QStringLiteral("appmanifest_%1.acf").arg(appId));
-      QFile manifestFile(manifestPath);
-      if (!manifestFile.open(QIODevice::ReadOnly | QIODevice::Text)) return {};
-
-      const AppManifest manifest = AppManifest::fromVdf(
-          QString::fromUtf8(manifestFile.readAll()));
-      bool ok = false;
-      const uint32_t manifestAppId = manifest.app_id.toUInt(&ok);
-      if (!ok || manifestAppId != appId) return {};
-
-      const QString locale = gameLanguageToLocale(manifest.language);
-      if (!locale.isEmpty()) {
-        MOBase::log::debug("Steam app {} selects language '{}' ({})",
-                           appId, manifest.language, locale);
-      }
-      return locale;
+      return steamapps.cdUp() ? steamapps.absolutePath() : QString{};
     }
     if (!current.cdUp()) break;
   }
 
   return {};
+}
+
+// The parsed appmanifest for `appId` in `steamappsDir`, if that library holds
+// the app.
+std::optional<AppManifest> readSteamAppManifest(const QString& steamappsDir,
+                                                uint32_t appId)
+{
+  QFile manifestFile(QDir(steamappsDir).filePath(
+      QStringLiteral("appmanifest_%1.acf").arg(appId)));
+  if (!manifestFile.open(QIODevice::ReadOnly | QIODevice::Text)) return std::nullopt;
+
+  AppManifest manifest = AppManifest::fromVdf(
+      QString::fromUtf8(manifestFile.readAll()));
+  bool ok = false;
+  const uint32_t manifestAppId = manifest.app_id.toUInt(&ok);
+  if (!ok || manifestAppId != appId) return std::nullopt;
+  return manifest;
+}
+
+QString selectedSteamGameLocale(uint32_t appId, const QString& gameDirectory)
+{
+  if (appId == 0) return {};
+
+  const QString steamapps = steamAppsDirForGameDirectory(gameDirectory);
+  if (steamapps.isEmpty()) return {};
+  const auto manifest = readSteamAppManifest(steamapps, appId);
+  if (!manifest) return {};
+
+  const QString locale = gameLanguageToLocale(manifest->language);
+  if (!locale.isEmpty()) {
+    MOBase::log::debug("Steam app {} selects language '{}' ({})",
+                       appId, manifest->language, locale);
+  }
+  return locale;
+}
+
+// Steam's shader cache for `appId`: <library>/steamapps/shadercache/<appid>.
+// The library is the one `gameDirectory` sits in; when the game files live
+// elsewhere (a Stock Game or Game Root copy) every Steam library is searched
+// for the app's manifest instead. Empty when Steam does not have the app
+// installed, so non-Steam copies never touch a Steam library.
+QString steamShaderCacheDir(uint32_t appId, const QString& gameDirectory)
+{
+  if (appId == 0) return {};
+
+  QString steamapps = steamAppsDirForGameDirectory(gameDirectory);
+  if (steamapps.isEmpty() || !readSteamAppManifest(steamapps, appId)) {
+    steamapps.clear();
+    for (const QString& library : findSteamLibraryPaths()) {
+      const QString candidate = QDir(library).filePath(QStringLiteral("steamapps"));
+      if (readSteamAppManifest(candidate, appId)) {
+        steamapps = candidate;
+        break;
+      }
+    }
+  }
+  if (steamapps.isEmpty()) return {};
+
+  return QDir(steamapps).filePath(
+      QStringLiteral("shadercache/%1").arg(appId));
+}
+
+// Steam's "Shader Pre-Caching" switch (Settings > Downloads). Without it Steam
+// neither records nor replays pipelines, so there is nothing to feed.
+bool steamShaderPrecachingEnabled(const QString& steamPath)
+{
+  QFile file(QDir(steamPath).filePath(QStringLiteral("config/config.vdf")));
+  if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return true;
+
+  const VdfValue root = parseVdf(QString::fromUtf8(file.readAll()));
+  const VdfValue* node = &root;
+  for (const char* key : {"InstallConfigStore", "Software", "Valve", "Steam",
+                          "ShaderCacheManager"}) {
+    node = node->get(QString::fromLatin1(key));
+    if (!node) return true;
+  }
+  return node->getString(QStringLiteral("DisableShaderCache")) != QLatin1String("1");
+}
+
+// The driver/DXVK cache variables Steam sets for a game, so shaders Steam
+// already compiled or downloaded are found and anything new is added to the
+// same place. Values follow what a real Steam launch passes. With
+// `recordPipelines` the game also records the pipelines it creates into Steam's
+// per-game cache through Steam's Fossilize layer, so Steam can pre-compile
+// them for the next launch; modded shaders then stop stuttering too. Callers
+// apply user-configured variables afterwards so those still win.
+bool applySteamShaderCacheEnv(QProcessEnvironment& env, const QString& cacheDir,
+                              const QString& steamPath, bool recordPipelines)
+{
+  const QString pipelinesDir = QDir(cacheDir).filePath(QStringLiteral("fozpipelinesv6"));
+  const QStringList subdirs{QStringLiteral("nvidiav1"), QStringLiteral("AMDv1"),
+                            QStringLiteral("DXVK_state_cache")};
+  for (const QString& subdir : subdirs) {
+    const QString path = QDir(cacheDir).filePath(subdir);
+    if (!QDir().mkpath(path)) {
+      MOBase::log::warn("Not using Steam shader cache '{}': cannot create '{}'",
+                        cacheDir, path);
+      return false;
+    }
+  }
+
+  const auto sub = [&cacheDir](const QString& name) {
+    return QDir(cacheDir).filePath(name);
+  };
+  const QString cacheName = QStringLiteral("steamapp_shader_cache");
+
+  // Mesa also reads the precompiled caches Steam downloaded for each bucket
+  // (one `steamapprun_pipeline_cache.<id>` folder per engine/driver bucket).
+  QStringList foz{QStringLiteral("steam_cache"), QStringLiteral("steam_precompiled")};
+  const QString bucketPrefix = QStringLiteral("steamapprun_pipeline_cache.");
+  for (const QString& bucket : QDir(pipelinesDir).entryList(
+           {bucketPrefix + QLatin1Char('*')}, QDir::Dirs | QDir::NoDotAndDotDot,
+           QDir::Name)) {
+    foz << QStringLiteral("steam_precompiled_") + bucket.mid(bucketPrefix.size());
+  }
+
+  env.insert("STEAM_COMPAT_SHADER_PATH", cacheDir);
+  // NVIDIA
+  env.insert("__GL_SHADER_DISK_CACHE_APP_NAME", cacheName);
+  env.insert("__GL_SHADER_DISK_CACHE_PATH", sub("nvidiav1"));
+  env.insert("__GL_SHADER_DISK_CACHE_READ_ONLY_APP_NAME",
+             "steam_shader_cache;steamapp_merged_shader_cache");
+  env.insert("__GL_SHADER_DISK_CACHE_SKIP_CLEANUP", "1");
+  // Mesa
+  env.insert("MESA_DISK_CACHE_READ_ONLY_FOZ_DBS", foz.join(','));
+  env.insert("MESA_DISK_CACHE_SINGLE_FILE", "1");
+  env.insert("MESA_GLSL_CACHE_DIR", cacheDir);
+  env.insert("MESA_GLSL_CACHE_MAX_SIZE", "5G");
+  env.insert("MESA_SHADER_CACHE_DIR", cacheDir);
+  env.insert("MESA_SHADER_CACHE_MAX_SIZE", "5G");
+  // AMD
+  env.insert("AMD_VK_PIPELINE_CACHE_FILENAME", cacheName);
+  env.insert("AMD_VK_PIPELINE_CACHE_PATH", sub("AMDv1"));
+  env.insert("AMD_VK_USE_PIPELINE_CACHE", "1");
+  // DXVK
+  env.insert("DXVK_STATE_CACHE_PATH", sub("DXVK_state_cache"));
+
+  if (recordPipelines) {
+    const QString filter =
+        QDir(steamPath).filePath(QStringLiteral("fossilize_engine_filters.json"));
+    if (steamPath.isEmpty() || !QFileInfo::exists(filter) ||
+        !steamShaderPrecachingEnabled(steamPath)) {
+      MOBase::log::debug("Not recording pipelines for Steam: Steam's pipeline "
+                         "filter is missing or shader pre-caching is off");
+    } else if (QDir().mkpath(pipelinesDir)) {
+      // The layer adds the bucket suffix itself; $bucketdir is expanded by the
+      // layer, not by a shell, so it must stay literal.
+      env.insert("ENABLE_VK_LAYER_VALVE_steam_fossilize_1", "1");
+      env.insert("FOSSILIZE_APPLICATION_INFO_FILTER_PATH", filter);
+      env.insert("STEAM_FOSSILIZE_DUMP_PATH",
+                 QDir(pipelinesDir).filePath(QStringLiteral("steamapprun_pipeline_cache")));
+      env.insert("STEAM_FOSSILIZE_DUMP_PATH_READ_ONLY",
+                 "$bucketdir/steam_pipeline_cache.foz;$bucketdir/steamapp_pipeline_cache.foz");
+    }
+  }
+  return true;
 }
 
 bool isLocaleOverride(const QString& name)
@@ -670,6 +813,18 @@ ProtonLauncher& ProtonLauncher::setSteamDrm(bool useSteamDrm)
 ProtonLauncher& ProtonLauncher::setUseSLR(bool useSLR)
 {
   m_useSLR = useSLR;
+  return *this;
+}
+
+ProtonLauncher& ProtonLauncher::setUseSteamShaderCache(bool use)
+{
+  m_useSteamShaderCache = use;
+  return *this;
+}
+
+ProtonLauncher& ProtonLauncher::setRecordSteamPipelines(bool record)
+{
+  m_recordSteamPipelines = record;
   return *this;
 }
 
@@ -958,6 +1113,20 @@ bool ProtonLauncher::launchWithProton(env::NativeProcess& process) const
     env.insert("STEAM_COMPAT_APP_ID", targetAppId);
     env.insert("SteamAppId", targetAppId);
     env.insert("SteamGameId", launchSteamGameId);
+
+    // Reuse Steam's pre-compiled shaders for this game. Done before the
+    // wrapper/instance/executable variables are applied below, so an explicit
+    // override of any cache variable still wins.
+    if (m_useSteamShaderCache) {
+      const QString cacheDir = steamShaderCacheDir(m_steamAppId, m_gameDirectory);
+      if (cacheDir.isEmpty()) {
+        MOBase::log::debug("Steam app {} is not installed in a Steam library; "
+                           "not using Steam's shader cache", m_steamAppId);
+      } else if (applySteamShaderCacheEnv(env, cacheDir, steamPath,
+                                          m_recordSteamPipelines)) {
+        MOBase::log::info("Using Steam shader cache '{}'", cacheDir);
+      }
+    }
   }
 
   // When Steam DRM is disabled (e.g. GOG games), set UMU_ID so that

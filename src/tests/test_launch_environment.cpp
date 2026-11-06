@@ -27,7 +27,10 @@
 
 // Avoid probing the user's Steam installation in a launch test. The launcher
 // and the subprocess/environment handling themselves are the production code.
-QString findSteamPath() { return {}; }
+static QString steamPathStub;
+QString findSteamPath() { return steamPathStub; }
+static QStringList steamLibraries;
+QStringList findSteamLibraryPaths() { return steamLibraries; }
 static QString slrRunScript;
 QString getSlrRunScript() { return slrRunScript; }
 QString fluorineDataDir() { return {}; }
@@ -643,6 +646,256 @@ TEST(LaunchWrappers, PerWrapperOptionsComposeWithGlobalsForNativeProtonAndSlr)
       QCoreApplication::processEvents();
     }
   }
+}
+
+namespace
+{
+constexpr uint32_t kShaderCacheAppId = 489830;
+const QStringList kShaderCacheVars{
+    "STEAM_COMPAT_SHADER_PATH", "MESA_SHADER_CACHE_DIR",
+    "MESA_GLSL_CACHE_DIR",      "MESA_DISK_CACHE_SINGLE_FILE",
+    "MESA_DISK_CACHE_READ_ONLY_FOZ_DBS", "__GL_SHADER_DISK_CACHE_PATH",
+    "__GL_SHADER_DISK_CACHE_SKIP_CLEANUP", "DXVK_STATE_CACHE_PATH",
+    "ENABLE_VK_LAYER_VALVE_steam_fossilize_1", "FOSSILIZE_APPLICATION_INFO_FILTER_PATH",
+    "STEAM_FOSSILIZE_DUMP_PATH", "STEAM_FOSSILIZE_DUMP_PATH_READ_ONLY"};
+
+// Launches a fake Proton that prints the shader cache variables it received.
+QMap<QString, QString> shaderCacheLaunchEnvironment(
+    const QTemporaryDir& temp, const QString& gameDirectory, bool useCache,
+    const QString& executableOptions = {}, bool record = false)
+{
+  const QString output = temp.filePath("env-result");
+  const QString proton = temp.filePath("fake-proton");
+  QFile::remove(output);
+  QFile script(proton);
+  EXPECT_TRUE(script.open(QIODevice::WriteOnly));
+  QByteArray body = "#!/bin/sh\n";
+  for (const QString& name : kShaderCacheVars) {
+    body += "printf '" + name.toUtf8() + "=%s\\n' \"$" + name.toUtf8() +
+            "\" >> \"$FLUORINE_TEST_OUTPUT.tmp\"\n";
+  }
+  body += "/bin/mv -- \"$FLUORINE_TEST_OUTPUT.tmp\" \"$FLUORINE_TEST_OUTPUT\"\n";
+  script.write(body);
+  script.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+  script.close();
+
+  ProtonLauncher launcher;
+  launcher.setBinary(proton).setWorkingDir(temp.path())
+      .setGameDirectory(gameDirectory).setSteamAppId(kShaderCacheAppId)
+      .setProtonPath(proton).setPrefix(temp.path()).setSteamDrm(false)
+      .setUseSLR(false).setUseSteamShaderCache(useCache)
+      .setRecordSteamPipelines(record)
+      .setWrapper("", executableOptions)
+      .addEnvVar("FLUORINE_TEST_OUTPUT", output);
+  EXPECT_TRUE(launcher.launch());
+  QElapsedTimer timer;
+  timer.start();
+  while (!QFile::exists(output) && timer.elapsed() < 5000) {
+    QCoreApplication::processEvents();
+    QThread::msleep(10);
+  }
+
+  QMap<QString, QString> values;
+  QFile result(output);
+  EXPECT_TRUE(result.open(QIODevice::ReadOnly));
+  for (const QByteArray& line : result.readAll().split('\n')) {
+    const int equals = line.indexOf('=');
+    if (equals > 0) {
+      values.insert(QString::fromUtf8(line.left(equals)),
+                    QString::fromUtf8(line.mid(equals + 1)));
+    }
+  }
+  QCoreApplication::processEvents();
+  return values;
+}
+
+// <root>/steamapps with the app's manifest and, optionally, its game folder.
+QString makeSteamLibrary(const QString& root, bool withManifest = true)
+{
+  const QString steamapps = QDir(root).filePath("steamapps");
+  QDir().mkpath(steamapps + "/common/Starfield");
+  if (withManifest) {
+    QFile manifest(steamapps + QString("/appmanifest_%1.acf").arg(kShaderCacheAppId));
+    EXPECT_TRUE(manifest.open(QIODevice::WriteOnly));
+    manifest.write(QString("\"AppState\"\n{\n\t\"appid\"\t\t\"%1\"\n"
+                           "\t\"name\"\t\t\"Starfield\"\n"
+                           "\t\"installdir\"\t\t\"Starfield\"\n}\n")
+                       .arg(kShaderCacheAppId).toUtf8());
+  }
+  return steamapps;
+}
+}  // namespace
+
+TEST(SteamShaderCache, GameInSteamLibraryUsesItsShaderCache)
+{
+  QTemporaryDir temp;
+  ASSERT_TRUE(temp.isValid());
+  const QString steamapps = makeSteamLibrary(temp.filePath("library"));
+  const QString cache = steamapps + QString("/shadercache/%1").arg(kShaderCacheAppId);
+
+  const auto env = shaderCacheLaunchEnvironment(
+      temp, steamapps + "/common/Starfield", true);
+  EXPECT_EQ(env["STEAM_COMPAT_SHADER_PATH"], cache);
+  EXPECT_EQ(env["MESA_SHADER_CACHE_DIR"], cache);
+  EXPECT_EQ(env["MESA_GLSL_CACHE_DIR"], cache);
+  EXPECT_EQ(env["MESA_DISK_CACHE_SINGLE_FILE"], "1");
+  EXPECT_EQ(env["__GL_SHADER_DISK_CACHE_PATH"], cache + "/nvidiav1");
+  EXPECT_EQ(env["DXVK_STATE_CACHE_PATH"], cache + "/DXVK_state_cache");
+  EXPECT_EQ(env["__GL_SHADER_DISK_CACHE_SKIP_CLEANUP"], "1");
+  EXPECT_EQ(env["MESA_DISK_CACHE_READ_ONLY_FOZ_DBS"], "steam_cache,steam_precompiled");
+  EXPECT_NE(env["ENABLE_VK_LAYER_VALVE_steam_fossilize_1"], "1");
+  EXPECT_TRUE(env["STEAM_FOSSILIZE_DUMP_PATH"].isEmpty());
+  EXPECT_TRUE(QFileInfo(cache + "/DXVK_state_cache").isDir());
+  EXPECT_TRUE(QFileInfo(cache + "/nvidiav1").isDir());
+}
+
+namespace
+{
+// <root> laid out like a Steam install: the engine filter file the Fossilize
+// layer needs and a config.vdf with the Shader Pre-Caching switch.
+QString makeFakeSteam(const QString& root, bool withFilter = true,
+                      bool precachingDisabled = false)
+{
+  QDir().mkpath(root + "/config");
+  if (withFilter) {
+    QFile filter(root + "/fossilize_engine_filters.json");
+    EXPECT_TRUE(filter.open(QIODevice::WriteOnly));
+    filter.write("{}");
+  }
+  QFile config(root + "/config/config.vdf");
+  EXPECT_TRUE(config.open(QIODevice::WriteOnly));
+  config.write(QString("\"InstallConfigStore\"\n{\n\t\"Software\"\n\t{\n\t\t\"Valve\"\n"
+                       "\t\t{\n\t\t\t\"Steam\"\n\t\t\t{\n\t\t\t\t\"ShaderCacheManager\"\n"
+                       "\t\t\t\t{\n\t\t\t\t\t\"DisableShaderCache\"\t\t\"%1\"\n"
+                       "\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n}\n")
+                   .arg(precachingDisabled ? "1" : "0").toUtf8());
+  return root;
+}
+
+struct SteamPathReset
+{
+  ~SteamPathReset() { steamPathStub.clear(); }
+};
+}  // namespace
+
+TEST(SteamShaderCache, RecordsPipelinesIntoStepsBucketForSteamToPrecompile)
+{
+  QTemporaryDir temp;
+  ASSERT_TRUE(temp.isValid());
+  SteamPathReset reset;
+  steamPathStub = makeFakeSteam(temp.filePath("steam"));
+  const QString steamapps = makeSteamLibrary(temp.filePath("library"));
+  const QString cache = steamapps + QString("/shadercache/%1").arg(kShaderCacheAppId);
+  // Buckets Steam already downloaded for this app.
+  QDir().mkpath(cache + "/fozpipelinesv6/steamapprun_pipeline_cache.923fa87291dfec1c");
+  QDir().mkpath(cache + "/fozpipelinesv6/steamapprun_pipeline_cache.049c3679665037db");
+
+  const auto env = shaderCacheLaunchEnvironment(
+      temp, steamapps + "/common/Starfield", true, {}, true);
+  EXPECT_EQ(env["MESA_DISK_CACHE_READ_ONLY_FOZ_DBS"],
+            "steam_cache,steam_precompiled,"
+            "steam_precompiled_049c3679665037db,steam_precompiled_923fa87291dfec1c");
+  EXPECT_EQ(env["ENABLE_VK_LAYER_VALVE_steam_fossilize_1"], "1");
+  EXPECT_EQ(env["FOSSILIZE_APPLICATION_INFO_FILTER_PATH"],
+            steamPathStub + "/fossilize_engine_filters.json");
+  EXPECT_EQ(env["STEAM_FOSSILIZE_DUMP_PATH"],
+            cache + "/fozpipelinesv6/steamapprun_pipeline_cache");
+  // Expanded by the layer, so it must reach the game unexpanded.
+  EXPECT_EQ(env["STEAM_FOSSILIZE_DUMP_PATH_READ_ONLY"],
+            "$bucketdir/steam_pipeline_cache.foz;$bucketdir/steamapp_pipeline_cache.foz");
+}
+
+TEST(SteamShaderCache, DoesNotRecordWhenSteamCannotUseTheRecording)
+{
+  QTemporaryDir temp;
+  ASSERT_TRUE(temp.isValid());
+  SteamPathReset reset;
+  const QString steamapps = makeSteamLibrary(temp.filePath("library"));
+  const QString cache = steamapps + QString("/shadercache/%1").arg(kShaderCacheAppId);
+  const auto recorded = [](const QMap<QString, QString>& env) {
+    return env.value("ENABLE_VK_LAYER_VALVE_steam_fossilize_1") == "1" ||
+           !env.value("STEAM_FOSSILIZE_DUMP_PATH").isEmpty();
+  };
+
+  // Steam's shader pre-caching is switched off.
+  steamPathStub = makeFakeSteam(temp.filePath("steam off"), true, true);
+  auto env = shaderCacheLaunchEnvironment(
+      temp, steamapps + "/common/Starfield", true, {}, true);
+  EXPECT_FALSE(recorded(env));
+  EXPECT_EQ(env["MESA_SHADER_CACHE_DIR"], cache);  // reading Steam's cache still applies
+
+  // No engine filter file: Steam would not know what to record.
+  steamPathStub = makeFakeSteam(temp.filePath("steam nofilter"), false);
+  EXPECT_FALSE(recorded(shaderCacheLaunchEnvironment(
+      temp, steamapps + "/common/Starfield", true, {}, true)));
+
+  // No Steam install found at all (also hide any ~/.steam fallback).
+  steamPathStub.clear();
+  const QByteArray realHome = qgetenv("HOME");
+  struct RestoreHome
+  {
+    QByteArray home;
+    ~RestoreHome() { qputenv("HOME", home); }
+  } restoreHome{realHome};
+  qputenv("HOME", temp.filePath("no home").toUtf8());
+  EXPECT_FALSE(recorded(shaderCacheLaunchEnvironment(
+      temp, steamapps + "/common/Starfield", true, {}, true)));
+
+  // Recording was not asked for.
+  steamPathStub = makeFakeSteam(temp.filePath("steam on"));
+  EXPECT_FALSE(recorded(shaderCacheLaunchEnvironment(
+      temp, steamapps + "/common/Starfield", true, {}, false)));
+}
+
+TEST(SteamShaderCache, GameCopyOutsideTheLibraryFindsTheLibraryByManifest)
+{
+  QTemporaryDir temp;
+  ASSERT_TRUE(temp.isValid());
+  const QString steamapps = makeSteamLibrary(temp.filePath("library"));
+  const QString stockGame = temp.filePath("stock game");
+  ASSERT_TRUE(QDir().mkpath(stockGame));
+  steamLibraries = {temp.filePath("other library"), temp.filePath("library")};
+  struct Reset { ~Reset() { steamLibraries.clear(); } } reset;
+
+  const auto env = shaderCacheLaunchEnvironment(temp, stockGame, true);
+  EXPECT_EQ(env["MESA_SHADER_CACHE_DIR"],
+            steamapps + QString("/shadercache/%1").arg(kShaderCacheAppId));
+}
+
+TEST(SteamShaderCache, LeftAloneWhenSteamDoesNotHaveTheGameOrItIsDisabled)
+{
+  QTemporaryDir temp;
+  ASSERT_TRUE(temp.isValid());
+  const QString noManifest = makeSteamLibrary(temp.filePath("empty library"), false);
+  const QString installed = makeSteamLibrary(temp.filePath("library"));
+  const auto notSteamCache = [](const QMap<QString, QString>& env) {
+    for (const QString& name : kShaderCacheVars) {
+      EXPECT_FALSE(env.value(name).contains("/shadercache/")) << name.toStdString();
+    }
+  };
+
+  notSteamCache(shaderCacheLaunchEnvironment(
+      temp, noManifest + "/common/Starfield", true));
+  notSteamCache(shaderCacheLaunchEnvironment(
+      temp, installed + "/common/Starfield", false));
+  EXPECT_FALSE(QFileInfo::exists(
+      noManifest + QString("/shadercache/%1").arg(kShaderCacheAppId)));
+  EXPECT_FALSE(QFileInfo::exists(
+      installed + QString("/shadercache/%1").arg(kShaderCacheAppId)));
+}
+
+TEST(SteamShaderCache, ExplicitExecutableVariablesOverrideTheSteamCache)
+{
+  QTemporaryDir temp;
+  ASSERT_TRUE(temp.isValid());
+  const QString steamapps = makeSteamLibrary(temp.filePath("library"));
+  const QString cache = steamapps + QString("/shadercache/%1").arg(kShaderCacheAppId);
+
+  const auto env = shaderCacheLaunchEnvironment(
+      temp, steamapps + "/common/Starfield", true,
+      "DXVK_STATE_CACHE_PATH=/custom/dxvk");
+  EXPECT_EQ(env["DXVK_STATE_CACHE_PATH"], "/custom/dxvk");
+  EXPECT_EQ(env["MESA_SHADER_CACHE_DIR"], cache);
 }
 
 TEST(LaunchWrappers, InvalidOptionsRejectLaunchAndCanBeReplaced)

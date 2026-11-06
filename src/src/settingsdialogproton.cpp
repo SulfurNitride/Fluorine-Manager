@@ -48,6 +48,8 @@ std::atomic<ProtonSettingsTab*> g_activeInstallTab = nullptr;
 
 constexpr auto kAllowUnsupportedProtonSetting = "fluorine/allow_unsupported_proton";
 constexpr auto kLinkSteamSaveDataSetting      = "fluorine/link_steam_save_data";
+constexpr auto kUseSteamShaderCacheSetting    = "fluorine/use_steam_shader_cache";
+constexpr auto kRecordSteamPipelinesSetting   = "fluorine/record_steam_pipelines";
 
 QString defaultPrefixLocation()
 {
@@ -75,6 +77,14 @@ ProtonSettingsTab::ProtonSettingsTab(Settings& s, SettingsDialog& d)
 
   ui->disableVfsCacheCheckBox->setChecked(
       QSettings().value("fluorine/disable_vfs_cache", false).toBool());
+  ui->useSteamShaderCacheCheckBox->setChecked(
+      QSettings().value(kUseSteamShaderCacheSetting, true).toBool());
+  ui->recordSteamPipelinesCheckBox->setChecked(
+      QSettings().value(kRecordSteamPipelinesSetting, true).toBool());
+  ui->recordSteamPipelinesCheckBox->setEnabled(
+      ui->useSteamShaderCacheCheckBox->isChecked());
+  QObject::connect(ui->useSteamShaderCacheCheckBox, &QCheckBox::toggled,
+                   ui->recordSteamPipelinesCheckBox, &QWidget::setEnabled);
 
   ui->vfsBackendComboBox->addItem(tr("FUSE (default)"),
                                   vfsBackendSettingValue(VfsBackend::Fuse));
@@ -171,6 +181,10 @@ void ProtonSettingsTab::update()
   QSettings().setValue(kAllowUnsupportedProtonSetting,
                        ui->allowUnsupportedProtonCheckBox->isChecked());
   QSettings().setValue("fluorine/launch_wrapper", ui->launchWrapperEdit->text());
+  QSettings().setValue(kUseSteamShaderCacheSetting,
+                       ui->useSteamShaderCacheCheckBox->isChecked());
+  QSettings().setValue(kRecordSteamPipelinesSetting,
+                       ui->recordSteamPipelinesCheckBox->isChecked());
   QSettings().setValue("fluorine/disable_vfs_cache",
                        ui->disableVfsCacheCheckBox->isChecked());
   QSettings instanceSettings(settings().filename(), QSettings::IniFormat);

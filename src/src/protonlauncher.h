@@ -29,6 +29,16 @@ public:
                              const QString& executableOptions = {});
   ProtonLauncher& setSteamDrm(bool useSteamDrm);
   ProtonLauncher& setUseSLR(bool useSLR);
+  // Point the GPU driver, DXVK and VKD3D caches at Steam's own per-game
+  // shader cache (steamapps/shadercache/<appid>) so a Steam game launched
+  // from Fluorine reuses Steam's pre-cached shaders. Needs the Steam app id
+  // and an installed Steam copy of the game; otherwise it does nothing.
+  ProtonLauncher& setUseSteamShaderCache(bool use);
+  // Also record the pipelines the game creates into Steam's shader cache for
+  // that app, through Steam's Fossilize layer, so Steam can pre-compile them
+  // (including modded shaders). Only applies with setUseSteamShaderCache and
+  // when Steam's own shader pre-caching is enabled.
+  ProtonLauncher& setRecordSteamPipelines(bool record);
   ProtonLauncher& setStoreVariant(const QString& variant);
   ProtonLauncher& addEnvVar(const QString& key, const QString& value);
   ProtonLauncher& setUseTerminal(bool useTerminal);
@@ -96,6 +106,8 @@ private:
   QStringList m_wrapperCommands;
   bool m_useSteamDrm{true};
   bool m_useSLR = true;
+  bool m_useSteamShaderCache = false;
+  bool m_recordSteamPipelines = false;
   QString m_storeVariant; // "GOG", "Epic", or empty for Steam
   QMap<QString, QString> m_envVars;
   QMap<QString, QString> m_wrapperEnvVars;
