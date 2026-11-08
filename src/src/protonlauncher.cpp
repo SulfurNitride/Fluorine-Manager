@@ -1102,6 +1102,8 @@ bool ProtonLauncher::launchWithProton(env::NativeProcess& process) const
   if (!compatDataPath.isEmpty()) {
     ensureTrackedFilesExist(compatDataPath);
     env.insert("STEAM_COMPAT_DATA_PATH", compatDataPath);
+    env.insert("PROTON_ENABLE_WAYLAND", "1");
+    env.insert("DXVK_HDR", "1");
   }
 
   const QString steamPath = detectSteamPath();
