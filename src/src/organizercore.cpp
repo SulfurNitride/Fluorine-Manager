@@ -1706,7 +1706,10 @@ namespace
 QString resolvePathIgnoringCase(const QString& base, const QString& relative)
 {
   QString current = base;
-  for (const QString& part : relative.split('/', Qt::SkipEmptyParts)) {
+  // the tree reports paths with backslashes, which are not separators on Linux
+  QString normalized = relative;
+  normalized.replace('\\', '/');
+  for (const QString& part : normalized.split('/', Qt::SkipEmptyParts)) {
     const QString exact = current + "/" + part;
     if (QFileInfo::exists(exact)) {
       current = exact;
@@ -1856,6 +1859,7 @@ bool OrganizerCore::previewFileWithAlternatives(QWidget* parent, QString fileNam
     return true;
   } else {
     delete preview;
+    log::warn("preview: no origin produced a preview for '{}'", fileName);
     QMessageBox::information(parent, tr("Sorry"),
                              tr("Sorry, can't preview anything. This function "
                                 "currently does not support extracting from bsas."));
