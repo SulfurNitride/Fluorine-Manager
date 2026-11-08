@@ -22,6 +22,7 @@ along with Mod Organizer.  If not, see <http://www.gnu.org/licenses/>.
 #include <QFileInfo>
 #include <QImageReader>
 #include <QLabel>
+#include <QSet>
 #include <QTextEdit>
 #include <utility.h>
 
@@ -33,6 +34,14 @@ PreviewGenerator::PreviewGenerator(const PluginContainer& pluginContainer)
     : m_PluginContainer(pluginContainer)
 {
   m_MaxSize = QGuiApplication::primaryScreen()->size() * 0.8;
+}
+
+bool PreviewGenerator::prefersOpen(const QString& fileExtension)
+{
+  static const QSet<QString> extensions = {
+      "txt", "ini", "cfg", "conf", "json", "xml", "yaml", "yml", "toml",
+      "log", "md",  "csv", "lua",  "psc",  "bat",  "sh"};
+  return extensions.contains(fileExtension.toLower());
 }
 
 bool PreviewGenerator::previewSupported(const QString& fileExtension,

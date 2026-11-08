@@ -250,7 +250,8 @@ void FileTree::activate(FileTreeItem* item)
 
   if (tryPreview) {
     const QFileInfo fi(item->realPath());
-    if (m_plugins.previewGenerator().previewSupported(fi.suffix().toLower(),
+    if ((item->isFromArchive() || !PreviewGenerator::prefersOpen(fi.suffix())) &&
+        m_plugins.previewGenerator().previewSupported(fi.suffix().toLower(),
                                                       item->isFromArchive())) {
       preview(item);
       return;
@@ -750,7 +751,8 @@ void FileTree::addOpenMenus(QMenu& menu, const MOShared::FileEntry& file)
                        "associated with it"))
       .enabled(canPreviewFile(m_plugins, file));
 
-  if (m_core.settings().interface().doubleClicksOpenPreviews()) {
+  if (m_core.settings().interface().doubleClicksOpenPreviews() &&
+      (file.isFromArchive() || !PreviewGenerator::prefersOpen(target.suffix()))) {
     previewMenu.addTo(menu);
     openMenu.addTo(menu);
     openHookedMenu.addTo(menu);

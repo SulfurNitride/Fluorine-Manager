@@ -33,6 +33,10 @@ class PreviewGenerator
 public:
   PreviewGenerator(const PluginContainer& pluginContainer);
 
+  // plain-text formats that are better opened in an editor than in a read-only
+  // preview
+  static bool prefersOpen(const QString& fileExtension);
+
   bool previewSupported(const QString& fileExtension, const bool& isArchive) const;
 
   QWidget* genPreview(const QString& fileName) const;
