@@ -606,15 +606,8 @@ void NexusKeyValidator::setFinished(ValidationAttempt::Result r, const QString& 
   }
 }
 
-NXMAccessManager::NXMAccessManager(QObject* parent, Settings* s,
-                                   const QString& moVersion)
-    : QNetworkAccessManager(parent), m_Settings(s), m_MOVersion(moVersion),
-      m_Validator(s, *this), m_ValidationState(NotChecked)
+void NXMAccessManager::setupOAuthObjects()
 {
-  NexusOAuthTokens tokens;
-  GlobalSettings::nexusOAuthTokens(tokens);
-  GlobalSettings::nexusApiKey(tokens.apiKey);
-  m_Tokens = tokens;
   m_NexusOAuth.reset(new QOAuth2AuthorizationCodeFlow);
   m_NexusOAuthReplyHandler.reset(new QOAuthHttpServerReplyHandler(
       QHostAddress::LocalHost, NexusOAuth::redirectPort(), this));
@@ -662,6 +655,18 @@ NXMAccessManager::NXMAccessManager(QObject* parent, Settings* s,
               break;
             }
           });
+}
+
+NXMAccessManager::NXMAccessManager(QObject* parent, Settings* s,
+                                   const QString& moVersion)
+    : QNetworkAccessManager(parent), m_Settings(s), m_MOVersion(moVersion),
+      m_Validator(s, *this), m_ValidationState(NotChecked)
+{
+  NexusOAuthTokens tokens;
+  GlobalSettings::nexusOAuthTokens(tokens);
+  GlobalSettings::nexusApiKey(tokens.apiKey);
+  m_Tokens = tokens;
+  setupOAuthObjects();
 
   connect(this, &NXMAccessManager::tokensReceived, this,
           &NXMAccessManager::saveRefreshedTokens);
@@ -980,8 +985,14 @@ void NXMAccessManager::cancelAuth()
     m_NexusOAuthReplyHandler->close();
   }
 
-  m_NexusOAuth.reset();
-  m_NexusOAuthReplyHandler.reset();
+  // Replace the flow rather than leaving it null. Every other method in this
+  // class dereferences m_NexusOAuth / m_NexusOAuthReplyHandler without a check,
+  // so destroying them here left a null unique_ptr behind that the next
+  // connectOrRefresh(), request helper or validation pass would dereference.
+  setupOAuthObjects();
+  // The handler's constructor may start listening; don't hold the redirect port
+  // open until the next login attempt.
+  m_NexusOAuthReplyHandler->close();
   setOAuthState(OAuthState::Cancelled);
 }
 

@@ -264,6 +264,7 @@ private:
   std::unique_ptr<QOAuthHttpServerReplyHandler> m_NexusOAuthReplyHandler;
 
   void handleOAuthError(const QString& message);
+  void setupOAuthObjects();
 
   void setOAuthState(OAuthState state, const QString& message = {});
   void notifyTokens();

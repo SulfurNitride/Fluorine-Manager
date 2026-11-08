@@ -55,7 +55,7 @@ void NexusOAuthLogin::start()
   }
   auto accessManager = NexusInterface::instance().getAccessManager();
   connect(accessManager, &NXMAccessManager::authorizationEnded, this,
-          &NexusOAuthLogin::authorizationEnded);
+          &NexusOAuthLogin::authorizationEnded, Qt::UniqueConnection);
 
   NexusInterface::instance().getAccessManager()->connectOrRefresh(NexusOAuthTokens());
   m_active = true;
@@ -68,8 +68,11 @@ void NexusOAuthLogin::authorizationEnded()
 
 void NexusOAuthLogin::cancel()
 {
-  NexusInterface::instance().getAccessManager()->cancelAuth();
+  // Clear the active flag first: cancelAuth() sets the OAuth state to Cancelled and
+  // emits updateOAuthState, whose handler calls isActive() to relabel the button.
+  // Clearing it afterwards left the button reading "Cancel" on a flow that was gone.
   m_active = false;
+  NexusInterface::instance().getAccessManager()->cancelAuth();
 }
 
 bool NexusOAuthLogin::isActive() const
