@@ -55,7 +55,7 @@ void NexusOAuthLogin::start()
   }
   auto accessManager = NexusInterface::instance().getAccessManager();
   connect(accessManager, &NXMAccessManager::authorizationEnded, this,
-          &NexusOAuthLogin::authorizationEnded);
+          &NexusOAuthLogin::authorizationEnded, Qt::UniqueConnection);
 
   NexusInterface::instance().getAccessManager()->connectOrRefresh(NexusOAuthTokens());
   m_active = true;

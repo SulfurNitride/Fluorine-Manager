@@ -990,6 +990,9 @@ void NXMAccessManager::cancelAuth()
   // so destroying them here left a null unique_ptr behind that the next
   // connectOrRefresh(), request helper or validation pass would dereference.
   setupOAuthObjects();
+  // The handler's constructor may start listening; don't hold the redirect port
+  // open until the next login attempt.
+  m_NexusOAuthReplyHandler->close();
   setOAuthState(OAuthState::Cancelled);
 }
 
