@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# Usage: fluorine-prune OLD_LIST NEW_LIST DEST_DIR
+#
+# Removes files that an earlier release shipped (listed in OLD_LIST) and the
+# current one doesn't (absent from NEW_LIST) from DEST_DIR. Both lists are
+# fluorine-files.txt: one relative path per line. Shared by the launcher sync
+# and the .bin installer so there is a single copy of the rules.
+#
+# Only files and symlinks are removed, never directories, so anything the user
+# put next to our files survives. Directories left empty are rmdir'd.
+set -u
+
+if [ "$#" -ne 3 ]; then
+    echo "usage: ${0##*/} OLD_LIST NEW_LIST DEST_DIR" >&2
+    exit 2
+fi
+OLD_LIST="$1"
+NEW_LIST="$2"
+DEST="${3%/}"
+
+# An install that predates the list has nothing to compare against.
+[ -f "${OLD_LIST}" ] || exit 0
+if [ ! -f "${NEW_LIST}" ] || [ ! -d "${DEST}" ]; then
+    echo "fluorine-prune: missing ${NEW_LIST} or ${DEST}, nothing pruned" >&2
+    exit 1
+fi
+
+# The installer prunes after extraction, so an empty or truncated NEW_LIST
+# would make every old entry look dropped and delete what was just installed.
+# A real list always names the launcher and this script.
+for required in fluorine-manager libexec/fluorine-prune; do
+    if ! grep -qxF -- "${required}" "${NEW_LIST}"; then
+        echo "fluorine-prune: ${NEW_LIST} does not list ${required}, refusing to prune" >&2
+        exit 1
+    fi
+done
+
+# True if any directory component of $1 (relative to DEST) is a symlink. We
+# must not delete through a link the user pointed somewhere else.
+parent_is_symlink() {
+    local dir="${1%/*}" acc="" part
+    [ "${dir}" = "$1" ] && return 1
+    local -a parts
+    # read -a splits without globbing; an unquoted expansion would expand a
+    # component like [ab] against the current directory.
+    IFS=/ read -ra parts <<< "${dir}"
+    for part in "${parts[@]}"; do
+        acc="${acc:+${acc}/}${part}"
+        [ -L "${DEST}/${acc}" ] && return 0
+    done
+    return 1
+}
+
+remove_file() {
+    if ! rm -f -- "${DEST}/$1"; then
+        echo "fluorine-prune: could not remove ${DEST}/$1" >&2
+        return 1
+    fi
+}
+
+declare -A parents=()
+note_parent() {
+    local dir="${1%/*}"
+    [ "${dir}" != "$1" ] && parents["${dir}"]=1
+    return 0
+}
+
+# comm needs both inputs sorted the same way; -23 keeps lines only in OLD.
+while IFS= read -r rel; do
+    case "${rel}" in
+        ''|/*|..|../*|*/..|*/../*) continue ;;
+    esac
+    path="${DEST}/${rel}"
+    # A path that became a directory may now hold user files.
+    if [ -d "${path}" ] && [ ! -L "${path}" ]; then
+        continue
+    fi
+    [ -e "${path}" ] || [ -L "${path}" ] || continue
+    parent_is_symlink "${rel}" && continue
+
+    remove_file "${rel}" || continue
+    note_parent "${rel}"
+
+    # Python drops dir/__pycache__/name.<tag>.pyc next to each module.
+    case "${rel}" in
+        *.py)
+            base="${rel##*/}"; base="${base%.py}"
+            dir="${rel%/*}"; [ "${dir}" = "${rel}" ] && dir="" || dir="${dir}/"
+            cache="${DEST}/${dir}__pycache__"
+            # A symlinked cache may point at user data. The cpython-* prefix
+            # also covers name.cpython-312.opt-1.pyc but not name.sub.*.pyc,
+            # which belongs to a different module.
+            [ -L "${cache}" ] && continue
+            for pyc in "${cache}/${base}".cpython-*.pyc; do
+                [ -e "${pyc}" ] || continue
+                rm -f -- "${pyc}" || echo "fluorine-prune: could not remove ${pyc}" >&2
+            done
+            [ -d "${cache}" ] && parents["${dir}__pycache__"]=1
+            ;;
+    esac
+done < <(LC_ALL=C comm -23 \
+    <(LC_ALL=C sort -u "${OLD_LIST}") \
+    <(LC_ALL=C sort -u "${NEW_LIST}"))
+
+# Walk up from each touched directory; rmdir refuses non-empty ones, which
+# ends that walk. DEST itself is never reached.
+for dir in "${!parents[@]}"; do
+    while [ -n "${dir}" ] && [ "${dir}" != . ]; do
+        rmdir -- "${DEST}/${dir}" 2>/dev/null || break
+        [ "${dir}" = "${dir%/*}" ] && break
+        dir="${dir%/*}"
+    done
+done
+exit 0
