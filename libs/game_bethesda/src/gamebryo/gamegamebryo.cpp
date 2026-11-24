@@ -83,9 +83,21 @@ QDir GameGamebryo::gameDirectory() const
   return QDir(m_GamePath);
 }
 
+QDir GameGamebryo::dataDirectoryIn(const QDir& root)
+{
+  if (!root.exists(QStringLiteral("Data"))) {
+    for (const QString& entry : root.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+      if (entry.compare(QStringLiteral("Data"), Qt::CaseInsensitive) == 0) {
+        return root.absoluteFilePath(entry);
+      }
+    }
+  }
+  return root.absoluteFilePath(QStringLiteral("Data"));
+}
+
 QDir GameGamebryo::dataDirectory() const
 {
-  return gameDirectory().absoluteFilePath("Data");
+  return dataDirectoryIn(gameDirectory());
 }
 
 void GameGamebryo::setGamePath(const QString& path)

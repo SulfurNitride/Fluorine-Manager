@@ -92,7 +92,7 @@ QDir GameStarfield::dataDirectory() const
   // plugins. If the mount lived under My Games/Starfield/Data, the
   // base game Data folder would only see dangling symlinks and SFSE
   // plugins would silently fail to load. See issue #56.
-  return gameDirectory().absoluteFilePath("Data");
+  return dataDirectoryIn(gameDirectory());
 #endif
 }
 

@@ -110,6 +110,12 @@ protected:
   QString selectedVariant() const;
 
   static QString localAppFolder();
+
+  // `root`/Data, or the existing directory whose name matches "Data" in any
+  // case. Windows installers (e.g. Wabbajack lists) can create "data", which a
+  // case-sensitive filesystem treats as a different directory.
+  static QDir dataDirectoryIn(const QDir& root);
+
   // Arguably this shouldn't really be here but every gamebryo program seems to
   // use it
   static QString getLootPath();
