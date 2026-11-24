@@ -361,6 +361,89 @@ TEST(VfsInPlaceWrites, NewFilesStillGoToStaging)
   EXPECT_FALSE(fs::exists(vfs.modA() / "brand-new.txt"));
 }
 
+namespace
+{
+// Editor-style save (Creation Kit, BodySlide): write the body in chunks through
+// one handle, query the size mid-save, read the header back, rewrite it, then
+// close. Returns a description of the first mismatch, or "" when consistent.
+std::string editorStyleSave(const fs::path& virt, int openFlags)
+{
+  const int fd = open(virt.c_str(), openFlags, 0644);
+  if (fd < 0) return "open failed: " + std::string(std::strerror(errno));
+
+  const std::string header(24, 'H');
+  const std::string chunk(4096, 'B');
+  constexpr int kChunks = 64;
+  if (pwrite(fd, header.data(), header.size(), 0) != (ssize_t)header.size())
+    return "header write failed";
+  off_t off = static_cast<off_t>(header.size());
+  for (int i = 0; i < kChunks; ++i) {
+    if (pwrite(fd, chunk.data(), chunk.size(), off) != (ssize_t)chunk.size())
+      return "body write failed";
+    off += static_cast<off_t>(chunk.size());
+  }
+  const off_t expected = off;
+
+  // Let the queued kernel invalidation from the first write land, like the
+  // wall-clock gap between an editor's writes and its GetFileSize call.
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+  struct stat st {};
+  if (fstat(fd, &st) != 0) return "fstat failed";
+  std::string result;
+  if (st.st_size != expected) {
+    result = "fstat mid-save size " + std::to_string(st.st_size) +
+             " != " + std::to_string(expected);
+  }
+  char probe[24] = {};
+  const ssize_t got = pread(fd, probe, sizeof(probe), 0);
+  if (result.empty() &&
+      (got != (ssize_t)sizeof(probe) || std::string(probe, sizeof(probe)) != header)) {
+    result = "header read-back returned " + std::to_string(got) + " bytes";
+  }
+  const std::string fixed(24, 'F');
+  pwrite(fd, fixed.data(), fixed.size(), 0);
+  close(fd);
+  return result;
+}
+}  // namespace
+
+TEST(VfsInPlaceWrites, EditorSaveSeesItsOwnSizeOnExistingModFile)
+{
+  MountedVfs vfs;
+  ASSERT_TRUE(vfs.valid());
+  writeText(vfs.modA() / "test_plugin.esp", "old plugin");
+  vfs.addModFile(vfs.modA() / "test_plugin.esp", "test_plugin.esp");
+  MOUNT_OR_SKIP(vfs);
+
+  const fs::path virt = vfs.mountPoint() / "test_plugin.esp";
+  ASSERT_EQ(readText(virt), "old plugin");
+  EXPECT_EQ(editorStyleSave(virt, O_RDWR | O_TRUNC), "");
+  struct stat st {};
+  ASSERT_EQ(stat(virt.c_str(), &st), 0);
+  EXPECT_EQ(st.st_size, 24 + 64 * 4096);
+  EXPECT_EQ(readText(virt).substr(0, 24), std::string(24, 'F'));
+
+  vfs.unmount();
+  EXPECT_EQ(fs::file_size(vfs.modA() / "test_plugin.esp"), 24u + 64u * 4096u);
+}
+
+TEST(VfsInPlaceWrites, EditorSaveSeesItsOwnSizeOnNewFile)
+{
+  MountedVfs vfs;
+  ASSERT_TRUE(vfs.valid());
+  writeText(vfs.modA() / "keep.txt", "x");
+  vfs.addModFile(vfs.modA() / "keep.txt", "keep.txt");
+  MOUNT_OR_SKIP(vfs);
+
+  const fs::path virt = vfs.mountPoint() / "new_plugin.esp";
+  EXPECT_EQ(editorStyleSave(virt, O_RDWR | O_CREAT | O_TRUNC), "");
+  struct stat st {};
+  ASSERT_EQ(stat(virt.c_str(), &st), 0);
+  EXPECT_EQ(st.st_size, 24 + 64 * 4096);
+  EXPECT_EQ(readText(virt).substr(0, 24), std::string(24, 'F'));
+}
+
 TEST(VfsInPlaceWrites, BaseGameFilesAreCopiedOnWrite)
 {
   MountedVfs vfs;

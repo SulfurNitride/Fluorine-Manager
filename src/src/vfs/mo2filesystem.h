@@ -88,7 +88,10 @@ struct Mo2FsContext
     bool is_backing  = false;
     bool cow_pending = false;   // true = opened R/O, will COW on first write()
     std::string relative_path;
+    fuse_ino_t ino = 0;
     uint64_t last_read_tick = 0;
+    // Written but not yet published to the tree (flush/release publish it).
+    // Counted in Mo2FsContext::dirty_metadata_handles.
     bool metadata_dirty = false;
     // Existing mutable providers may already have kernel pages retained by
     // keep_cache. Invalidate the first range written by this handle, then
@@ -108,6 +111,9 @@ struct Mo2FsContext
   std::unordered_map<uint64_t, OpenFile> open_files;
   mutable std::shared_mutex open_files_mutex;
   std::atomic<uint64_t> next_fh{1};
+  // Open handles with metadata_dirty set. getattr/lookup only scan open_files
+  // for a writer's live size while this is non-zero.
+  std::atomic<uint32_t> dirty_metadata_handles{0};
 
   // Relative paths Fluorine itself mutated during this mount. These bypass
   // fingerprint reuse and are BLAKE3-hashed again after FUSE has stopped.

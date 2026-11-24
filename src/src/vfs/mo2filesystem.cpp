@@ -58,6 +58,10 @@ void fillStatForFile(struct stat* st, fuse_ino_t ino, uid_t uid, gid_t gid,
                      const std::chrono::system_clock::time_point& mtime,
                      const std::string& real_path = {},
                      mode_t cached_mode = 0);
+void fillStatForFile(const Mo2FsContext* ctx, struct stat* st, fuse_ino_t ino,
+                     uint64_t size,
+                     const std::chrono::system_clock::time_point& mtime,
+                     const std::string& real_path, mode_t cached_mode);
 mode_t regularFileVfsMode(mode_t sourceMode);
 void invalidateLookupCache(Mo2FsContext* ctx, const std::string& dirPath);
 void invalidateAttrCache(Mo2FsContext* ctx, fuse_ino_t ino);
@@ -1227,7 +1231,7 @@ std::vector<char> buildReaddirPlusBlob(
     if (entry.is_dir) {
       fillStatForDir(&e.attr, entry.ino, ctx->uid, ctx->gid);
     } else {
-      fillStatForFile(&e.attr, entry.ino, ctx->uid, ctx->gid, entry.size,
+      fillStatForFile(ctx, &e.attr, entry.ino, entry.size,
                       entry.mtime, entry.real_path, entry.cached_mode);
     }
 
@@ -1384,6 +1388,35 @@ void fillStatForFile(struct stat* st, fuse_ino_t ino, uid_t uid, gid_t gid,
   st->st_atim.tv_sec = secs.count();
 }
 
+// A handle that is still writing only publishes its size to the tree on
+// flush/release. Until then the tree holds the size from open time (0 after
+// O_TRUNC or create), and once the first write's queued invalidation drops the
+// kernel's cached attributes, a getattr from that stale tree shrinks i_size.
+// Editors that call GetFileSize or read back their header mid-save (Creation
+// Kit, BodySlide) then see an empty file. Report the writer's live size instead.
+void fillStatForFile(const Mo2FsContext* ctx, struct stat* st, fuse_ino_t ino,
+                     uint64_t size,
+                     const std::chrono::system_clock::time_point& mtime,
+                     const std::string& real_path, mode_t cached_mode)
+{
+  uint64_t liveSize = size;
+  auto liveMtime    = mtime;
+  if (ctx != nullptr &&
+      ctx->dirty_metadata_handles.load(std::memory_order_acquire) != 0) {
+    bool found = false;
+    std::shared_lock lock(ctx->open_files_mutex);
+    for (const auto& [fh, of] : ctx->open_files) {
+      if (!of.metadata_dirty || of.ino != ino) continue;
+      if (!found || of.virtual_size > liveSize) liveSize = of.virtual_size;
+      if (!found || of.virtual_mtime > liveMtime) liveMtime = of.virtual_mtime;
+      found = true;
+    }
+  }
+  fillStatForFile(st, ino, ctx != nullptr ? ctx->uid : 0,
+                  ctx != nullptr ? ctx->gid : 0, liveSize, liveMtime, real_path,
+                  cached_mode);
+}
+
 void replyEntryFromSnapshot(fuse_req_t req, const Mo2FsContext* ctx, fuse_ino_t ino,
                             const NodeSnapshot& snap)
 {
@@ -1396,7 +1429,7 @@ void replyEntryFromSnapshot(fuse_req_t req, const Mo2FsContext* ctx, fuse_ino_t 
   if (snap.is_directory) {
     fillStatForDir(&e.attr, ino, ctx->uid, ctx->gid);
   } else {
-    fillStatForFile(&e.attr, ino, ctx->uid, ctx->gid, snap.size, snap.mtime,
+    fillStatForFile(ctx, &e.attr, ino, snap.size, snap.mtime,
                     snap.real_path, snap.cached_mode);
   }
 
@@ -1472,6 +1505,9 @@ bool markOpenFileDirty(Mo2FsContext* ctx, uint64_t fh, uint64_t endOffset)
     return false;
   }
 
+  if (!it->second.metadata_dirty) {
+    ctx->dirty_metadata_handles.fetch_add(1, std::memory_order_release);
+  }
   it->second.metadata_dirty = true;
   it->second.content_dirty = true;
   it->second.virtual_size = std::max<uint64_t>(it->second.virtual_size, endOffset);
@@ -1587,6 +1623,9 @@ void flushDirtyOpenFileMetadata(Mo2FsContext* ctx, uint64_t fh, fuse_ino_t ino)
     mtime        = it->second.virtual_mtime;
     it->second.metadata_dirty = false;
     it->second.content_dirty = false;
+  }
+  if (metadataDirty) {
+    ctx->dirty_metadata_handles.fetch_sub(1, std::memory_order_release);
   }
 
   if (metadataDirty && !relativePath.empty() && !realPath.empty()) {
@@ -1987,7 +2026,7 @@ void mo2_lookup(fuse_req_t req, fuse_ino_t parent, const char* name)
     if (indexed.node->is_directory) {
       fillStatForDir(&e.attr, indexed.node->ino, ctx->uid, ctx->gid);
     } else {
-      fillStatForFile(&e.attr, indexed.node->ino, ctx->uid, ctx->gid,
+      fillStatForFile(ctx, &e.attr, indexed.node->ino,
                       indexed.node->size, indexed.node->mtime,
                       indexed.node->real_path, indexed.node->cached_mode);
     }
@@ -2131,7 +2170,7 @@ void mo2_lookup(fuse_req_t req, fuse_ino_t parent, const char* name)
   if (lr.snap.is_directory) {
     fillStatForDir(&e.attr, childIno, ctx->uid, ctx->gid);
   } else {
-    fillStatForFile(&e.attr, childIno, ctx->uid, ctx->gid, lr.snap.size, lr.snap.mtime,
+    fillStatForFile(ctx, &e.attr, childIno, lr.snap.size, lr.snap.mtime,
                     lr.snap.real_path, lr.snap.cached_mode);
   }
 
@@ -2160,7 +2199,7 @@ void mo2_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* /*fi*/)
       if (node->is_directory) {
         fillStatForDir(&st, ino, ctx->uid, ctx->gid);
       } else {
-        fillStatForFile(&st, ino, ctx->uid, ctx->gid, node->size, node->mtime,
+        fillStatForFile(ctx, &st, ino, node->size, node->mtime,
                         node->real_path, node->cached_mode);
       }
       fuse_reply_attr(req, &st, ttlSeconds(ctx));
@@ -2189,7 +2228,7 @@ void mo2_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* /*fi*/)
   if (snap.is_directory) {
     fillStatForDir(&st, ino, ctx->uid, ctx->gid);
   } else {
-    fillStatForFile(&st, ino, ctx->uid, ctx->gid, snap.size, snap.mtime,
+    fillStatForFile(ctx, &st, ino, snap.size, snap.mtime,
                     snap.real_path, snap.cached_mode);
   }
 
@@ -2368,7 +2407,7 @@ void mo2_readdirplus(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
     if ((*entries)[i].is_dir) {
       fillStatForDir(&e.attr, (*entries)[i].ino, ctx->uid, ctx->gid);
     } else {
-      fillStatForFile(&e.attr, (*entries)[i].ino, ctx->uid, ctx->gid,
+      fillStatForFile(ctx, &e.attr, (*entries)[i].ino,
                       (*entries)[i].size, (*entries)[i].mtime,
                       (*entries)[i].real_path, (*entries)[i].cached_mode);
     }
@@ -2705,6 +2744,7 @@ void mo2_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi)
     of.is_backing    = isBacking;
     of.cow_pending   = cowPending;
     of.relative_path = path;
+    of.ino           = ino;
     of.range_invalidation_pending = invalidateWrites;
     of.content_dirty = truncateOnOpen && fd >= 0;
     of.virtual_size  = openSize;
@@ -3056,6 +3096,7 @@ void mo2_create(fuse_req_t req, fuse_ino_t parent, const char* name, mode_t mode
     of.writable      = true;
     of.is_backing    = false;
     of.relative_path = relative;
+    of.ino           = newIno;
     of.virtual_size  = createdSize;
     of.virtual_mtime = createdMtime;
     ctx->open_files[fh] = std::move(of);
@@ -3426,6 +3467,9 @@ void mo2_setattr(fuse_req_t req, fuse_ino_t ino, struct stat* attr, int to_set,
       if (it != ctx->open_files.end()) {
         it->second.virtual_size = static_cast<uint64_t>(attr->st_size);
         it->second.virtual_mtime = std::chrono::system_clock::now();
+        if (it->second.metadata_dirty) {
+          ctx->dirty_metadata_handles.fetch_sub(1, std::memory_order_release);
+        }
         it->second.metadata_dirty = false;
       }
     }
@@ -3533,7 +3577,7 @@ void mo2_setattr(fuse_req_t req, fuse_ino_t ino, struct stat* attr, int to_set,
   if (snap.is_directory) {
     fillStatForDir(&st, ino, ctx->uid, ctx->gid);
   } else {
-    fillStatForFile(&st, ino, ctx->uid, ctx->gid, snap.size, snap.mtime,
+    fillStatForFile(ctx, &st, ino, snap.size, snap.mtime,
                     snap.real_path, snap.cached_mode);
   }
   fuse_reply_attr(req, &st, ttlSeconds(ctx));

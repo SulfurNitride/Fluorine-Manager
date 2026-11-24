@@ -35,5 +35,6 @@ Mo2OpenFileCleanupResult mo2CloseOpenFiles(Mo2FsContext* ctx) noexcept
     openFile.fd = -1;
   }
   ctx->open_files.clear();
+  ctx->dirty_metadata_handles.store(0, std::memory_order_release);
   return result;
 }
