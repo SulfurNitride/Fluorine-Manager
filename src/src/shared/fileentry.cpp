@@ -3,6 +3,8 @@
 #include "filesorigin.h"
 #include "util.h"
 
+#include <uibase/filesystemutilities.h>
+
 #include <deque>
 #include <limits>
 #include <mutex>
@@ -286,25 +288,38 @@ bool FileEntry::isFromArchive(std::wstring archiveName) const
 
 std::wstring FileEntry::getFullPath(OriginID originID) const
 {
-  std::scoped_lock lock(m_OriginsMutex);
+  std::wstring result;
+  {
+    std::scoped_lock lock(m_OriginsMutex);
 
-  if (originID == InvalidOriginID) {
-    bool ignore = false;
-    originID    = getOrigin(ignore);
+    if (originID == InvalidOriginID) {
+      bool ignore = false;
+      originID    = getOrigin(ignore);
+    }
+
+    // base directory for origin
+    const auto* o = m_Parent->findOriginByID(originID);
+    if (!o) {
+      return {};
+    }
+
+    result = o->getPath();
+
+    // all intermediate directories
+    recurseParents(result, m_Parent);
+
+    result += NativeWPathSep + m_Name;
   }
 
-  // base directory for origin
-  const auto* o = m_Parent->findOriginByID(originID);
-  if (!o) {
-    return {};
-  }
-
-  std::wstring result = o->getPath();
-
-  // all intermediate directories
-  recurseParents(result, m_Parent);
-
-  return result + NativeWPathSep + m_Name;
+#ifndef _WIN32
+  // Directories are merged case-insensitively across origins and keep the case
+  // of whichever origin was seen first, so this origin's folder may differ in
+  // case on disk (e.g. overwrite/Root shown as root, #207). Costs one stat when
+  // the case already matches.
+  result = MOBase::resolvePathCaseInsensitive(QString::fromStdWString(result))
+               .toStdWString();
+#endif
+  return result;
 }
 
 std::wstring FileEntry::getRelativePath() const
