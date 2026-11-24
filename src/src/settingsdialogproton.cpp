@@ -537,9 +537,15 @@ void ProtonSettingsTab::populateProtons()
   }
 
   if (auto cfg = FluorineConfig::load(); cfg.has_value()) {
-    if (QFileInfo::exists(cfg->proton_path + "/fluorine-faudio-runtime.txt") &&
+    // Keep the saved Proton selectable even when the scan hides it (older than
+    // the supported minimum, or outside the Steam library folders). Otherwise
+    // the combo can end up empty and refuses to open (#217).
+    if (!cfg->proton_path.isEmpty() &&
+        QFileInfo::exists(cfg->proton_path + "/proton") &&
         ui->protonVersionCombo->findData(cfg->proton_path, Qt::UserRole + 1) < 0) {
-      ui->protonVersionCombo->addItem(cfg->proton_name);
+      ui->protonVersionCombo->addItem(cfg->proton_name.isEmpty()
+                                          ? QFileInfo(cfg->proton_path).fileName()
+                                          : cfg->proton_name);
       ui->protonVersionCombo->setItemData(ui->protonVersionCombo->count() - 1,
                                          cfg->proton_path, Qt::UserRole + 1);
     }
@@ -553,6 +559,15 @@ void ProtonSettingsTab::populateProtons()
       ui->runtimeSetupNote->setText(
           tr("The saved Proton version is unavailable. Choose a replacement and select Save."));
     }
+  }
+
+  if (ui->protonVersionCombo->count() == 0) {
+    ui->runtimeSetupNote->setText(
+        tr("No Proton %1 or newer was found. Install Proton Experimental or a "
+           "newer Proton from Steam, or a GE-Proton build in "
+           "compatibilitytools.d, then reopen Settings.")
+            .arg(kMinimumSupportedProtonMajor));
+    return;
   }
 
   SteamProtonInfo selected;
