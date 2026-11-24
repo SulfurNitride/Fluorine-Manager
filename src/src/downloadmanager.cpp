@@ -1372,7 +1372,8 @@ void DownloadManager::removeDownload(int index, bool deleteFile)
     } else {
       if (index >= m_ActiveDownloads.size()) {
         reportError(tr("remove: invalid download index %1").arg(index));
-        // emit update(-1);
+        // Close the aboutToUpdate() above, or the list view stays mid-reset.
+        emit update(-1);
         return;
       }
 

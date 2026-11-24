@@ -513,6 +513,7 @@ signals:
   void refreshTriggered();
 
 private:
+  void startPendingDownloads();
   std::pair<unsigned int, ModInfo::Ptr> doInstall(const QString& archivePath,
                                                   MOBase::GuessedValue<QString> modName,
                                                   ModInfo::Ptr currentMod, int priority,

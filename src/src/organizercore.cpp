@@ -826,7 +826,11 @@ void OrganizerCore::downloadRequestedNXM(const QString& url)
 {
   log::debug("download requested: {}", url);
   if (nexusApi()) {
-    m_PendingDownloads.append(url);
+    // Queued links aren't in the downloads list yet, so users click again;
+    // keep one copy.
+    if (!m_PendingDownloads.contains(url)) {
+      m_PendingDownloads.append(url);
+    }
   } else {
     m_DownloadManager.addNXMDownload(url);
   }
@@ -2559,15 +2563,25 @@ void OrganizerCore::modStatusChanged(QList<unsigned int> index)
   }
 }
 
+void OrganizerCore::startPendingDownloads()
+{
+  // Take the list first: addNXMDownload can open dialogs that run the event
+  // loop, and more links (or another login result) may arrive meanwhile.
+  // Iterating m_PendingDownloads while downloadRequestedNXM() appended to it
+  // invalidated the loop. Login has finished at this point, so hand the links
+  // straight to the download manager instead of re-queueing them.
+  const QStringList pending = std::exchange(m_PendingDownloads, {});
+  for (const QString& url : pending) {
+    m_DownloadManager.addNXMDownload(url);
+  }
+}
+
 void OrganizerCore::loginSuccessful(bool necessary)
 {
   if (necessary) {
     MessageDialog::showMessage(tr("login successful"), qApp->activeWindow());
   }
-  for (const QString& url : m_PendingDownloads) {
-    downloadRequestedNXM(url);
-  }
-  m_PendingDownloads.clear();
+  startPendingDownloads();
   for (const auto& task : m_PostLoginTasks) {
     task();
   }
@@ -2600,10 +2614,7 @@ void OrganizerCore::loginFailed(const QString& message)
         tr("login failed: %1. Download will not be associated with an account")
             .arg(message),
         qApp->activeWindow());
-    for (const QString& url : m_PendingDownloads) {
-      downloadRequestedNXM(url);
-    }
-    m_PendingDownloads.clear();
+    startPendingDownloads();
   } else {
     MessageDialog::showMessage(tr("login failed: %1").arg(message),
                                qApp->activeWindow());
