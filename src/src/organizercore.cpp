@@ -364,6 +364,22 @@ QString resolveAbsoluteSaveDir(const WinePrefix& prefix,
         continue;
       }
 
+      // Gamebryo/Creation games: beforeRun always points sLocalSavePath at
+      // __MO_Saves in the INI deployed to the prefix's My Games folder, so
+      // the target must be that folder there. Don't derive it from the
+      // plugin's myGamesPath: it is resolved once at startup and can be empty
+      // or outside the prefix on a first run, which mounted the saves on
+      // "Saves" while the INI said "__MO_Saves" (#218).
+      if (QFileInfo(destination).fileName().compare(
+              QStringLiteral("__MO_Saves"), Qt::CaseInsensitive) == 0) {
+        const QString resolved =
+            QDir(resolvePrefixGameDocumentsDir(
+                     prefix, resolveWineDataDirName(managedGame)))
+                .filePath(QStringLiteral("__MO_Saves"));
+        log::debug("resolveAbsoluteSaveDir: local saves dummy -> '{}'", resolved);
+        return resolved;
+      }
+
       // Extract the user-relative path (after drive_c/users/<username>/)
       static const QRegularExpression userDirRe(
           "drive_c/users/[^/]+/(.+)", QRegularExpression::CaseInsensitiveOption);
