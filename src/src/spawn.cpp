@@ -560,11 +560,9 @@ bool checkSteam(QWidget* parent, const SpawnParameters& sp, const QDir& gameDire
 
   log::debug("checking steam");
 
-  if (!steamAppID.isEmpty()) {
-    env::set("SteamAPPId", steamAppID);
-  } else {
-    env::set("SteamAPPId", settings.steam().appID());
-  }
+  // The Steam app id is passed per launch by ProtonLauncher (only when Steam
+  // integration is on). Setting it on Fluorine's own process here leaked it
+  // into every later launch, including tools and non-Steam games.
 
   bool steamRequired = false;
   QString details;

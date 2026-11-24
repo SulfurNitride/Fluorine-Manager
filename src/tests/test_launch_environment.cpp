@@ -407,6 +407,45 @@ TEST(LaunchEnvironment, UsesLanguageFromSteamAppManifestForChildOnly)
   QCoreApplication::processEvents();
 }
 
+TEST(LaunchEnvironment, SteamAppIdOnlyExportedWithSteamIntegration)
+{
+  for (const bool steamDrm : {false, true}) {
+    QTemporaryDir temp;
+    ASSERT_TRUE(temp.isValid());
+    const QString proton = temp.filePath("fake-proton");
+    const QString output = temp.filePath("appid-result");
+    QFile script(proton);
+    ASSERT_TRUE(script.open(QIODevice::WriteOnly));
+    script.write("#!/bin/sh\nprintf '%s|%s|%s|%s\\n' \"$SteamAppId\" \"$SteamGameId\" "
+                 "\"$STEAM_COMPAT_APP_ID\" \"$SteamAPPId\" > \"$FLUORINE_TEST_OUTPUT\"\n");
+    script.close();
+    ASSERT_TRUE(script.setPermissions(script.permissions() | QFile::ExeOwner));
+
+    // A stale id in Fluorine's own environment must not leak either.
+    qputenv("SteamAPPId", "22330");
+    ProtonLauncher launcher;
+    launcher.setBinary("Cyberpunk2077.exe").setProtonPath(proton)
+        .setPrefix(temp.path()).setWorkingDir(temp.path()).setSteamAppId(1091500)
+        .setSteamDrm(steamDrm).setUseSLR(false)
+        .addEnvVar("FLUORINE_TEST_OUTPUT", output);
+    ASSERT_TRUE(launcher.launch());
+    qunsetenv("SteamAPPId");
+
+    QElapsedTimer timer;
+    timer.start();
+    while (!QFile::exists(output) && timer.elapsed() < 5000) {
+      QCoreApplication::processEvents();
+      QThread::msleep(10);
+    }
+    QFile result(output);
+    ASSERT_TRUE(result.open(QIODevice::ReadOnly));
+    EXPECT_EQ(result.readAll(), steamDrm ? QByteArray("1091500|1091500|1091500|\n")
+                                         : QByteArray("|||\n"))
+        << "steamDrm=" << steamDrm;
+    QCoreApplication::processEvents();
+  }
+}
+
 TEST(LaunchEnvironment, ExistingDxvkConfigIsNotReplaced)
 {
   QTemporaryDir temp;

@@ -994,6 +994,11 @@ bool ProtonLauncher::launchWithProton(env::NativeProcess& process) const
       QStringList() << "waitforexitandrun" << launchBinary << launchArguments;
   const QString targetAppId =
       m_steamAppId == 0 ? QString{} : QString::number(m_steamAppId);
+  // The Steam app id tells the game (and Proton's steam.exe bridge) that it
+  // was started by Steam. Only export it when Steam integration is on for this
+  // launch: a GOG/Epic game or a tool with integration off that sees a Steam
+  // id skips its own launcher/login (e.g. Cyberpunk's REDprelauncher).
+  const bool exportSteamAppId = m_useSteamDrm && m_steamAppId != 0;
   const QString inheritedSteamGameId =
       QProcessEnvironment::systemEnvironment().value("SteamGameId").trimmed();
   const QString launchSteamGameId =
@@ -1072,7 +1077,7 @@ bool ProtonLauncher::launchWithProton(env::NativeProcess& process) const
           containerCmd << QStringLiteral("PATH=%1:/usr/bin:/bin").arg(xrandrDir);
         }
       }
-      if (m_steamAppId != 0) {
+      if (exportSteamAppId) {
         containerCmd << QStringLiteral("STEAM_COMPAT_APP_ID=%1").arg(targetAppId)
                      << QStringLiteral("SteamAppId=%1").arg(targetAppId)
                      << QStringLiteral("SteamGameId=%1").arg(launchSteamGameId);
@@ -1121,11 +1126,23 @@ bool ProtonLauncher::launchWithProton(env::NativeProcess& process) const
     env.insert("STEAM_COMPAT_CLIENT_INSTALL_PATH", steamPath);
   }
 
-  if (m_steamAppId != 0) {
+  // Drop ids inherited from Fluorine's own environment (e.g. when Fluorine
+  // itself was started from Steam) before deciding. Windows env lookups are
+  // case-insensitive, so clear every spelling, or a stale SteamAPPId would
+  // sit next to (or instead of) the one set below.
+  for (const QString& key : env.keys()) {
+    if (key.compare(QStringLiteral("SteamAppId"), Qt::CaseInsensitive) == 0 ||
+        key.compare(QStringLiteral("SteamGameId"), Qt::CaseInsensitive) == 0 ||
+        key == QStringLiteral("STEAM_COMPAT_APP_ID")) {
+      env.remove(key);
+    }
+  }
+  if (exportSteamAppId) {
     env.insert("STEAM_COMPAT_APP_ID", targetAppId);
     env.insert("SteamAppId", targetAppId);
     env.insert("SteamGameId", launchSteamGameId);
-
+  }
+  if (m_steamAppId != 0) {
     // Reuse Steam's pre-compiled shaders for this game. Done before the
     // wrapper/instance/executable variables are applied below, so an explicit
     // override of any cache variable still wins.
