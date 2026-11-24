@@ -635,7 +635,10 @@ std::vector<QString> InstanceManager::globalInstancePaths() const
 
 bool InstanceManager::hasAnyInstances() const
 {
-  return portableInstanceExists() || !globalInstancePaths().empty();
+  // Portable instances outside the default folder are only in the registry;
+  // missing them made the create wizard skip its restart (#220).
+  return portableInstanceExists() || !globalInstancePaths().empty() ||
+         !registeredPortablePaths().isEmpty();
 }
 
 QString InstanceManager::portablePath()
