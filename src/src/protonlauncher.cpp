@@ -1,5 +1,5 @@
 #include "protonlauncher.h"
-#include "faudioruntime.h"
+#include "audioruntime.h"
 
 #include "fluorinepaths.h"
 #include "launchenvironment.h"
@@ -912,17 +912,27 @@ bool ProtonLauncher::launchWithProton(env::NativeProcess& process) const
     return false;
   }
 
-  FAudioPayload audio;
-  QString audioError;
-  if (!refreshFAudioPayload(
-          m_prefixPath, QCoreApplication::applicationDirPath() + "/faudio",
-          qEnvironmentVariable("FLUORINE_FAUDIO_VARIANT"), audio, audioError)) {
-    MOBase::log::error("Could not prepare FAudio for Proton: {}", audioError);
-    errno = EIO;
-    return false;
-  }
-  if (audio.changed) {
-    MOBase::log::info("Updated prefix FAudio {} for Proton '{}'", audio.version, m_protonPath);
+  if (prefixUsesBundledFAudio(m_prefixPath)) {
+    // 0.4.x prefixes replaced Microsoft's audio DLLs with bundled FAudio.
+    MOBase::log::warn(
+        "This prefix still uses the bundled FAudio audio runtime from an older "
+        "Fluorine version, which is no longer supported. Recreate the prefix "
+        "(Settings > Proton > Recreate Prefix) to use Microsoft's XAudio and "
+        "Fluorine's audio crash guard.");
+  } else {
+    // Keep the X3DAudio audio copy guard in place; DXSETUP or a manual repair
+    // can replace it. Never block a launch on it.
+    bool audioChanged = false;
+    QString audioSkipped, audioError;
+    if (!installAudioGuard(m_prefixPath,
+                           QCoreApplication::applicationDirPath() + "/audio-guard",
+                           audioChanged, audioSkipped, audioError)) {
+      MOBase::log::error("Audio crash guard not installed: {}", audioError);
+    } else if (!audioSkipped.isEmpty()) {
+      MOBase::log::warn("Audio crash guard not installed: {}", audioSkipped);
+    } else if (audioChanged) {
+      MOBase::log::info("Installed the audio crash guard (x3daudio1_7.dll) into the prefix");
+    }
   }
 
   if (m_useSteamDrm) {
@@ -1097,6 +1107,8 @@ bool ProtonLauncher::launchWithProton(env::NativeProcess& process) const
   if (!m_prefixPath.isEmpty()) {
     env.insert("WINEPREFIX", m_prefixPath);
   }
+  // Where the audio crash guard writes its reports.
+  env.insert("FLUORINE_AUDIO_LOG_DIR", fluorineDataDir() + "/logs/audio");
 
   const QString compatDataPath = compatDataPathFromPrefix(m_prefixPath);
   if (!compatDataPath.isEmpty()) {

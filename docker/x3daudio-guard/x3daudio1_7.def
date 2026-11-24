@@ -1,0 +1,4 @@
+LIBRARY X3DAudio1_7.dll
+EXPORTS
+    X3DAudioCalculate = x3daudio1_7_ms.X3DAudioCalculate @1
+    X3DAudioInitialize = x3daudio1_7_ms.X3DAudioInitialize @2

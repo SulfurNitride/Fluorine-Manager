@@ -5,11 +5,6 @@ BUILD_PY="${BUILD_PYTHON:-$(command -v python3)}"
 
 trap /src/docker/restore-build-ownership.sh EXIT
 
-if [ "${BUILD_MODE:-tarball}" = faudio ]; then
-    bash /src/docker/build-faudio.sh /src/build/faudio-staging
-    exit 0
-fi
-
 # ── Build ──
 PYBIND11_DIR="$("${BUILD_PY}" -c 'import pybind11; print(pybind11.get_cmake_dir())' 2>/dev/null || true)"
 
@@ -74,6 +69,9 @@ cmake -S . -B build -G Ninja \
 "${BUILD_PY}" /src/docker/repair-ninja-deps.py build
 
 # CLF3 is downloaded and updated by Fluorine at installation time.
+
+# X3DAudio1_7.dll audio copy guard; its scanner tests run here.
+bash /src/docker/x3daudio-guard/build.sh /src/build/x3daudio-guard
 
 if [ "${BUILD_MODE:-tarball}" = "test" ]; then
     if [ -n "${BUILD_JOBS:-}" ]; then
@@ -164,17 +162,17 @@ else
     exit 1
 fi
 
-# Build Wine's audio PE modules with FAudio embedded. Prefix setup installs
-# the patched current release after DXSETUP; 26.02 remains a rollback baseline.
-bash /src/docker/build-faudio.sh "${OUT_DIR}/faudio"
-# The FAudio builder also emits standalone PE smoke probes for development.
-# No runtime path consumes them; keep only the Wine override DLLs in releases.
-rm -rf "${OUT_DIR}/faudio/tests"
-rm -rf "${RUNDIR}/faudio"
-cp -a "${OUT_DIR}/faudio" "${RUNDIR}/faudio"
+# X3DAudio1_7.dll audio copy guard, installed into prefixes over Microsoft's
+# X3DAudio (which it forwards to) after DXSETUP and on every launch.
+for audio_guard_dir in "${OUT_DIR}/audio-guard" "${RUNDIR}/audio-guard"; do
+    rm -rf "${audio_guard_dir}"
+    mkdir -p "${audio_guard_dir}"
+    cp -f /src/build/x3daudio-guard/x3daudio1_7.dll \
+        /src/build/x3daudio-guard/x3daudio1_7.dll.sha256 "${audio_guard_dir}/"
+done
 
 # Optional Fallout 4 1.10.163 tools. Keep installation into a game explicit;
-# only the FAudio runtime above is managed automatically by Fluorine.
+# only the audio guard above is managed automatically by Fluorine.
 FO4_TOOLS_SOURCE=/src/docker/fo4-audio-guard
 FO4_TOOLS_BUILD=/src/build/fo4-audio-guard
 FO4_TOOLS_OUT="${OUT_DIR}/tools/fo4-audio-guard"

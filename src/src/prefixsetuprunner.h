@@ -101,8 +101,8 @@ private:
   bool stepDriveCleanup();
   bool stepD3DCompiler47();
   bool stepDirectXRuntime();
-  bool installFAudioRuntime();
-  bool applyFAudioOverrides();
+  bool migrateLegacyRunner();
+  bool installAudioGuardStep();
   bool stepVisualCppRuntimes();
   bool stepDotNetRuntimes();
   bool stepDotNetInstall(const QString& url, const QString& name,
@@ -186,7 +186,6 @@ private:
   QString m_slrRunScript;
   QString m_winetricksPath;
   QString m_7zzPath;
-  QStringList m_faudioDlls;
 
   QVector<SetupStep> m_steps;
 

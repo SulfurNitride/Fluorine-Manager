@@ -129,7 +129,7 @@ list(APPEND ORGANIZER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/lootmanager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/prefixsetupdialog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/prefixsetuprunner.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/faudioruntime.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/audioruntime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/protonlauncher.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/settingsdialogproton.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/wineprefix.cpp)
@@ -174,7 +174,7 @@ list(APPEND ORGANIZER_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/lootmanager.h
     ${CMAKE_CURRENT_SOURCE_DIR}/prefixsetupdialog.h
     ${CMAKE_CURRENT_SOURCE_DIR}/prefixsetuprunner.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/faudioruntime.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/audioruntime.h
     ${CMAKE_CURRENT_SOURCE_DIR}/protonlauncher.h
     ${CMAKE_CURRENT_SOURCE_DIR}/settingsdialogproton.h
     ${CMAKE_CURRENT_SOURCE_DIR}/wineprefix.h)

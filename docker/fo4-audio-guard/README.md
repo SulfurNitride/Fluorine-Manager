@@ -1,7 +1,7 @@
 # Fallout 4 audio failure guard
 
 An optional F4SE plugin for **Fallout 4 1.10.163**. This complements Fluorine's
-FAudio format validation; it does not replace it. It is deliberately separate
+X3DAudio audio copy guard; it does not replace it. It is deliberately separate
 from the XAudio DLLs because the affected functions belong to Fallout itself.
 
 Fallout's source constructor leaves the wave-format storage uninitialized.
@@ -62,7 +62,7 @@ duration calculations are recorded in per-process `FluorineAudioGuard.log`
 files. Records include UTC time, process/thread, caller RVA, resource ID,
 source/format fields and matching filenames/providers. Each record is written
 and its file closed immediately, so a later game crash does not lose stdio
-buffers. Logs stay alongside the bundled FAudio error logs.
+buffers. Logs stay alongside the audio copy guard logs.
 
 `test-proton.py` runs in a fresh prefix and accepts a locally supplied, unpacked
 copy of the user's game image. No game image is distributed with the test.
@@ -86,7 +86,7 @@ those original settings through and preserves stored entries in mixed archives.
 WAV/XWM streaming audio should be stored without archive compression; FUZ voice
 containers can remain compressed. This is also the distinction made by
 [BSArch's smart compression](https://github.com/TES5Edit/TES5Edit/blob/dev-4.1.6/BSArch.dpr).
-This issue is upstream of XAudio/FAudio: preventing the invalid-format crash
+This issue is upstream of XAudio: preventing the invalid-format crash
 does not restore sounds which failed to load.
 
 `repair-ba2-audio.py` repairs explicitly selected **GNRL v1/v7/v8** archives.

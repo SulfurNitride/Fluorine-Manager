@@ -854,7 +854,7 @@ add_executable(test_launch_environment EXCLUDE_FROM_ALL
     test_launch_environment.cpp
     ${CMAKE_SOURCE_DIR}/src/src/nativeprocess.cpp
     ${CMAKE_SOURCE_DIR}/src/src/processlifetime.cpp
-    ${CMAKE_SOURCE_DIR}/src/src/faudioruntime.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/audioruntime.cpp
     ${CMAKE_SOURCE_DIR}/src/src/protonlauncher.cpp
     ${CMAKE_SOURCE_DIR}/src/src/launchenvironment.cpp
     ${CMAKE_SOURCE_DIR}/src/src/vfsbackend.cpp)
@@ -887,13 +887,13 @@ target_link_libraries(test_pluginprocessregistry PRIVATE
     Qt6::Core GTest::gtest GTest::gtest_main Threads::Threads)
 add_test(NAME test_pluginprocessregistry COMMAND test_pluginprocessregistry)
 
-add_executable(test_faudioruntime EXCLUDE_FROM_ALL
-    test_faudioruntime.cpp
-    ${CMAKE_SOURCE_DIR}/src/src/faudioruntime.cpp)
-set_target_properties(test_faudioruntime PROPERTIES AUTOMOC OFF CXX_STANDARD 23)
-target_include_directories(test_faudioruntime PRIVATE ${CMAKE_SOURCE_DIR}/src/src)
-target_link_libraries(test_faudioruntime PRIVATE Qt6::Core GTest::gtest GTest::gtest_main)
-add_test(NAME test_faudioruntime COMMAND test_faudioruntime)
+add_executable(test_audioruntime EXCLUDE_FROM_ALL
+    test_audioruntime.cpp
+    ${CMAKE_SOURCE_DIR}/src/src/audioruntime.cpp)
+set_target_properties(test_audioruntime PROPERTIES AUTOMOC OFF CXX_STANDARD 23)
+target_include_directories(test_audioruntime PRIVATE ${CMAKE_SOURCE_DIR}/src/src)
+target_link_libraries(test_audioruntime PRIVATE Qt6::Core GTest::gtest GTest::gtest_main)
+add_test(NAME test_audioruntime COMMAND test_audioruntime)
 
 add_executable(test_conflict_sorting EXCLUDE_FROM_ALL
     test_conflict_sorting.cpp
@@ -1168,7 +1168,7 @@ add_custom_target(fluorine-tests
             test_game_artwork test_settings_navigation test_fluorine_menu_bar
             test_library_setup_panel
             test_esptk_tes3 test_falloutnv_plugin_types test_bsatk_extraction test_executable_options test_steam_cloud
-            test_conflict_sorting test_launch_environment test_faudioruntime
+            test_conflict_sorting test_launch_environment test_audioruntime
             test_plugincompatibility test_pefileutils test_curatedguide
             test_metainiutils test_fomoddependency test_fomodpaths test_registry_ini test_persistentcookiejar test_fluorineupdater
             test_vfs_backend

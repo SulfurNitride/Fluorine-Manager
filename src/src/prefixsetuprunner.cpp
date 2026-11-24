@@ -1,5 +1,5 @@
 #include "prefixsetuprunner.h"
-#include "faudioruntime.h"
+#include "audioruntime.h"
 
 #include "fluorinepaths.h"
 
@@ -181,8 +181,8 @@ static const char* D3DCOMPILER_47_64_URL =
 static const char* D3DCOMPILER_47_64_SHA256 =
     "4432bbd1a390874f3f0a503d45cc48d346abc3a8c0213c289f4b615bf0ee84f3";
 
-// DirectX End-User Runtimes (June 2010). Fluorine uses its graphics/input
-// cabinets and supplies the XACT/XAudio API DLLs from bundled FAudio.
+// DirectX End-User Runtimes (June 2010). The contained DXSETUP installs the
+// complete legacy side-by-side runtime, including both x86 and x64 XACT/XAudio.
 static const QStringList DIRECTX_JUN2010_URLS = {
     // Current link exposed by Microsoft's official Download Center (id=8109).
     QStringLiteral(
@@ -422,9 +422,7 @@ static const QStringList DIRECTX_NATIVE_DLLS = {
     QStringLiteral("d3dx11_43"),
 };
 
-// Microsoft and Wine/FAudio use these same API filenames. Remove any native
-// copies left by an older or partial DirectX setup before installing FAudio.
-static const QStringList DIRECTX_AUDIO_DLLS = {
+static const QStringList DIRECTX_NATIVE_BUILTIN_DLLS = {
     QStringLiteral("xaudio2_0"),
     QStringLiteral("xaudio2_1"),
     QStringLiteral("xaudio2_2"),
@@ -441,7 +439,6 @@ static const QStringList DIRECTX_AUDIO_DLLS = {
     QStringLiteral("x3daudio1_5"),
     QStringLiteral("x3daudio1_6"),
     QStringLiteral("x3daudio1_7"),
-    QStringLiteral("xapofx1_0"),
     QStringLiteral("xapofx1_1"),
     QStringLiteral("xapofx1_2"),
     QStringLiteral("xapofx1_3"),
@@ -585,46 +582,46 @@ static const char* WINE_SETTINGS_REG = R"(Windows Registry Editor Version 5.00
 "d3dx11_42"="native"
 "d3dx11_43"="native"
 ; xinput left as builtin on Linux — native breaks controllers (SDL path).
-"xaudio2_0"="builtin"
-"xaudio2_1"="builtin"
-"xaudio2_2"="builtin"
-"xaudio2_3"="builtin"
-"xaudio2_4"="builtin"
-"xaudio2_5"="builtin"
-"xaudio2_6"="builtin"
-"xaudio2_7"="builtin"
-"x3daudio1_0"="builtin"
-"x3daudio1_1"="builtin"
-"x3daudio1_2"="builtin"
-"x3daudio1_3"="builtin"
-"x3daudio1_4"="builtin"
-"x3daudio1_5"="builtin"
-"x3daudio1_6"="builtin"
-"x3daudio1_7"="builtin"
-"xapofx1_1"="builtin"
-"xapofx1_2"="builtin"
-"xapofx1_3"="builtin"
-"xapofx1_4"="builtin"
-"xapofx1_5"="builtin"
-"xactengine2_0"="builtin"
-"xactengine2_1"="builtin"
-"xactengine2_2"="builtin"
-"xactengine2_3"="builtin"
-"xactengine2_4"="builtin"
-"xactengine2_5"="builtin"
-"xactengine2_6"="builtin"
-"xactengine2_7"="builtin"
-"xactengine2_8"="builtin"
-"xactengine2_9"="builtin"
-"xactengine2_10"="builtin"
-"xactengine3_0"="builtin"
-"xactengine3_1"="builtin"
-"xactengine3_2"="builtin"
-"xactengine3_3"="builtin"
-"xactengine3_4"="builtin"
-"xactengine3_5"="builtin"
-"xactengine3_6"="builtin"
-"xactengine3_7"="builtin"
+"xaudio2_0"="native,builtin"
+"xaudio2_1"="native,builtin"
+"xaudio2_2"="native,builtin"
+"xaudio2_3"="native,builtin"
+"xaudio2_4"="native,builtin"
+"xaudio2_5"="native,builtin"
+"xaudio2_6"="native,builtin"
+"xaudio2_7"="native,builtin"
+"x3daudio1_0"="native,builtin"
+"x3daudio1_1"="native,builtin"
+"x3daudio1_2"="native,builtin"
+"x3daudio1_3"="native,builtin"
+"x3daudio1_4"="native,builtin"
+"x3daudio1_5"="native,builtin"
+"x3daudio1_6"="native,builtin"
+"x3daudio1_7"="native,builtin"
+"xapofx1_1"="native,builtin"
+"xapofx1_2"="native,builtin"
+"xapofx1_3"="native,builtin"
+"xapofx1_4"="native,builtin"
+"xapofx1_5"="native,builtin"
+"xactengine2_0"="native,builtin"
+"xactengine2_1"="native,builtin"
+"xactengine2_2"="native,builtin"
+"xactengine2_3"="native,builtin"
+"xactengine2_4"="native,builtin"
+"xactengine2_5"="native,builtin"
+"xactengine2_6"="native,builtin"
+"xactengine2_7"="native,builtin"
+"xactengine2_8"="native,builtin"
+"xactengine2_9"="native,builtin"
+"xactengine2_10"="native,builtin"
+"xactengine3_0"="native,builtin"
+"xactengine3_1"="native,builtin"
+"xactengine3_2"="native,builtin"
+"xactengine3_3"="native,builtin"
+"xactengine3_4"="native,builtin"
+"xactengine3_5"="native,builtin"
+"xactengine3_6"="native,builtin"
+"xactengine3_7"="native,builtin"
 "concrt140"="native,builtin"
 "msvcp140"="native,builtin"
 "msvcp140_1"="native,builtin"
@@ -796,7 +793,7 @@ void PrefixSetupRunner::buildStepList()
           [this] { return stepDriveCleanup(); });
 
   // DirectX DLL extraction (cab-based, no Wine needed for most).
-  addStep("directx_runtime", "DirectX Runtimes and FAudio",
+  addStep("directx_runtime", "DirectX Runtimes",
           [this] { return stepDirectXRuntime(); });
 
   // Runtime installers (run via Wine).
@@ -859,7 +856,7 @@ void PrefixSetupRunner::start()
     allOk             = stepOk && allOk;
     emit progressChanged(static_cast<float>(i + 1) / total);
 
-    // Prefix initialization and DirectX/FAudio are prerequisites for later
+    // Prefix initialization and DirectX are prerequisites for later
     // installers and registry settings. Stop on either failure so setup does
     // not continue against a half-configured prefix.
     if (!stepOk && m_steps[i].id == "proton_init") {
@@ -870,7 +867,7 @@ void PrefixSetupRunner::start()
     }
     if (!stepOk && m_steps[i].id == "directx_runtime") {
       emit logMessage(
-          "DirectX/FAudio setup failed — skipping remaining setup steps. "
+          "DirectX setup failed — skipping remaining setup steps. "
           "Fix this step and retry.");
       break;
     }
@@ -1472,7 +1469,7 @@ bool PrefixSetupRunner::stepDirectXRuntime()
 {
   emit logMessage("Installing DirectX runtimes...");
 
-  if (!applyDllOverrides(DIRECTX_NATIVE_DLLS, {}))
+  if (!applyDllOverrides(DIRECTX_NATIVE_DLLS, DIRECTX_NATIVE_BUILTIN_DLLS))
     return false;
 
   // d3dcompiler_47: prebuilt DLLs from Mozilla fxc2 (not in the June 2010 redist).
@@ -1484,9 +1481,10 @@ bool PrefixSetupRunner::stepDirectXRuntime()
   if (!ensureDirectXRedist(redistPath))
     return false;
 
-  // Let DXSETUP install the graphics and input components. Its XACT/XAudio
-  // cabinets are replaced by the bundled FAudio runtime below, and running
-  // their native registration can fail under Wine before FAudio is reached.
+  // Steam's Common Redistributable invokes the DXSETUP executable inside the
+  // outer redist. Extract the complete payload, then run the same silent setup
+  // so its version checks, registration, and x86/x64 component selection all
+  // remain Microsoft's responsibility.
   const QString setupDir = fluorineTmpDir() + "/directx_Jun2010_setup";
   QDir(setupDir).removeRecursively();
   if (!QDir().mkpath(setupDir)) {
@@ -1505,35 +1503,10 @@ bool PrefixSetupRunner::stepDirectXRuntime()
     return false;
   }
 
-  const QRegularExpression audioCabPattern(
-      QStringLiteral(R"(_(?:XACT|XAudio|X3DAudio|XAPOFX)_(?:x86|x64)\.cab$)"),
-      QRegularExpression::CaseInsensitiveOption);
-  int excludedAudioCabs = 0;
-  for (const QString& name :
-       QDir(setupDir).entryList({"*.cab"}, QDir::Files, QDir::Name)) {
-    if (!audioCabPattern.match(name).hasMatch())
-      continue;
-    if (!QFile::remove(setupDir + "/" + name)) {
-      currentStep().errorMessage =
-          QStringLiteral("Could not exclude Microsoft audio cabinet: %1").arg(name);
-      QDir(setupDir).removeRecursively();
-      return false;
-    }
-    ++excludedAudioCabs;
-  }
-  if (excludedAudioCabs == 0) {
-    currentStep().errorMessage = "DirectX redistributable has no recognizable audio cabinets";
-    QDir(setupDir).removeRecursively();
-    return false;
-  }
-  emit logMessage(QStringLiteral("Excluded %1 Microsoft XACT/XAudio cabinets; "
-                                 "FAudio will provide the audio runtime")
-                      .arg(excludedAudioCabs));
-
   emit logMessage("Running DXSETUP.exe /silent (x86 and x64 runtimes)...");
   QMap<QString, QString> env = baseWineEnv();
   env["WINEDLLOVERRIDES"] = makeDllOverrideEnv(
-      "mshtml=d", DIRECTX_NATIVE_DLLS, {});
+      "mshtml=d", DIRECTX_NATIVE_DLLS, DIRECTX_NATIVE_BUILTIN_DLLS);
   env["PROTON_USE_XALIA"] = "0";
 
   rc = runProcess(m_wineBin, {dxsetupPath, "/silent"}, env);
@@ -1547,104 +1520,49 @@ bool PrefixSetupRunner::stepDirectXRuntime()
   }
 
   emit logMessage("DirectX June 2010 runtimes installed (x86 and x64)");
-  return installFAudioRuntime();
+  return migrateLegacyRunner() && installAudioGuardStep();
 }
 
-bool PrefixSetupRunner::installFAudioRuntime()
+bool PrefixSetupRunner::migrateLegacyRunner()
 {
-  const QString requested = qEnvironmentVariable("FLUORINE_FAUDIO_VARIANT").trimmed();
-  const QString variant = requested.isEmpty() ? QStringLiteral("latest") : requested;
-  if (variant != QLatin1String("safe") && variant != QLatin1String("latest")) {
-    currentStep().errorMessage =
-        QStringLiteral("Unknown FAudio variant '%1' (use safe or latest)").arg(variant);
-    return false;
-  }
-
-  const QString bundle = QDir(QCoreApplication::applicationDirPath())
-                             .filePath(QStringLiteral("faudio/%1").arg(variant));
-
-  QString sourceProton = m_protonPath;
-  QFile sourceMarker(QDir(sourceProton).filePath("fluorine-faudio-runtime.txt"));
-  if (sourceMarker.open(QIODevice::ReadOnly | QIODevice::Text)) {
-    for (const QByteArray& line : sourceMarker.readAll().split('\n')) {
-      if (line.startsWith("source="))
-        sourceProton = QString::fromUtf8(line.mid(7)).trimmed();
-    }
+  // Older Fluorine builds selected a copied runner; return to its base runner.
+  QFile marker(QDir(m_protonPath).filePath("fluorine-faudio-runtime.txt"));
+  if (!marker.open(QIODevice::ReadOnly | QIODevice::Text))
+    return true;
+  QString sourceProton;
+  for (const QByteArray& line : marker.readAll().split('\n')) {
+    if (line.startsWith("source="))
+      sourceProton = QString::fromUtf8(line.mid(7)).trimmed();
   }
   if (sourceProton.isEmpty() || !QFileInfo::exists(sourceProton + "/proton")) {
     currentStep().errorMessage =
         QStringLiteral("Base Proton runner is missing: %1").arg(sourceProton);
     return false;
   }
-
-  FAudioPayload payload;
-  if (!installFAudioPayload(m_prefixPath, bundle, payload, currentStep().errorMessage))
-    return false;
-
   m_protonPath = sourceProton;
   m_wineBin = findWineBinary();
   m_wineserverBin = findWineserverBinary();
-  m_faudioDlls.clear();
-  for (const QString& file : payload.dlls)
-    m_faudioDlls.append(QFileInfo(file).completeBaseName());
-  if (m_wineBin.isEmpty() || m_wineserverBin.isEmpty() ||
-      !applyFAudioOverrides()) {
-    if (currentStep().errorMessage.isEmpty())
-      currentStep().errorMessage = "Selected Proton runner has no Wine binaries";
+  if (m_wineBin.isEmpty() || m_wineserverBin.isEmpty()) {
+    currentStep().errorMessage = "Selected Proton runner has no Wine binaries";
     return false;
   }
-
   emit protonPathChanged(m_protonPath);
-  emit logMessage(QStringLiteral("FAudio %1 installed (%2-bit and 64-bit, %3 DLLs); "
-                                 "using the selected Proton: %4")
-                      .arg(payload.version, QStringLiteral("32"))
-                      .arg(payload.dlls.size())
-                      .arg(sourceProton));
+  emit logMessage(QStringLiteral("Using the base Proton runner: %1").arg(sourceProton));
   return true;
 }
 
-bool PrefixSetupRunner::applyFAudioOverrides()
+bool PrefixSetupRunner::installAudioGuardStep()
 {
-  if (m_faudioDlls.isEmpty()) {
-    currentStep().errorMessage = "FAudio runtime has not been installed";
+  // Wraps Microsoft's X3DAudio1_7.dll, which DXSETUP just installed.
+  bool changed = false;
+  QString skipped;
+  if (!installAudioGuard(m_prefixPath,
+                         QDir(QCoreApplication::applicationDirPath()).filePath("audio-guard"),
+                         changed, skipped, currentStep().errorMessage))
     return false;
-  }
-  QStringList names = DIRECTX_AUDIO_DLLS;
-  for (const QString& dll : m_faudioDlls) {
-    if (!names.contains(dll)) names.append(dll);
-  }
-  QString registry = QStringLiteral(
-      "Windows Registry Editor Version 5.00\n\n"
-      "[HKEY_CURRENT_USER\\Software\\Wine\\DllOverrides]\n");
-  for (const QString& dll : names) {
-    const QString mode = m_faudioDlls.contains(dll)
-                             ? QStringLiteral("native")
-                             : QStringLiteral("disabled");
-    registry += QStringLiteral("\"%1\"=\"%2\"\n\"*%1\"=\"%2\"\n")
-                    .arg(dll, mode);
-  }
-  const QString regFile = fluorineTmpDir() + "/faudio_overrides.reg";
-  if (!QDir().mkpath(fluorineTmpDir())) {
-    currentStep().errorMessage = "Could not create FAudio registry directory";
-    return false;
-  }
-  QSaveFile output(regFile);
-  if (!output.open(QIODevice::WriteOnly | QIODevice::Text) ||
-      output.write(registry.toUtf8()) != registry.toUtf8().size() ||
-      !output.commit()) {
-    currentStep().errorMessage = "Could not write FAudio registry overrides";
-    return false;
-  }
-  QMap<QString, QString> env = baseWineEnv();
-  env["WINEDLLOVERRIDES"] = "mshtml=d";
-  env["PROTON_USE_XALIA"] = "0";
-  const int rc = runProcess(m_wineBin, {"regedit", regFile}, env);
-  QFile::remove(regFile);
-  if (rc != 0) {
-    currentStep().errorMessage =
-        QStringLiteral("FAudio override import failed (%1)").arg(rc);
-    return false;
-  }
+  emit logMessage(skipped.isEmpty()
+                      ? QStringLiteral("Audio crash guard installed (x3daudio1_7.dll)")
+                      : QStringLiteral("Audio crash guard not installed: %1").arg(skipped));
   return true;
 }
 
@@ -2512,8 +2430,7 @@ bool PrefixSetupRunner::stepWineRegistry()
     return false;
   }
 
-  if (!applyDllOverrides(DIRECTX_NATIVE_DLLS, VCRUN_DLLS) ||
-      !applyFAudioOverrides())
+  if (!applyDllOverrides(DIRECTX_NATIVE_DLLS, DIRECTX_NATIVE_BUILTIN_DLLS + VCRUN_DLLS))
     return false;
 
   emit logMessage("Registry settings applied successfully");
