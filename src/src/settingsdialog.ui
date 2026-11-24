@@ -1891,6 +1891,27 @@
                    </item>
                   </layout>
                  </item>
+                 <item>
+                  <layout class="QHBoxLayout" name="runtimeWrapperLayout">
+                   <item>
+                    <widget class="QLabel" name="runtimeWrapperLabel">
+                     <property name="text">
+                      <string>Runtime wrapper:</string>
+                     </property>
+                    </widget>
+                   </item>
+                   <item>
+                    <widget class="QLineEdit" name="runtimeWrapperEdit">
+                     <property name="placeholderText">
+                      <string>e.g. steam-run (NixOS)</string>
+                     </property>
+                     <property name="toolTip">
+                      <string>Runs only the Steam Linux Runtime through this command, for game launches and prefix setup. On NixOS, set it to steam-run so the runtime finds a standard filesystem layout. The FLUORINE_RUNTIME_WRAPPER environment variable overrides it.</string>
+                     </property>
+                    </widget>
+                   </item>
+                  </layout>
+                 </item>
                 </layout>
                 <property name="title">
                  <string>Launch wrapper</string>

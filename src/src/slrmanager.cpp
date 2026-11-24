@@ -9,6 +9,7 @@
 #include <QNetworkReply>
 #include <QProcess>
 #include <QSaveFile>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -259,6 +260,15 @@ bool ensureXrandrInstalled(const int* cancelFlag,
 QString getSlrRunScript()
 {
   return isSlrInstalled() ? slrRunScriptPath() : QString();
+}
+
+QStringList slrRuntimeWrapper()
+{
+  QString command = qEnvironmentVariable("FLUORINE_RUNTIME_WRAPPER").trimmed();
+  if (command.isEmpty()) {
+    command = QSettings().value("fluorine/runtime_wrapper").toString().trimmed();
+  }
+  return command.isEmpty() ? QStringList{} : QProcess::splitCommand(command);
 }
 
 SlrUpdateInfo checkSlrUpdate(const int* cancelFlag)

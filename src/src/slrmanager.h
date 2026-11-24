@@ -2,6 +2,7 @@
 #define SLRMANAGER_H
 
 #include <QString>
+#include <QStringList>
 #include <functional>
 
 struct SlrUpdateInfo
@@ -18,6 +19,12 @@ __attribute__((visibility("default"))) bool isSlrInstalled();
 
 /// Returns the path to the SLR `run` script, or empty if not installed.
 __attribute__((visibility("default"))) QString getSlrRunScript();
+
+/// Command placed in front of the SLR `run` script (and nothing else), split
+/// into argv. Taken from FLUORINE_RUNTIME_WRAPPER, else the
+/// fluorine/runtime_wrapper setting. Lets NixOS users run pressure-vessel
+/// through `steam-run` while Fluorine and its FUSE mount stay on the host.
+__attribute__((visibility("default"))) QStringList slrRuntimeWrapper();
 
 /// Check the remote SLR BUILD_ID without downloading or replacing anything.
 __attribute__((visibility("default")))

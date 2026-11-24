@@ -88,8 +88,15 @@ programs.nix-ld.libraries = with pkgs; [
   stdenv.cc.cc.lib  # libstdc++
   nss
   nspr
+  libglvnd
+  wayland
+  libxcb
+  libgbm
+  expat
 ];
 ```
+
+If launching a game fails inside the Steam Linux Runtime (`bwrap: execvp true: No such file or directory` or a missing `ld.so.cache`), set **Settings → Proton → Runtime wrapper** to `steam-run` (or export `FLUORINE_RUNTIME_WRAPPER=steam-run`) so pressure-vessel runs in an FHS environment while Fluorine and its FUSE mount stay on the host.
 
 
 ## Known Limitations

@@ -1058,8 +1058,17 @@ QProcess* PrefixSetupRunner::buildWrappedProcess(
       slrArgs << "--" << exe;
     }
 
-    proc->setProgram(m_slrRunScript);
-    proc->setArguments(slrArgs);
+    // Same runtime wrapper as game launches (e.g. steam-run on NixOS), so
+    // prefix setup doesn't hit pressure-vessel's FHS assumptions either.
+    const QStringList runtimeWrapper = slrRuntimeWrapper();
+    if (runtimeWrapper.isEmpty()) {
+      proc->setProgram(m_slrRunScript);
+      proc->setArguments(slrArgs);
+    } else {
+      proc->setProgram(runtimeWrapper.first());
+      proc->setArguments(runtimeWrapper.mid(1) + QStringList{m_slrRunScript} +
+                         slrArgs);
+    }
   } else {
     proc->setProgram(exe);
   }

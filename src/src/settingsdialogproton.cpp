@@ -74,6 +74,8 @@ ProtonSettingsTab::ProtonSettingsTab(Settings& s, SettingsDialog& d)
 
   ui->launchWrapperEdit->setPlaceholderText("mangohud --dlsym");
   ui->launchWrapperEdit->setText(QSettings().value("fluorine/launch_wrapper").toString());
+  ui->runtimeWrapperEdit->setText(
+      QSettings().value("fluorine/runtime_wrapper").toString());
 
   ui->disableVfsCacheCheckBox->setChecked(
       QSettings().value("fluorine/disable_vfs_cache", false).toBool());
@@ -181,6 +183,8 @@ void ProtonSettingsTab::update()
   QSettings().setValue(kAllowUnsupportedProtonSetting,
                        ui->allowUnsupportedProtonCheckBox->isChecked());
   QSettings().setValue("fluorine/launch_wrapper", ui->launchWrapperEdit->text());
+  QSettings().setValue("fluorine/runtime_wrapper",
+                       ui->runtimeWrapperEdit->text().trimmed());
   QSettings().setValue(kUseSteamShaderCacheSetting,
                        ui->useSteamShaderCacheCheckBox->isChecked());
   QSettings().setValue(kRecordSteamPipelinesSetting,

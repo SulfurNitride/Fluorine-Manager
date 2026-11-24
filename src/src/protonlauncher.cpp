@@ -1086,7 +1086,12 @@ bool ProtonLauncher::launchWithProton(env::NativeProcess& process) const
 
       slrArgs << "--";
       slrArgs.append(containerCmd);
-      wrapProgram(m_wrapperCommands, runScript, slrArgs, program, arguments);
+      const QStringList runtimeWrapper = slrRuntimeWrapper();
+      if (!runtimeWrapper.isEmpty()) {
+        MOBase::log::info("SLR: runtime wrapper '{}'", runtimeWrapper.join(' '));
+      }
+      wrapProgram(m_wrapperCommands + runtimeWrapper, runScript, slrArgs, program,
+                  arguments);
     } else {
       MOBase::log::warn("SLR enabled but run script not found — launching without SLR");
       wrapProgram(m_wrapperCommands, protonScript, protonArgs, program, arguments);
